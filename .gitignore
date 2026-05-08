@@ -1,0 +1,79 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+
+# --- Node ---
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# --- IDE / OS ---
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- ML / model artefacts (heavy, not for VCS) ---
+*.bin
+*.safetensors
+*.ckpt
+*.pt
+*.pth
+*.gguf
+*.onnx
+checkpoints/
+runs/
+wandb/
+mlruns/
+adapters/*/weights/
+finetuning/output/
+finetuning/cache/
+
+# --- Data / logs ---
+data/raw/
+data/processed/
+data/interim/
+logs/
+*.log
+*.jsonl
+audit-traces/
+
+# --- Eval cache ---
+evaluation/cache/
+evaluation/results/*.csv
+
+# --- Notebook scratch ---
+.ipynb_checkpoints/
+
+# --- Temp / build ---
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- Secrets (defence in depth — never commit credentials) ---
+secrets/
+*.pem
+*.key
+credentials.json
+
+# --- NIKKO internal / operational files (not for public repo) ---
+CLAUDE.md
+NIKKO-spec.docx
+docs/GLOSSARY.md
+docs/GAPS.md
+docs/INDEX.md
+docs/REQUIREMENTS_INDEX.md
+docs/derived/

@@ -1,0 +1,290 @@
+---
+id: SPEC-600
+title: System Deployment & Production Architecture (SDPA)
+status: authoritative
+supersedes: [SPEC-011]
+depends_on: [SPEC-000, SPEC-100, SPEC-200, SPEC-300, SPEC-400, SPEC-500]
+version: 1.0.0-draft
+last_reviewed: 2026-05-08
+---
+
+# SPEC-600 — System Deployment & Production Architecture (SDPA)
+
+## Status
+
+- **Authoritative Deployment Specification.**
+- Dependent on: [SPEC-000](./SPEC-000-charter.md) → [SPEC-500](./SPEC-500-evaluation-benchmarking.md).
+- Defines: runtime, infrastructure, integration, and operational boundaries.
+
+## 1. Purpose
+
+[REQ-600-001] SPEC-600 MUST define how Nikko is deployed, hosted, served, connected (frontend/backend), versioned, and monitored in production.
+
+[REQ-600-002] Real-world behavior MUST remain consistent with controlled-evaluation behavior.
+
+## 2. Core Deployment Philosophy
+
+[REQ-600-010] Nikko SHALL be a **modular AI system**, not a monolithic app.
+
+[REQ-600-011] Deployment MUST preserve:
+- separation of concerns (agents remain isolated),
+- retrieval independence from model weights,
+- safety-routing consistency,
+- observability of all decisions.
+
+## 3. High-Level Production Architecture
+
+```
+GitHub Pages (Frontend UI)
+  ↓
+Backend API Layer (Orchestrator)
+  ↓
+Router (SPEC-200)
+  ↓
+Agent System (Signal / Evidence / Strategy / Eval)
+  ↓
+LLM Inference Service (HF Spaces or API)
+  ↓
+Response + Audit Log
+```
+
+## 4. Frontend Deployment (GitHub Pages)
+
+### 4.1 Location
+
+[REQ-600-020] The frontend SHALL be hosted at `equinox013.github.io/nikko`.
+
+### 4.2 Frontend responsibilities
+
+[REQ-600-030] The frontend MUST: provide a chat interface; display assistant responses; optionally show citations (collapsed by default); display non-intrusive system safety notices; support session continuity.
+
+[REQ-600-031] The frontend MUST NOT: execute model logic; perform inference; access raw agent outputs; bypass backend routing.
+
+### 4.3 UX constraints
+
+[REQ-600-040] The UI MUST enforce: calm, non-clinical design; low cognitive load; non-alarming crisis presentation; an optional, expandable "sources used" panel.
+
+[REQ-600-041] An optional avatar MAY be present; the avatar MUST NOT imply sentience.
+
+> **[GAP-G-FRONTEND-01]** "Session continuity" implies client-side or server-side state. The state model, retention, and privacy policy are not specified. See [G-MEMORY-01](../GAPS.md).
+
+## 5. Backend Orchestration Layer
+
+### 5.1 Role
+
+[REQ-600-050] The backend SHALL be the traffic-controller and execution environment.
+
+Responsibilities:
+- implement [SPEC-200](./SPEC-200-agent-communication-protocol.md) routing,
+- coordinate agent execution,
+- enforce [SPEC-300](./SPEC-300-crisis-response-protocol.md) crisis flow,
+- manage API calls to the LLM and retrieval systems,
+- log system behaviour.
+
+### 5.2 Implementation style
+
+[REQ-600-060] Recommended:
+- Python-based orchestration service,
+- lightweight API framework (FastAPI or equivalent),
+- stateless request handling.
+
+[REQ-600-061] Agent logic SHALL NOT live in the frontend.
+
+## 6. LLM Inference Layer
+
+### 6.1 Hosting
+
+[REQ-600-070] Primary hosting options SHALL be: Hugging Face Spaces; an external inference API; a local-GPU fallback (development only).
+
+> **[GAP-G-INFRA-01]** A single hosting provider (HF Spaces) is a single point of failure for a safety-critical system. No DR / multi-region / failover policy is defined. Director ruling required.
+
+### 6.2 Model constraints
+
+[REQ-600-080] The inference model MUST: support adapter switching ([SPEC-400](./SPEC-400-model-training.md)); accept structured context injection; remain stateless per request.
+[REQ-600-081] The inference layer MUST NOT bypass the Evaluator system.
+
+### 6.3 Adapter injection pipeline
+
+```
+Request Context
+  ↓
+Selected Adapter(s)
+  ↓
+Base Model Inference
+  ↓
+Response Draft
+```
+
+[REQ-600-090] Adapter selection at runtime SHALL be governed by [SPEC-400 §9](./SPEC-400-model-training.md#9-adapter-interaction-rules).
+
+## 7. Agent System Deployment
+
+### 7.1 Execution model
+
+[REQ-600-100] Agents MUST be deployed as logical services, not persistent processes.
+
+[REQ-600-101] Each request SHALL trigger: Signal Agent → Router → conditional downstream agents.
+
+### 7.2 Stateless constraint
+
+[REQ-600-110] Agents MUST be: stateless between requests; deterministic given the same inputs (modulo LLM stochasticity); reproducible for evaluation.
+
+> **[PROPOSED-RECONCILIATION:** "deterministic given the same inputs" cannot strictly hold for LLM-backed agents because sampling introduces stochasticity. Reconciled interpretation: routing decisions and ACP message construction MUST be deterministic; LLM-content generation MAY be stochastic but MUST be seedable for reproducibility in evaluation contexts. **]**
+
+### 7.3 Communication layer
+
+[REQ-600-120] All inter-agent communication MUST follow [SPEC-200](./SPEC-200-agent-communication-protocol.md): ACP format, strict routing rules, no direct bypass.
+
+## 8. Evidence Retrieval Infrastructure
+
+### 8.1 Sources
+
+[REQ-600-130] Production retrieval SHALL query only the sources enumerated in [SPEC-200 §5.4](./SPEC-200-agent-communication-protocol.md#54-evidence-retrieval-agent).
+
+### 8.2 Retrieval method
+
+[REQ-600-140] Allowed retrieval methods: API-based querying; structured scraping (only if compliant with the source's terms); cached-index retrieval (optional optimization).
+
+### 8.3 Caching rules
+
+[REQ-600-150] Caching SHALL be permitted only if: source freshness is tracked; cache expiration exists; updates are versioned.
+
+> **[GAP-G-CACHE-01]** Cache TTLs and invalidation events (e.g., source-side update detection) are not specified.
+
+## 9. Logging & Observability System
+
+### 9.1 Required logs
+
+[REQ-600-160] Every request MUST store: signal-classification output (SPEC-100); routing decision path (SPEC-200); evidence sources used; adapter selection; Evaluator decision output; final response.
+
+### 9.2 Audit trace format
+
+[REQ-600-170] The audit trace MUST conform to:
+
+```json
+{
+  "session_id": "string",
+  "route_path": ["string"],
+  "signals": {},
+  "agents_triggered": ["string"],
+  "evidence_sources": ["string"],
+  "adapter_used": ["string"],
+  "evaluation_result": {},
+  "final_action": "string"
+}
+```
+
+### 9.3 Purpose
+
+[REQ-600-180] Logs SHALL support: debugging agent behavior; evaluating safety compliance; retraining models; system-transparency audits.
+
+> **[GAP-G-PRIVACY-01]** Audit traces of mental-health conversations are PII-grade sensitive. No retention period, encryption-at-rest policy, access-control model, deletion-on-request policy, or jurisdictional compliance (Australian Privacy Act, GDPR, etc.) is specified. **Critical gap.** Director ruling required before any production data is captured.
+
+## 10. Versioning Strategy
+
+[REQ-600-190] All system components MUST be versioned independently:
+
+| Component | Versioned? |
+|-----------|-----------|
+| Base model | YES |
+| Adapters | YES |
+| Agent logic | YES |
+| Retrieval sources | YES |
+| Evaluation suite | YES |
+
+### 10.1 Compatibility rule
+
+[REQ-600-200] System versions MUST be tested as a full-stack bundle, not independently.
+
+## 11. Failure Handling in Production
+
+### 11.1 Agent failure
+
+[REQ-600-210] If any agent fails: fall back to a minimal safe response; trigger Evaluator fallback pass; log the failure event.
+
+### 11.2 LLM failure
+
+[REQ-600-220] If LLM inference fails: return a safe static response; include crisis resources if distress is detected.
+
+### 11.3 Retrieval failure
+
+[REQ-600-230] If no evidence is available: explicitly state uncertainty; avoid fabrication; defer to general psychoeducation framing.
+
+## 12. Latency Constraints
+
+[REQ-600-240] The production system SHOULD aim for:
+- Comfort Mode: < 3 seconds end-to-end,
+- Guidance Mode: < 5 seconds end-to-end,
+- Crisis Mode: prioritized over all latency optimization.
+
+[REQ-600-241] Safety SHALL override performance.
+
+## 13. Security Constraints
+
+[REQ-600-250] The system MUST: sanitize user input before agent processing; prevent prompt injection into the retrieval layer; isolate external content from model-context injection risks.
+
+> **[GAP-G-SECURITY-01]** No threat model document, no auth/identity model, no rate-limiting policy, no abuse-detection policy. Significant gap.
+
+## 14. Deployment Environments
+
+| Environment | Configuration |
+|-------------|---------------|
+| Development | local RTX 3060; simulated agents; offline evaluation suite |
+| Staging | HF Spaces backend; full agent chain; evaluation logging active |
+| Production | stable model + adapters; full SPEC-500 validation passed; monitoring enabled |
+
+[REQ-600-260] No build SHALL be promoted to Production without passing the full SPEC-500 evaluation set.
+
+## 15. GitHub Integration Strategy
+
+[REQ-600-270] The repository SHALL support the following structure:
+
+```
+nikko/
+├── specs/
+├── agents/
+├── backend/
+├── inference/
+├── evaluation/
+├── finetuning/
+└── deployment/
+```
+
+[REQ-600-271] The frontend SHALL remain in a separate repository at `equinox013.github.io/nikko`.
+
+> **[PROPOSED-RECONCILIATION:** the original spec places `specs/` inside the implementation tree. This repository instead places spec governance documents at the repo root under `docs/specs/` (governance > implementation), and the implementation tree (`agents/`, `backend/`, etc.) will be created at the repo root in Phase 2. The `specs/` subfolder shown above is therefore reinterpreted as a symbolic link or convention pointer to `docs/specs/`. **]** See [G-LAYOUT-01](../GAPS.md).
+
+## 16. Monitoring & Drift Detection
+
+[REQ-600-280] The production system MUST detect:
+- empathy degradation over time,
+- hallucination-rate increase,
+- routing inconsistency,
+- crisis-handling regression.
+
+[REQ-600-281] Triggers SHALL include: adapter rollback; retraining pipeline; evaluation re-run.
+
+## 17. Human Override Mechanism
+
+[REQ-600-290] A manual override MUST exist that can: disable agents; force crisis-safe mode; freeze system outputs; reroute to static responses.
+
+[REQ-600-291] The override SHALL be mandatory for safety systems.
+
+> **[GAP-G-OVERRIDE-01]** Authorization for override invocation, audit trail for override events, and rollback procedure are not specified.
+
+## 18. Ethical Deployment Principle
+
+[REQ-600-300] Nikko MUST always behave as a supportive, evidence-aware system that enhances human decision-making, never replaces it.
+
+## 19. Success Criteria
+
+Production deployment is successful when:
+- the system remains stable under real user interaction,
+- crisis routing is reliable and immediate,
+- no agent-bypass occurs in production logs,
+- evidence is consistently grounded,
+- the frontend remains decoupled from the reasoning system.
+
+## 20. Closing Principle
+
+> Deployment is not the end of Nikko. It is the first real test. A correct system in specification is only valuable if it remains safe, stable, and transparent when interacting with real human distress.
