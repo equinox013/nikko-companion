@@ -83,6 +83,25 @@ Interaction Model (Final Response)
 
 ## 5. Agent Roles and Permissions
 
+
+### 5.0 Scope Classifier (Pre-Router Gate)
+
+[REQ-200-SC1] The Scope Classifier is a mandatory pre-Router component. It is the first agent to receive every user input before any other pipeline processing occurs. Its sole function is to determine whether the input is within Nikko's operational domain.
+
+[REQ-200-SC2] The Scope Classifier MUST emit a structured decision with three possible outcomes:
+- **IN_SCOPE** — input clearly relates to emotional wellbeing, mental health, relationships, distress, or self-reported psychological state. Route to STEP 1 (Signal Agent).
+- **AMBIGUOUS** — input could plausibly contain emotional subtext despite appearing off-topic. Route to STEP 1 (Signal Agent) for full distress-level determination. Do not reject.
+- **OUT_OF_SCOPE** — input contains no plausible emotional subtext and falls into a prohibited category (see [SPEC-000 §3.2 REQ-000-SC2](./SPEC-000-charter.md#32-prohibited-behaviours)). Terminate pipeline and return warm-redirect response.
+
+[REQ-200-SC3] The Scope Classifier MUST operate with an asymmetric error policy: false negatives (passing an off-topic message as AMBIGUOUS) are acceptable; false positives (rejecting a distress-coded message as OUT_OF_SCOPE) are not. When confidence is below threshold, the classifier MUST default to AMBIGUOUS, not OUT_OF_SCOPE.
+
+[REQ-200-SC4] Warm redirect response template (MUST be used verbatim or as a close variant):
+> "Nikko is here to support your emotional wellbeing — it sounds like that might not be what you're looking for right now. If something's weighing on you, I'm here."
+
+[REQ-200-SC5] The Scope Classifier MUST NOT invoke the Signal Agent, Support Strategy Agent, Evidence pipeline, or LLM generation for OUT_OF_SCOPE inputs. The warm redirect is a static or lightly templated response, not a generated one, to prevent the LLM from being drawn into engagement with off-topic content.
+
+[REQ-200-SC6] Authority level: HIGH. The Scope Classifier's OUT_OF_SCOPE decision is final and cannot be overridden by downstream agents.
+
 ### 5.1 Router (Traffic Controller)
 
 **Authority Level: MAXIMUM.**

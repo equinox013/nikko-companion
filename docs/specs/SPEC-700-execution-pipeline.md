@@ -52,6 +52,16 @@ last_reviewed: 2026-05-08
 
 ## 4. Step-by-Step Execution Contract
 
+### STEP 0 — Scope Classification (Pre-Router Gate)
+
+[REQ-700-SC1] Before any other pipeline processing, the Scope Classifier (see [SPEC-200 §5.0](./SPEC-200-agent-communication-protocol.md#50-scope-classifier-pre-router-gate)) MUST evaluate every user input and emit one of three decisions: IN_SCOPE, AMBIGUOUS, or OUT_OF_SCOPE.
+
+[REQ-700-SC2] Routing on Scope Classifier output:
+- **IN_SCOPE or AMBIGUOUS** → proceed to STEP 1 (User Input Ingestion) and the normal pipeline.
+- **OUT_OF_SCOPE** → return the warm-redirect response immediately. The pipeline MUST terminate here. No downstream agent is invoked. Execution time for this path MUST NOT exceed 500 ms.
+
+[REQ-700-SC3] The Scope Classifier decision and confidence score MUST be included in the session trace for observability. The warm-redirect response MUST be logged as a distinct response type (not a pipeline output) for drift monitoring.
+
 ### STEP 1 — User Input Ingestion
 
 [REQ-700-020] Input SHALL be received via the frontend interface.

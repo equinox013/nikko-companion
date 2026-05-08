@@ -72,6 +72,11 @@ This specification exists to ensure:
 
 [REQ-000-P01] The system MUST NOT ingest, store, or use real user conversation data for model training under any circumstances. This constraint is permanent and is not overridable by any phase gate or Director instruction.
 [REQ-000-P02] A plain-language privacy statement MUST be displayed to the user before the chat interface is accessible.
+[REQ-000-SC1] The system MUST NOT process, respond to, or engage with user inputs that are clearly outside the domain of emotional wellbeing and mental health support. Off-topic inputs MUST be intercepted at the earliest possible pipeline stage and MUST NOT reach the Signal Agent, Support Strategy Agent, or LLM generation step.
+[REQ-000-SC2] "Clearly off-topic" is defined as: input that contains no plausible emotional or mental-health subtext AND falls into categories such as technical assistance (code, math, engineering), creative writing unrelated to emotional processing, general knowledge queries, commercial recommendations, medical diagnosis, legal or financial advice, or news and current events.
+[REQ-000-SC3] Ambiguous inputs — those which could contain emotional subtext even if superficially off-topic — MUST NOT be rejected at the scope gate. They MUST be passed to the Signal Agent for distress-level determination. The scope classifier MUST err toward inclusion, not exclusion, when uncertain.
+[REQ-000-SC4] When an input is rejected as out-of-scope, the response MUST be a warm redirect: it acknowledges the message, explains Nikko's purpose, and leaves the door open for emotional conversation. The response MUST NOT be dismissive, clinical, or abrupt.
+
 ## 4. Explicit Non-Goals (Permanent Prohibitions)
 
 The following capabilities are permanently prohibited.
