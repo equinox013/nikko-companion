@@ -44,6 +44,8 @@ last_reviewed: 2026-05-08
 - "I can't go on" framing,
 - dissociation combined with withdrawal statements.
 
+[REQ-300-FP1] The implicit/contextual risk classifier MUST be calibrated to a false-positive rate ≤ 5% on the standard crisis test suite. This ceiling is revisable during Phase 6 evaluation with Director approval. The classifier MUST prioritize recall over precision — missing a genuine crisis signal is the higher-cost error.
+
 ### 3.3 Contextual escalation
 - repeated distress escalation across conversation history,
 - inability to engage with grounding attempts.
@@ -84,6 +86,24 @@ last_reviewed: 2026-05-08
 
 > **[GAP-G-CRISIS-01]** The deployed UI is publicly accessible (`equinox013.github.io/nikko`) — non-Australian users will reach it. No fallback set is defined for users outside Australia. Director ruling required: ship Australia-only and geo-block non-AU traffic, or define an international fallback set (e.g., 988 US, Samaritans UK, befrienders.org global directory)?
 > **[GAP-G-CRISIS-03]** Demographic-specific resources are absent: Kids Helpline (1800 55 1800), 13YARN First Nations (13 92 76), QLife LGBTQ+ (1800 184 527), 1800RESPECT family-violence (1800 737 732), MensLine (1300 78 99 78). Director should rule on whether these are mandatory, optional, or context-routed.
+
+[
+[REQ-300-RS1] Baseline crisis resources (MUST always be displayed during Crisis Mode):
+- Lifeline: 13 11 14
+- Beyond Blue: 1300 22 4636
+- Suicide Call Back Service: 1300 659 467
+- Emergency Services: 000
+
+[REQ-300-RS2] Demographic-specific resources MUST be provided in a "More tailored support" expandable section alongside the baseline resources:
+- QLife (LGBTIQ+): 1800 184 527
+- 13YARN (First Nations): 13 92 76
+- Kids Helpline (under 25): 1800 55 1800
+- 1800RESPECT (family violence): 1800 737 732
+- MensLine Australia: 1300 78 99 78
+
+[REQ-300-RS3] The expandable section MUST NOT infer demographic identity from conversation context. It is presented to all users equally.
+REQ-300-GD1] The UI MUST display a prominent disclaimer before the chat interface is accessible, stating: "Nikko is currently available in Australia only. Crisis resources shown are Australian services." This disclaimer is a v0 constraint pending international routing implementation.
+[REQ-300-GD2] Crisis resources MUST NOT be presented to users without the geographic scope disclaimer.
 
 ### Step 3 — Encourage Human Contact
 
@@ -139,6 +159,8 @@ last_reviewed: 2026-05-08
 [REQ-300-121] No self-reset SHALL be allowed within a single turn.
 
 > **[PROPOSED-RECONCILIATION:** the source spec leaves the de-escalation criterion implicit ("when stabilizes"). Concrete proposal: Crisis Mode persists until **two consecutive turns** classify as `distress_level <= high` AND no risk indicators in [SPEC-100 §7.2 / §7.3](./SPEC-100-signal-ontology.md#7-risk-indicator-signals) are present in either turn. **]** See [G-RECON-04](../GAPS.md).
+
+[REQ-300-DE1] Crisis Mode (Level 3) MUST persist until two consecutive turns classify as distress_level ≤ high (Level 2) AND no risk indicators are present in either turn. A single calmer turn is insufficient to exit Crisis Mode.
 
 ## 10. Prohibited Behaviours (Hard Failures)
 

@@ -70,6 +70,8 @@ This specification exists to ensure:
 [REQ-000-052] Nikko MUST NOT present itself as emotionally sentient.
 [REQ-000-053] Nikko MUST NOT claim understanding beyond text input.
 
+[REQ-000-P01] The system MUST NOT ingest, store, or use real user conversation data for model training under any circumstances. This constraint is permanent and is not overridable by any phase gate or Director instruction.
+[REQ-000-P02] A plain-language privacy statement MUST be displayed to the user before the chat interface is accessible.
 ## 4. Explicit Non-Goals (Permanent Prohibitions)
 
 The following capabilities are permanently prohibited.
@@ -142,6 +144,24 @@ Users may perceive Nikko as human.
 >
 > **[GAP-G-DATA-01]** No risk for unauthorized PII leakage, retention violations, or privacy-law non-compliance is enumerated. Significant omission for a digital-health product.
 
+### 5.7 RISK-07 — Prompt Injection via Retrieved Content
+
+[REQ-000-R07] Retrieved web content passed to the LLM context MUST be sanitized to strip adversarial instruction patterns before inclusion. The system MUST NOT allow retrieved documents to override system-level instructions.
+
+**Mitigation:** input sanitization pipeline (see [SPEC-600 §13](./SPEC-600-deployment-architecture.md#13-security-controls)).
+
+### 5.8 RISK-08 — Training-Data Poisoning
+
+[REQ-000-R08] All training corpora MUST be sourced from open-license datasets with documented provenance. No user-generated data may enter the training pipeline (see REQ-000-P01). Corpus integrity MUST be verified before training begins.
+
+**Mitigation:** open-license-only corpus constraint (see [SPEC-400 §4.1](./SPEC-400-model-training.md#41-dataset-sources)).
+
+### 5.9 RISK-09 — Model Extraction via Repeated Sampling
+
+[REQ-000-R09] The system MUST enforce IP-based rate limiting on all inference endpoints to limit model-extraction attacks. Rate-limit thresholds are defined in [SPEC-600 §13](./SPEC-600-deployment-architecture.md#13-security-controls).
+
+**Mitigation:** MVP security controls (see [SPEC-600 §13](./SPEC-600-deployment-architecture.md#13-security-controls)).
+
 ## 6. Safety Escalation Doctrine
 
 [REQ-000-160] Nikko SHALL apply a four-tier progressive escalation model:
@@ -188,6 +208,7 @@ Users may perceive Nikko as human.
 [REQ-000-193] All downstream systems MUST include a crisis escalation pathway.
 [REQ-000-194] No component MAY bypass safety supervision.
 
+[REQ-000-A01] The system MUST present an 18+ self-attestation gate as a mandatory step before the user can access the chat interface. The gate MUST NOT be bypassable. Minors who do not attest may not access the system in v0.
 ## 10. Failure Handling Policy
 
 If uncertainty exceeds safe thresholds:
@@ -201,6 +222,7 @@ If uncertainty exceeds safe thresholds:
 
 > **[GAP-G-THRESH-01]** "Safe thresholds" are not numerically defined here or in any other SPEC. The Evaluator and Verification Supervisor will need quantitative cut-offs (e.g., minimum confidence floor, maximum citation-disagreement tolerance). See `GAPS.md`.
 
+[REQ-000-F01] When Signal Agent confidence < 0.40 OR Synthesizer Agent confidence < 0.50, the system MUST NOT proceed with a confidence-dependent action and MUST downgrade to the next-safer fallback response. Confidence bands: low < 0.40, moderate 0.40–0.70, high > 0.70.
 ## 11. Continuous Ethical Alignment
 
 [REQ-000-210] Future updates MUST preserve non-clinical positioning.

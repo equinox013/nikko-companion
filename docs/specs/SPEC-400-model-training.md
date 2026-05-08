@@ -45,6 +45,13 @@ Reference candidates:
 
 > **[GAP-G-MODEL-01]** No specific licensing review (commercial-use, derivative-work, geographic restrictions) for the candidate models is included. Required before training begins.
 
+[REQ-400-BM1] Nikko is a research-only deployment and will not be commercialised. Base model candidates with compatible research-use licenses (in priority order):
+1. **Mistral 7B v0.3** (Apache 2.0 — fully permissive; recommended primary candidate)
+2. **Phi-3-medium-4k-instruct** (MIT — fully permissive; strong reasoning capability)
+3. **Llama 3.1 8B** (Meta Llama 3.1 Community License — permits research; requires AUP compliance acknowledgement)
+
+[REQ-400-BM2] License terms for the selected base model MUST be documented in this spec before adapter training begins. The chosen model MUST NOT require commercial licensing for the intended research deployment.
+
 ### 3.2 Adapter System (Mandatory)
 
 [REQ-400-030] Training MUST use LoRA or QLoRA adapters in the following layout:
@@ -73,6 +80,8 @@ Base Model
 [REQ-400-052] Forbidden content: diagnostic labelling; clinical-authority framing; directive therapy instructions.
 
 > **[GAP-G-DATA-02]** Specific datasets, licenses, and consent provenance for counselling transcripts are not specified. Many counselling-transcript corpora carry strict use-restrictions. Required before data acquisition.
+
+[REQ-400-CL1] All training datasets MUST have explicit open-use licenses (Apache 2.0, CC-BY, MIT, or equivalent). IRB-required, restricted-access, or unclear-provenance datasets are prohibited. License confirmation is a hard gate before any dataset is acquired or used. Recommended candidates for review: ESConv (CC-BY), EmpatheticDialogues (CC-BY-NC — verify before use), Counsel-Chat (verify license before use).
 
 ### 4.2 Safety Alignment Dataset (ADP-B)
 
@@ -112,6 +121,9 @@ Base Model
 ## 7. Loss Function Design (Conceptual)
 
 Training SHALL optimize multiple competing objectives.
+
+[REQ-400-LF1] v0 training approach: Supervised Fine-Tuning (SFT) with rejection sampling. This is the mandatory v0 formulation — simpler, faster, compatible with the open-license corpus constraint. DPO (Direct Preference Optimization) is the planned upgrade path once a preference dataset (ranked response pairs) exists. RLHF, KTO, and PPO are not used in v0.
+[REQ-400-LF2] Objective weights for empathy / safety loss components MUST be specified and ratified during Phase 4 planning before training begins.
 
 ### 7.1 Empathy Loss
 
@@ -163,6 +175,12 @@ Output Generation
 | Evaluator (separate pass) | every non-crisis response |
 
 > **[PROPOSED-RECONCILIATION:** the source spec lists only two combinations ("Empathy + Safety", "Evaluator separate") but Crisis Mode flow demands a third ("Safety only"). The table above adds the missing entry. **]** See [G-RECON-05](../GAPS.md).
+
+[REQ-400-AC1] The three runtime adapter combinations are (replacing any prior two-combination list):
+1. **Empathy + Safety** — standard Comfort/Guidance mode
+2. **Empathy + Safety + Evidence** — Guidance mode when evidence retrieval is active
+3. **Safety-only** — Crisis Mode (Empathy and Evidence adapters MUST be inactive during Level 3 crisis response)
+[PROPOSED-RECONCILIATION: Source spec listed two combinations; Crisis Mode flow implicitly requires a third. Director ratified 2026-05-09.]
 
 ## 10. Training Data Weighting Strategy
 

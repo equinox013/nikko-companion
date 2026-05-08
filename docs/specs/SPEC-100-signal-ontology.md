@@ -125,6 +125,7 @@ Highest-priority detection layer.
 - fatigue with living
 - indirect death references
 
+[REQ-100-PR1] Passive risk indicator + distress_level >= high (Level 2) + repetition across >= 2 turns = escalate to Level 2. A single isolated passive indicator at lower distress levels does NOT trigger escalation. If additional explicit active/acute risk signals are present, escalate directly to Level 3.
 ### 7.2 Active Risk Indicators
 - suicidal ideation language
 - self-harm references
@@ -196,6 +197,13 @@ Signals combine to infer support needs.
 
 > **[GAP-G-THRESH-02]** "Low" confidence is not numerically defined. Recommended default: `confidence < 0.40` is "low"; `0.40–0.70` is "moderate"; `>0.70` is "high". To be ratified by the Director.
 
+[REQ-100-CB1] Confidence bands are defined as follows and apply uniformly across all agents that emit a confidence score:
+- **low:** confidence < 0.40
+- **moderate:** 0.40 ≤ confidence ≤ 0.70
+- **high:** confidence > 0.70
+
+[REQ-100-CB2] When confidence < 0.40 (low), the system MUST NOT proceed with a confidence-dependent routing decision and MUST fall back to the next-safer mode. See [SPEC-000 §10](./SPEC-000-charter.md#10-failure-handling-policy).
+
 ## 11. Non-Diagnostic Enforcement
 
 The ontology MUST NEVER:
@@ -262,6 +270,7 @@ The ontology MUST NEVER:
 
 > **[GAP-G-METRIC-01]** Numeric thresholds for these rates are not defined. Director ruling required (e.g., missed-crisis-rate ≤ 0.5%? ≤ 0.1%?). See `GAPS.md`.
 
+[REQ-100-MC1] The missed-crisis signal rate MUST NOT exceed 0.5% on the standard crisis test suite during Phase 6 evaluation. This target may be tightened with Director approval. Zero-tolerance is statistically unachievable; 0.5% represents the minimum acceptable bar for a v0 safety-critical classifier.
 ## 16. Ethical Rationale
 
 Psychological signals enable Nikko to respond compassionately, remain non-clinical, avoid diagnostic authority, and maintain ethical digital-health boundaries.

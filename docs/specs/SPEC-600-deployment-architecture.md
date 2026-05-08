@@ -60,6 +60,12 @@ Response + Audit Log
 
 [REQ-600-031] The frontend MUST NOT: execute model logic; perform inference; access raw agent outputs; bypass backend routing.
 
+[REQ-600-UI1] The frontend MUST display a "research preview" label prominently on the chat interface. This label acknowledges the single-host HF Spaces limitation and the research-only scope of v0.
+[REQ-600-UI2] The frontend MUST display a geographic scope disclaimer before the chat interface is accessible: "Nikko is currently available in Australia only. Crisis resources shown are Australian services."
+[REQ-600-UI3] The frontend MUST present an 18+ self-attestation gate as a mandatory step before the user can access the chat interface. The gate MUST NOT be bypassable.
+[REQ-600-UI4] The frontend MUST display a plain-language privacy statement before the chat interface is accessible, stating that no user data is collected, stored, or used for training, and that the session is cleared on exit.
+[REQ-600-UI5] The frontend MUST display a session-scope notice: "Your conversation is private and will be cleared if you close or refresh this page."
+
 ### 4.3 UX constraints
 
 [REQ-600-040] The UI MUST enforce: calm, non-clinical design; low cognitive load; non-alarming crisis presentation; an optional, expandable "sources used" panel.
@@ -97,6 +103,8 @@ Responsibilities:
 [REQ-600-070] Primary hosting options SHALL be: Hugging Face Spaces; an external inference API; a local-GPU fallback (development only).
 
 > **[GAP-G-INFRA-01]** A single hosting provider (HF Spaces) is a single point of failure for a safety-critical system. No DR / multi-region / failover policy is defined. Director ruling required.
+
+[REQ-600-HF1] Hugging Face Spaces is the sole inference host for v0 (research preview). This single-region, single-provider limitation MUST be documented in the UI via the research-preview label (REQ-600-UI1). Multi-provider failover is a GA-phase requirement.
 
 ### 6.2 Model constraints
 
@@ -151,11 +159,23 @@ Response Draft
 
 > **[GAP-G-CACHE-01]** Cache TTLs and invalidation events (e.g., source-side update detection) are not specified.
 
+[REQ-600-CA1] Cache TTLs by source:
+- PubMed: 7 days
+- Healthdirect AU: 30 days with weekly HTTP HEAD check
+- Better Health Channel AU: 30 days with weekly HTTP HEAD check
+- WHO: 30 days with weekly HTTP HEAD check
+- Other secondary sources: 30 days
+
+[REQ-600-CA2] Cache invalidation is triggered by: TTL expiry, HEAD-check change detection, or Director-issued manual purge command.
+
 ## 9. Logging & Observability System
 
 ### 9.1 Required logs
 
 [REQ-600-160] Every request MUST store: signal-classification output (SPEC-100); routing decision path (SPEC-200); evidence sources used; adapter selection; Evaluator decision output; final response.
+
+[REQ-600-LG1] Session logs are ephemeral. The system MAY maintain operational logs (conversation context, signal classifications, routing decisions) during an active session for observability. All session logs MUST be automatically purged when the user terminates the session. No conversation content persists beyond the active session.
+[REQ-600-LG2] No user conversation data, signal classifications, or routing decisions are written to persistent storage, databases, or external logging services.
 
 ### 9.2 Audit trace format
 
@@ -225,6 +245,20 @@ Response Draft
 
 > **[GAP-G-SECURITY-01]** No threat model document, no auth/identity model, no rate-limiting policy, no abuse-detection policy. Significant gap.
 
+[REQ-600-SC1] MVP security baseline for v0 (all MUST be implemented before deployment):
+1. IP-based rate limiting on all API and inference endpoints
+2. Input sanitization against prompt-injection patterns before any user input reaches the LLM
+3. Output filtering to prevent credential or PII leakage in responses
+4. HTTPS enforced on all endpoints — no HTTP fallback
+5. No auth tokens, API keys, or secrets in client-side code
+
+[REQ-600-SC2] Adversarial threat mitigations (see [SPEC-000 §5.7–5.9](./SPEC-000-charter.md)):
+- Retrieved web content MUST be sanitized before injection into LLM context (RISK-07)
+- Training corpus provenance MUST be verified (RISK-08 — mitigated by open-license-only constraint)
+- Rate limiting also defends against model extraction (RISK-09)
+
+[REQ-600-SC3] Full threat model (SPEC-820) is deferred to GA. The MVP baseline above is sufficient for v0 research-preview deployment.
+
 ## 14. Deployment Environments
 
 | Environment | Configuration |
@@ -254,6 +288,8 @@ nikko/
 
 > **[PROPOSED-RECONCILIATION:** the original spec places `specs/` inside the implementation tree. This repository instead places spec governance documents at the repo root under `docs/specs/` (governance > implementation), and the implementation tree (`agents/`, `backend/`, etc.) will be created at the repo root in Phase 2. The `specs/` subfolder shown above is therefore reinterpreted as a symbolic link or convention pointer to `docs/specs/`. **]** See [G-LAYOUT-01](../GAPS.md).
 
+[REQ-600-LA1] The canonical spec location is `docs/specs/` at the repository root (i.e., `nikko-companion/docs/specs/`). Any reference to a `specs/` directory within the implementation tree (classifiers/, agents/, etc.) refers to this same location via relative path. No symlink is required.
+
 ## 16. Monitoring & Drift Detection
 
 [REQ-600-280] The production system MUST detect:
@@ -271,6 +307,10 @@ nikko/
 [REQ-600-291] The override SHALL be mandatory for safety systems.
 
 > **[GAP-G-OVERRIDE-01]** Authorization for override invocation, audit trail for override events, and rollback procedure are not specified.
+
+[REQ-600-OV1] Manual override authorization: Director only. No other role may invoke a manual override.
+[REQ-600-OV2] Every override invocation MUST generate a tamper-evident audit record containing: timestamp, Director-provided trigger reason, affected components, and expected duration.
+[REQ-600-OV3] The system MUST automatically roll back to the previous operational state when the trigger condition clears or when the Director issues an explicit rollback command.
 
 ## 18. Ethical Deployment Principle
 

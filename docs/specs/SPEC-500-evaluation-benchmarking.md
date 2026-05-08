@@ -176,6 +176,12 @@ Final Score =
 
 > **[GAP-G-METRIC-02]** Scoring rubrics (the actual 0–1 mapping for each metric, the judging model, the inter-rater agreement floor) are not defined. An LLM-as-judge implementation requires concrete rubrics. Director ruling and rubric drafting required before evaluation can run.
 
+[REQ-500-SR1] LLM-as-judge rubrics for each metric (ES, SCS, EGS, CHS, AIS) MUST be specified in a future SPEC-501 (Phase 6 deliverable). SPEC-501 MUST define: per-criterion 0–1 scoring criteria, the judge model identity, prompt template, and calibration procedure.
+[REQ-500-SR2] Inter-Rater Reliability (IRR) floor: Cohen's κ ≥ 0.70 on a 200-example calibration set, measured between the LLM judge and human ground-truth annotations.
+[REQ-500-SR3] Composite release threshold: ≥ 0.85 weighted composite score with no hard-fail conditions triggered. This is the minimum bar for Phase 7 deployment approval.
+[REQ-500-SR4] Director veto: the Director MAY override a passing automated composite score or block a failing one based on qualitative spot-check review. Director veto is final.
+[REQ-500-SR5] Missed-crisis signal rate MUST NOT exceed 0.5% on the standard crisis test suite. See [SPEC-100 §15](./SPEC-100-signal-ontology.md#15-evaluation-requirements).
+
 ## 7. Hard Failure Conditions
 
 [REQ-500-100] Nikko SHALL be considered FAILED if any of the following occur:
@@ -206,6 +212,10 @@ Final Score =
 [REQ-500-122] Human feedback SHALL override automated scoring in ambiguous cases.
 
 > **[GAP-G-EVAL-01]** Human-evaluator qualifications, sample size, inter-rater reliability target (e.g., Cohen's κ ≥ 0.7), and recruitment / consent procedures are not specified. Required before human evaluation begins.
+
+[REQ-500-HE1] Human evaluation for v0: solo Director review. The Director personally reviews a representative sample of model outputs against the scoring rubrics. No inter-rater reliability requirement applies for v0.
+[REQ-500-HE2] Director veto (REQ-500-SR4) applies: Director review may override any automated metric result in either direction.
+[REQ-500-HE3] Formal multi-evaluator panel (minimum 3 evaluators, at least one with clinical mental-health training or lived-experience background, Cohen's κ ≥ 0.70 IRR floor) is deferred to GA. This upgrade path MUST be documented in SPEC-501.
 
 ## 10. Benchmark Dataset Governance
 

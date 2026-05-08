@@ -129,6 +129,12 @@ Interaction Model (Final Response)
 > **[GAP-G-EVIDENCE-01]** Source priority is given but no tie-breaking rule is specified when peer-review (highest quality) conflicts with recency (highest currency). Director ruling required.
 > **[GAP-G-EVIDENCE-02]** Concrete query interface (REST API endpoints, scraping policy, rate limits) for each source is not defined.
 
+[REQ-200-ER1] The Evidence Retrieval Agent MUST prefer peer-reviewed sources published within the last 5 years.
+[REQ-200-ER2] When no qualifying peer-reviewed source exists, the Agent MUST fall back to recent grey-literature from primary authoritative sources: WHO, Healthdirect AU, Better Health Channel AU.
+[REQ-200-ER3] When using grey-literature fallback, the Synthesizer Agent SHOULD reflect this in a reduced confidence score and flag the source type.
+[REQ-200-ER4] v0 retrieval stack: PubMed E-utilities API + Healthdirect Search API + curated static cache of Better Health Channel and WHO articles. Per-source adapter classes MUST be implemented. Rate-limit policies and scraping terms MUST be reviewed before Phase 3 implementation.
+[REQ-200-ER5] Cache TTLs: PubMed 7 days; Healthdirect AU, Better Health Channel, WHO: 30 days with weekly HTTP HEAD check for content changes.
+
 ### 5.5 Evidence Synthesizer Agent
 
 **Authority Level: MEDIUM.**
@@ -143,6 +149,7 @@ Interaction Model (Final Response)
 [REQ-200-090] The Verification Supervisor Agent SHALL: validate factual correctness, detect hallucinations, ensure source reliability, enforce SPEC-000 compliance.
 [REQ-200-091] The Verification Supervisor MAY reject any upstream output and trigger regeneration loops, subject to the loop limits in [§10](#10-loop-prevention-rules).
 
+[REQ-200-VS1] Verification Supervisor scope: system-level structural gate only. Checks: routing integrity, evidence-pipeline integrity, cross-spec compliance. Does NOT perform per-response content audit. Runs AFTER the Evaluator.
 ### 5.7 Evaluator Model
 
 **Authority Level: HIGH.**
@@ -155,6 +162,7 @@ Interaction Model (Final Response)
 > - **Verification Supervisor** = system-level audit (routing integrity, evidence pipeline integrity, cross-spec compliance).
 > When both pass, the response is delivered. When either fails, regeneration is triggered. **]** See [G-RECON-02](../GAPS.md).
 
+[REQ-200-EV1] Evaluator scope: per-response content gate. Checks: safety compliance, tone appropriateness, hallucination heuristics. Does NOT perform structural routing audit. Runs BEFORE the Verification Supervisor. Both must pass for a response to be delivered.
 ### 5.8 Interaction Model (Final LLM)
 
 **Authority Level: CONTROLLED OUTPUT ONLY.**

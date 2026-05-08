@@ -91,6 +91,8 @@ last_reviewed: 2026-05-08
 
 > **[GAP-G-MEMORY-02]** "Conversation history" usage is repeated here. The state-management spec is missing. Reuse [G-MEMORY-01](../GAPS.md).
 
+[REQ-700-MEM1] Conversation state (history, signal classifications, mode context) is maintained exclusively in-memory within the LLM context window for the duration of the active session. No server-side database, cache, or file storage is used. State is destroyed when the user terminates the session. Session continuity across browser refreshes is not supported in v0.
+
 ## 5. Mode Execution Paths
 
 ### 5.1 Comfort Mode Flow
@@ -166,6 +168,9 @@ Final Response
 
 > **[PROPOSED-RECONCILIATION:** the source omits the Verification Supervisor pass in Crisis Mode. The reconciled position: in Crisis Mode the Verification Supervisor MAY be replaced by a minimal safety-only verifier (a stripped-down version that only checks for prohibited phrasings from [SPEC-300 §10](./SPEC-300-crisis-response-protocol.md#10-prohibited-behaviours-hard-failures)) to honour the latency-priority requirement while preserving safety. Full Verification Supervisor pass SHALL NOT be skipped silently — it must be explicitly downgraded and logged. **]** See [G-RECON-06](../GAPS.md).
 
+[REQ-700-VS1] During Crisis Mode (Level 3), the Verification Supervisor MUST NOT be skipped. It operates in a minimal safety-verifier mode: checks routing integrity and Safety adapter compliance only. Tone checks, evidence-pipeline integrity checks, and full cross-spec compliance checks are suspended during Crisis Mode. Full Verification Supervisor operation resumes on de-escalation to Level ≤ 2.
+[PROPOSED-RECONCILIATION: Source spec omitted VS from Crisis Mode flow. Reconciled: VS runs in stripped-down mode, not skipped. Director ratified 2026-05-09.]
+
 ## 6. Evaluator Pass (Universal Rule)
 
 [REQ-700-080] Every non-crisis response MUST pass Evaluator audit.
@@ -210,6 +215,8 @@ Final Response
 ```
 
 [REQ-700-111] Trace storage MUST conform to [SPEC-600 §9](./SPEC-600-deployment-architecture.md#9-logging--observability-system) and the privacy gap [G-PRIVACY-01](../GAPS.md).
+
+[REQ-700-LOG1] Logging during execution is session-scoped and ephemeral. All trace data MUST be purged when the session ends. See [SPEC-600 §9](./SPEC-600-deployment-architecture.md#9-logging--observability-system).
 
 ## 10. Failure State Model
 
