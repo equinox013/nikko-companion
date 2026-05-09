@@ -1,0 +1,123 @@
+{
+  "$meta": {
+    "id": "signal_enum",
+    "version": "1.0.0-draft",
+    "spec_source": "SPEC-100",
+    "requirement_ids": ["REQ-100-030", "REQ-100-040", "REQ-100-050", "REQ-100-060", "REQ-100-080", "REQ-100-093"],
+    "gap_resolved": "G-ENUM-01",
+    "status": "authoritative",
+    "last_reviewed": "2026-05-09",
+    "description": "Canonical machine-readable enum of all psychological signal type string keys used in NIKKO. Every array element in a SPEC-100 signal object MUST resolve to a key listed in this file (REQ-100-093). New signal keys require a SPEC-100 revision — they MUST NOT be introduced unilaterally by implementation code."
+  },
+
+  "distress_levels": {
+    "description": "Valid values for the distress_level field in the SPEC-100 signal schema (REQ-100-092). Crosswalk to escalation levels: low=L0, moderate=L1, high=L2, crisis=L3 (GLOSSARY, ratified 2026-05-09).",
+    "values": ["low", "moderate", "high", "crisis"]
+  },
+
+  "confidence_bands": {
+    "description": "Numeric confidence band definitions. Apply uniformly across all agents that emit a confidence score (REQ-100-CB1). When confidence falls in the 'low' band, confidence-dependent routing MUST be suspended (REQ-100-CB2).",
+    "low":      { "range": "[0.0, 0.40)",  "note": "Triggers fallback; routing decisions requiring confidence are suspended." },
+    "moderate": { "range": "[0.40, 0.70]", "note": "Standard processing; downstream agents adopt softer assumptions." },
+    "high":     { "range": "(0.70, 1.0]",  "note": "Normal confidence-dependent routing permitted." }
+  },
+
+  "emotional_states": {
+    "description": "Valid values for the emotional_states array (SPEC-100 §4, REQ-100-030). Represents expressed affect detected in user language — not diagnosed conditions.",
+    "values": [
+      "sadness_spectrum.low_mood_language",
+      "sadness_spectrum.emotional_heaviness",
+      "sadness_spectrum.grief_expression",
+      "sadness_spectrum.loss_oriented_statements",
+
+      "anxiety_spectrum.worry_language",
+      "anxiety_spectrum.anticipatory_fear",
+      "anxiety_spectrum.hypervigilance",
+      "anxiety_spectrum.overwhelm_signals",
+
+      "emotional_dysregulation.rapid_emotional_shifts",
+      "emotional_dysregulation.intensity_escalation",
+      "emotional_dysregulation.inability_to_self_soothe",
+
+      "shame_self_worth.self_criticism",
+      "shame_self_worth.perceived_burden_language",
+      "shame_self_worth.worthlessness_framing",
+
+      "emotional_numbness.detachment_language",
+      "emotional_numbness.emptiness_statements",
+      "emotional_numbness.reduced_emotional_vocabulary"
+    ]
+  },
+
+  "cognitive_patterns": {
+    "description": "Valid values for the cognitive_patterns array (SPEC-100 §5, REQ-100-040). Represents thinking styles present in language. MUST inform support strategy only — MUST NOT be interpreted as evidence of illness.",
+    "values": [
+      "rumination_loop",
+      "catastrophizing",
+      "black_white_thinking",
+      "hopeless_future_projection",
+      "personalization_bias",
+      "negative_core_beliefs",
+      "helplessness_framing",
+      "meaninglessness_expression"
+    ]
+  },
+
+  "behavioral_indicators": {
+    "description": "Valid values for the behavioral_indicators array (SPEC-100 §6, REQ-100-050). Represents described actions or tendencies. Used to determine readiness for guidance.",
+    "values": [
+      "withdrawal_isolation",
+      "avoidance_behavior",
+      "sleep_disruption",
+      "appetite_change",
+      "loss_of_motivation",
+      "coping_attempt",
+      "help_seeking_behavior",
+      "self_reflection_capacity"
+    ]
+  },
+
+  "risk_indicators": {
+    "description": "Valid values for the risk_indicators array (SPEC-100 §7, REQ-100-060). Highest-priority detection layer. The risk tier is encoded in the key prefix (risk.passive / risk.active / risk.acute) — routing logic MUST parse the prefix to determine escalation severity. Any active or acute key MUST trigger SPEC-300 crisis flow.",
+    "tiers": {
+      "passive": {
+        "description": "Indirect risk expression. Escalation rule: passive indicator + distress_level >= high + repetition across >= 2 turns = escalate to L2. A single isolated passive indicator at lower distress does NOT trigger escalation (REQ-100-PR1).",
+        "values": [
+          "risk.passive.wishing_to_disappear",
+          "risk.passive.fatigue_with_living",
+          "risk.passive.indirect_death_reference"
+        ]
+      },
+      "active": {
+        "description": "Direct suicidal or self-harm ideation. Presence of any active indicator MUST trigger SPEC-300 crisis flow immediately (REQ-100-060).",
+        "values": [
+          "risk.active.suicidal_ideation",
+          "risk.active.self_harm_reference",
+          "risk.active.preparation_statement",
+          "risk.active.farewell_framing"
+        ]
+      },
+      "acute": {
+        "description": "Immediate, high-confidence crisis indicators. Highest severity tier. Presence of any acute indicator MUST trigger SPEC-300 crisis flow immediately (REQ-100-060).",
+        "values": [
+          "risk.acute.intent_language",
+          "risk.acute.immediacy_statement",
+          "risk.acute.loss_of_safety_framing"
+        ]
+      }
+    }
+  },
+
+  "support_needs": {
+    "description": "Valid values for the support_needs array (SPEC-100 §8, REQ-100-080). Multiple support needs MAY coexist for a single user turn (REQ-100-080). MUST NOT be treated as diagnoses (REQ-100-070).",
+    "values": [
+      "emotional_validation",
+      "grounding_stabilization",
+      "psychoeducation",
+      "normalization",
+      "reflective_exploration",
+      "encouragement_external_support",
+      "crisis_escalation"
+    ]
+  }
+}
