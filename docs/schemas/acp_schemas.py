@@ -346,6 +346,59 @@ class ResponseContextPayload(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Verification Supervisor result
+# ---------------------------------------------------------------------------
+
+class VerificationResult(BaseModel):
+    """
+    Output of the Verification Supervisor Agent (SPEC-700 Step 12).
+
+    This is NOT an ACP payload — it is an internal gate result consumed
+    directly by the pipeline orchestrator, not transmitted via ACPMessage.
+
+    Spec trace
+    ----------
+    REQ-200-VS1  — structural gate scope (routing, evidence integrity, cross-spec)
+    REQ-700-090  — final structural gate before output
+    REQ-700-091  — checks: routing compliance, evidence integrity, crisis handling,
+                   agent contamination
+    REQ-700-092  — on failure → safe_fallback_triggered = True
+    REQ-700-VS1  — Crisis Mode: stripped VS (routing + evaluator only; evidence
+                   integrity, contamination, cross-spec checks suspended)
+    REQ-200-170  — loop limit: regen_count MUST be < 2 for pipeline to continue
+    """
+
+    passed: bool = Field(
+        description="True only when all active checks pass. Pipeline may deliver "
+                    "the draft response iff True.",
+    )
+    failure_reasons: list[str] = Field(
+        default_factory=list,
+        description="Human-readable failure notes, one per failed check, each "
+                    "tagged with the REQ-ID that triggered it.",
+    )
+    safe_fallback_triggered: bool = Field(
+        default=False,
+        description=(
+            "True when VS fails AND the pipeline must emit a minimal canned "
+            "safe response instead of the draft. (REQ-700-092)"
+        ),
+    )
+    crisis_mode_active: bool = Field(
+        default=False,
+        description=(
+            "True when VS ran in stripped Crisis Mode — evidence-pipeline "
+            "integrity, contamination, and cross-spec checks were suspended "
+            "per REQ-700-VS1."
+        ),
+    )
+    regen_count: int = Field(
+        default=0,
+        description="Echo of the regen_count supplied to the VS; logged for audit.",
+    )
+
+
+# ---------------------------------------------------------------------------
 # Discriminated union over all payload types
 # ---------------------------------------------------------------------------
 
@@ -441,6 +494,55 @@ class ACKMessage(BaseModel):
             )
         return self
 
+
+# ---------------------------------------------------------------------------
+# Scope Classifier decision (pre-Router gate)
+# ---------------------------------------------------------------------------
+
+class ScopeClassifierDecision(BaseModel):
+    """
+    Structured output of the Scope Classifier. (SPEC-200 §5.0, REQ-200-SC1/SC2)
+
+    This is not an ACP-Message — it is emitted before the Router and does not
+    travel through the standard envelope. It is typed separately to enforce
+    REQ-200-SC2 (three-outcome constraint) and REQ-200-SC3 (asymmetric error
+    policy: AMBIGUOUS preferred over OUT_OF_SCOPE on low confidence).
+
+    Authority level: HIGH. OUT_OF_SCOPE decision is final and cannot be
+    overridden by downstream agents. (REQ-200-SC6)
+    """
+    decision:      ScopeDecision
+    confidence:    ConfidenceFloat
+    warm_redirect: Optional[str] = Field(
+        default=None,
+        description=(
+            "Populated only when decision=OUT_OF_SCOPE. "
+            "MUST use the verbatim template from REQ-200-SC4 or a close variant. "
+            "MUST NOT be LLM-generated. (REQ-200-SC5)"
+        ),
+    )
+
+    @model_validator(mode="after")
+    def out_of_scope_requires_redirect(self) -> "ScopeClassifierDecision":
+        if self.decision == ScopeDecision.OUT_OF_SCOPE and not self.warm_redirect:
+            raise ValueError(
+                "decision=OUT_OF_SCOPE requires a warm_redirect message. (REQ-200-SC4)"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def low_confidence_must_not_be_out_of_scope(self) -> "ScopeClassifierDecision":
+        """
+        Asymmetric error policy: when confidence < 0.40, classifier MUST
+        default to AMBIGUOUS, not OUT_OF_SCOPE. (REQ-200-SC3, REQ-100-CB1)
+        """
+        if self.confidence < 0.40 and self.decision == ScopeDecision.OUT_OF_SCOPE:
+            raise ValueError(
+                "Confidence < 0.40 (low band): classifier must emit AMBIGUOUS, "
+                "not OUT_OF_SCOPE. Asymmetric error policy requires erring toward "
+                "inclusion. (REQ-200-SC3)"
+            )
+        return self
 
 # ---------------------------------------------------------------------------
 # Scope Classifier decision (pre-Router gate)
