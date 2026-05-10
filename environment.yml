@@ -118,12 +118,12 @@ dependencies:
   - yaml=0.2.5
   - zstd=1.5.7
   - pip:
-      - accelerate==0.30.1
+      - accelerate==1.1.0                 # upgraded: 0.30.1 calls .to() on 4-bit models; 1.1.0 adds data_seed support
       - aiohttp==3.9.5
       - aiosignal==1.4.0
       - annotated-types==0.7.0
       - attrs==26.1.0
-      - bitsandbytes==0.43.1
+      - bitsandbytes==0.45.0              # pinned: stable for 4-bit QLoRA; meets accelerate 1.0.1 + transformers 4.46 minimum
       - colorama==0.4.6
       - frozenlist==1.8.0
       - fsspec==2026.4.0
@@ -137,6 +137,9 @@ dependencies:
       - pydantic-core==2.18.2
       - regex==2026.5.9
       - requests==2.32.3
+      - ddgs>=6.0                    # WebSearchAdapter: DDG search backend (G-RETRIEVAL-01); formerly duckduckgo-search
+      - beautifulsoup4>=4.12          # WebSearchAdapter: content scraping from sanctioned URLs
+      - lxml>=5.0                     # BeautifulSoup HTML parser (faster than html.parser)
       - safetensors==0.7.0
       - sentencepiece==0.2.0
       - sympy==1.13.1
@@ -144,5 +147,8 @@ dependencies:
       - torchaudio==2.5.1
       - torchvision==0.20.1
       - tqdm==4.67.3
-      - transformers==4.44.0
+      - transformers==4.46.3            # upgraded: 4.46+ required for accelerate 1.0.1 compatibility
+      - peft==0.13.2                  # pinned: compatible with transformers 4.46 + accelerate 1.0.1
+      - trl==0.11.4                   # pinned: last version before deepseekv3.jinja (Windows cp1252 crash); works with transformers 4.46
+      - datasets==3.1.0               # pinned: HuggingFace datasets for SFTTrainer input
       - yarl==1.23.0

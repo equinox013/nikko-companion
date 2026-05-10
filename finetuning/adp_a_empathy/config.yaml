@@ -1,0 +1,102 @@
+# config.yaml — ADP-A Empathy Layer
+# NIKKO Phase 4 adapter training configuration.
+# Governing spec: SPEC-400 §3.2, §7.0.1, §7.0.3
+# Director sign-off: 2026-05-10
+#
+# This adapter teaches emotional resonance, active listening, and validation
+# WITHOUT clinical authority. It is active in Comfort Mode and Guidance Mode
+# with runtime α = 0.65 (Comfort) / 0.50 (Guidance). Inactive in Crisis Mode.
+
+# ── Base model ────────────────────────────────────────────────────────────────
+base_model:
+  name: mistralai/Mistral-7B-Instruct-v0.3
+  quantization: 4bit           # QLoRA — reduces VRAM footprint without hurting adapter quality
+  torch_dtype: bfloat16        # bfloat16 is numerically stable for fine-tuning on modern GPUs
+
+# ── LoRA adapter settings ─────────────────────────────────────────────────────
+# LoRA injects small trainable rank-decomposition matrices into the frozen base
+# model's attention layers. Only these matrices are updated during training —
+# the base model weights are never modified, keeping adapters swappable.
+lora:
+  r: 16                        # Rank: controls adapter capacity. 16 is a solid v0 default.
+                               # Higher = more capacity but more VRAM and overfitting risk.
+  lora_alpha: 32               # Scaling factor. Convention: alpha = 2 * r for stable training.
+  lora_dropout: 0.05           # Dropout on adapter layers — regularizes to reduce overfitting.
+  bias: none                   # Do not train bias terms — keeps adapter footprint minimal.
+  target_modules:              # Apply LoRA to these attention projection matrices.
+    - q_proj                   # Query projection
+    - k_proj                   # Key projection
+    - v_proj                   # Value projection
+    - o_proj                   # Output projection
+
+# ── Dataset mix ───────────────────────────────────────────────────────────────
+# Weights mirror REQ-400-LF2 / §7.0.1 Director decision (2026-05-10).
+# Rationale for upweighting AnnoMI: expert MI signal quality >> raw size.
+dataset_mix:
+  - id: annomi
+    weight: 0.30
+    split: train
+    quality_filter: high_only  # Use 110 high-quality transcripts; exclude the 23 low-quality
+                               # unless repurposed as negative examples in rejection sampling.
+  - id: amod_mhcc
+    weight: 0.25
+    split: train
+    quality_filter: none
+  - id: esconv
+    weight: 0.20
+    split: train
+    quality_filter: none
+  - id: mentalchat16k
+    weight: 0.15
+    split: train
+    quality_filter: evaluator_screen  # REQ-400-171: synthetic data must pass Evaluator filter.
+  - id: empathetic_dialogues
+    weight: 0.10
+    split: train
+    quality_filter: none
+
+# ── Training hyperparameters ──────────────────────────────────────────────────
+training:
+  method: sft                  # Supervised Fine-Tuning — v0 mandatory method (REQ-400-LF1).
+  num_epochs: 3                # Starting point; tune based on validation loss curve.
+  per_device_train_batch_size: 4
+  gradient_accumulation_steps: 8  # Effective batch size = 4 * 8 = 32.
+  learning_rate: 2.0e-4        # Standard QLoRA learning rate. Reduce to 1e-4 if loss spikes.
+  lr_scheduler: cosine         # Cosine decay — smooth convergence for instruction-tuned base.
+  warmup_ratio: 0.03           # 3% warmup steps before full LR. Prevents early instability.
+  max_seq_length: 2048         # Token budget per example. Covers multi-turn counseling turns.
+  fp16: false
+  bf16: true                   # bfloat16 training — required for Mistral 7B stability.
+  gradient_checkpointing: true # Trade compute for VRAM — essential for 7B on single GPU.
+
+# ── Rejection sampling ────────────────────────────────────────────────────────
+# Rejection sampling filters training examples before they enter the loss.
+# The Evaluator model scores each candidate response; only accepted examples
+# are trained on (SFT on the "good" distribution only).
+rejection_sampling:
+  enabled: true
+  evaluator_model: adp_c       # ADP-C performs the screening pass.
+  accept_threshold: 0.70       # Responses scoring below 0.70 on empathy quality are rejected.
+  # NOTE: ADP-A does NOT apply the 2:1 false-negative asymmetry — that applies
+  # to ADP-B and ADP-C safety/critique training only (REQ-400-LF3).
+
+# ── Behavioral constraints (spec-traced) ─────────────────────────────────────
+constraints:
+  forbidden_patterns:          # Any training example containing these patterns is auto-rejected.
+    - diagnostic_labelling     # e.g. "you have depression", "this sounds like anxiety disorder"
+    - clinical_authority       # e.g. "as a therapist", "you should see a psychiatrist"
+    - directive_advice         # e.g. "you must", "you need to", "I recommend you"
+  req_trace: [REQ-400-052, REQ-400-080, REQ-400-130]
+
+# ── Runtime adapter composition (inference only — not a training param) ───────
+# Documented here for traceability. Actual α is applied by the pipeline orchestrator.
+runtime_alpha:
+  comfort_mode: 0.65           # REQ-400-LF4
+  guidance_mode: 0.50          # REQ-400-LF4
+  crisis_mode: 0.00            # ADP-A MUST be inactive during Crisis Mode (SPEC-300)
+
+# ── Output ────────────────────────────────────────────────────────────────────
+output:
+  adapter_dir: finetuning/adp_a_empathy/checkpoints/
+  final_adapter: finetuning/adp_a_empathy/adp_a_final/
+  checkpoint_every_n_steps: 200
