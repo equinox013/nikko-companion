@@ -210,7 +210,7 @@
   // On 200: sets backendOk = true, calls tryFinish(), stops polling.
   // On any other outcome: updates status text and retries.
   // The 60-second timeout UX runs in parallel via startTimeoutTimer().
-  var BACKEND_URL = 'https://nikko-backend.onrender.com';
+  var BACKEND_URL = 'https://nikko-companion.onrender.com';
   var POLL_INTERVAL_MS = 3000;
   var pollHandle = null;
 
