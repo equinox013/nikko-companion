@@ -78,3 +78,11 @@ docs/GAPS.md
 docs/INDEX.md
 docs/REQUIREMENTS_INDEX.md
 docs/derived/
+
+# --- Training pipeline (private — kept local only) ---
+notebooks/
+finetuning/
+run_adp_a_v2_pipeline.bat
+
+# --- HF Space (separate git repo, pushed directly to HF Spaces) ---
+hf_space/
