@@ -1,0 +1,61 @@
+# fly.toml -- Fly.io deployment configuration for Nikko backend.
+# Per REQ-600-DEP3: this file MUST exist in backend/ before Phase 7 gate opens.
+#
+# Deploy command (run from backend/):
+#   fly launch --no-deploy   # first time: creates the app and links to this config
+#   fly deploy               # subsequent deploys
+#
+# Fly.io docs: https://fly.io/docs/reference/configuration/
+
+app = "nikko-backend"
+
+# [CONCEPT] Primary region: the datacenter where the VM lives.
+# "syd" = Sydney, Australia -- closest to the target user base (SPEC-000 §3).
+primary_region = "syd"
+
+[build]
+  # Fly.io auto-detects the Dockerfile in this directory.
+
+[env]
+  # Runtime environment variables. Secrets (API keys, HF tokens) go in
+  # `fly secrets set KEY=value` -- never in this file.
+  NIKKO_ENV = "production"
+
+[[services]]
+  # HTTP service exposed on port 8080 (matches CMD in Dockerfile).
+  internal_port = 8080
+  protocol      = "tcp"
+  auto_stop_machines  = false  # REQ-600-DEP1: no spin-down on Fly free tier
+  auto_start_machines = true
+
+  [[services.ports]]
+    handlers = ["http"]
+    port     = 80
+    force_https = true
+
+  [[services.ports]]
+    handlers = ["tls", "http"]
+    port     = 443
+
+  # [CONCEPT] Health checks: Fly.io sends a GET to this path every 10 seconds.
+  # If it fails N times consecutively, Fly restarts the VM. The loading screen
+  # also polls /health from the browser (REQ-FIS-LS2), so this path is shared.
+  [[services.http_checks]]
+    interval      = "10s"
+    timeout       = "5s"
+    grace_period  = "30s"   # allow cold-start before checks begin
+    method        = "GET"
+    path          = "/health"
+    protocol      = "https"
+
+[http_service]
+  # Enforce HTTPS; redirect plain HTTP.
+  force_https    = true
+  internal_port  = 8080
+  auto_stop_machines  = false
+  auto_start_machines = true
+
+  [http_service.concurrency]
+    type       = "requests"
+    soft_limit = 100
+    hard_limit = 200

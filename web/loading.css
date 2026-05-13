@@ -1,0 +1,354 @@
+/* Nikko — cold-start loading screen.
+   Relies on CSS variables defined by styles.css (--bg, --ink, --sun, etc.).
+   Scoped to #nikko-loader so it can't leak into the chat app. */
+
+#nikko-loader {
+  position: fixed;
+  inset: 0;
+  z-index: 9000;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-body);
+  overflow: hidden;
+  display: grid;
+  grid-template-rows: 1fr auto;
+  padding: 18px clamp(18px, 4vw, 36px) 22px;
+  transition: opacity 400ms cubic-bezier(.4,.0,.2,1);
+}
+#nikko-loader.leaving { opacity: 0; pointer-events: none; }
+
+/* radial wash + grain — match the gate's atmosphere */
+#nikko-loader .nl-wash {
+  position: absolute; inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(900px 600px at 50% -10%, color-mix(in oklch, var(--sun-soft) 55%, transparent) 0%, transparent 60%),
+    radial-gradient(700px 500px at 50% 120%, color-mix(in oklch, var(--accent-soft) 55%, transparent) 0%, transparent 65%);
+}
+[data-theme="dark"] #nikko-loader .nl-wash {
+  background:
+    radial-gradient(900px 600px at 50% -10%, color-mix(in oklch, var(--accent-soft) 65%, transparent) 0%, transparent 60%),
+    radial-gradient(700px 500px at 50% 120%, color-mix(in oklch, #4a5fa8 50%, transparent) 0%, transparent 65%);
+}
+
+/* ─────────── theme toggle ─────────── */
+#nikko-loader .nl-top {
+  position: absolute;
+  top: 18px; right: clamp(18px, 4vw, 36px);
+  z-index: 5;
+  display: inline-flex; gap: 6px;
+  padding: 6px;
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--surface) 92%, transparent);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-soft);
+  backdrop-filter: blur(20px) saturate(140%);
+  -webkit-backdrop-filter: blur(20px) saturate(140%);
+}
+#nikko-loader .nl-theme {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  width: 32px; height: 32px;
+  border-radius: 999px;
+  display: grid; place-items: center;
+  cursor: pointer;
+  color: var(--muted);
+  transition: all var(--t-fast);
+}
+#nikko-loader .nl-theme:hover {
+  color: var(--ink);
+  background: color-mix(in oklch, var(--ink) 8%, transparent);
+}
+#nikko-loader .nl-theme.active {
+  color: var(--sun);
+  background: color-mix(in oklch, var(--sun) 14%, transparent);
+}
+#nikko-loader .nl-theme svg { width: 15px; height: 15px; }
+
+/* ─────────── center column ─────────── */
+#nikko-loader .nl-center {
+  position: relative;
+  z-index: 2;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 28px;
+  padding-top: 56px;
+  padding-bottom: 24px;
+}
+
+#nikko-loader .nl-avatar {
+  width: 112px; height: 112px;
+  display: grid; place-items: center;
+  animation: nl-breathe 4s ease-in-out infinite;
+  transform-origin: center;
+}
+@keyframes nl-breathe {
+  0%, 100% { transform: scale(1.0); }
+  50%      { transform: scale(1.06); }
+}
+#nikko-loader .nl-avatar svg { width: 100%; height: 100%; display: block; overflow: visible; }
+#nikko-loader .nl-halo {
+  animation: nl-halo 3.8s ease-in-out infinite;
+  transform-origin: 40px 40px;
+}
+@keyframes nl-halo {
+  0%, 100% { opacity: 0.55; r: 34; }
+  50%      { opacity: 0.85; r: 40; }
+}
+
+#nikko-loader .nl-title {
+  display: flex; flex-direction: column;
+  align-items: center; gap: 8px;
+  text-align: center;
+}
+#nikko-loader .nl-wordmark {
+  font-family: var(--font-brand);
+  font-weight: 400;
+  font-size: clamp(44px, 7vw, 60px);
+  letter-spacing: -0.01em;
+  color: var(--ink);
+  line-height: 1;
+  margin: 0;
+}
+#nikko-loader .nl-subtitle {
+  font-family: var(--font-display);
+  font-weight: 300;
+  font-style: italic;
+  font-size: clamp(15px, 2vw, 17px);
+  color: var(--muted);
+  margin: 0;
+}
+#nikko-loader .nl-pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 5px 11px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--bg-3);
+  margin-top: 4px;
+}
+#nikko-loader .nl-pill .dot {
+  display: inline-block;
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--sun);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--sun) 28%, transparent);
+  animation: nl-pulse 2.4s ease-in-out infinite;
+}
+@keyframes nl-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.5; }
+}
+
+/* ─────────── carousel ─────────── */
+#nikko-loader .nl-carousel { width: min(440px, 92vw); margin-top: 8px; }
+#nikko-loader .nl-viewport {
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--r-lg);
+}
+#nikko-loader .nl-track {
+  display: flex;
+  transition: transform var(--t-slow);
+  will-change: transform;
+  touch-action: pan-y;
+}
+#nikko-loader .nl-card {
+  flex: 0 0 100%;
+  padding: 18px 22px;
+  background: color-mix(in oklch, var(--surface) 78%, transparent);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-soft);
+  backdrop-filter: blur(16px) saturate(130%);
+  -webkit-backdrop-filter: blur(16px) saturate(130%);
+  min-height: 110px;
+  display: flex; flex-direction: column; gap: 8px;
+  justify-content: center;
+  text-align: center;
+}
+#nikko-loader .nl-card .eyebrow {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+#nikko-loader .nl-card p {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 300;
+  font-size: clamp(15px, 1.8vw, 17px);
+  line-height: 1.55;
+  color: var(--ink-2);
+  text-wrap: pretty;
+}
+#nikko-loader .nl-card p em { font-style: italic; color: var(--ink); }
+
+#nikko-loader .nl-dots {
+  display: flex; justify-content: center; gap: 6px;
+  margin-top: 14px;
+}
+#nikko-loader .nl-dot {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  padding: 6px 4px;
+  cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+#nikko-loader .nl-dot i {
+  display: block;
+  width: 6px; height: 6px;
+  border-radius: 999px;
+  background: var(--line);
+  transition: all var(--t-med);
+}
+#nikko-loader .nl-dot[aria-current="true"] i {
+  background: var(--sun);
+  width: 22px;
+}
+
+/* ─────────── footer ─────────── */
+#nikko-loader .nl-footer {
+  position: relative;
+  z-index: 2;
+  display: flex; flex-direction: column;
+  align-items: center; gap: 6px;
+  padding: 18px 0 6px;
+}
+#nikko-loader .nl-status {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--faint);
+  display: inline-flex; align-items: center; gap: 8px;
+}
+#nikko-loader .nl-status .blip {
+  width: 5px; height: 5px;
+  border-radius: 999px;
+  background: var(--sun);
+  animation: nl-blip 1.4s ease-in-out infinite;
+}
+#nikko-loader .nl-status.ready .blip {
+  background: #5db075;
+  animation: none;
+  box-shadow: 0 0 0 3px color-mix(in oklch, #5db075 28%, transparent);
+}
+@keyframes nl-blip {
+  0%, 100% { opacity: 0.4; transform: scale(.9); }
+  50%      { opacity: 1;   transform: scale(1.1); }
+}
+#nikko-loader .nl-links {
+  display: flex; align-items: center; gap: 14px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+#nikko-loader .nl-links a {
+  color: var(--faint);
+  text-decoration: none;
+  transition: color var(--t-fast);
+}
+#nikko-loader .nl-links a:hover {
+  color: var(--ink-2);
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+#nikko-loader .nl-links .sep {
+  width: 3px; height: 3px;
+  border-radius: 50%;
+  background: var(--line);
+}
+
+/* ─────────── particles ─────────── */
+#nikko-loader .nl-particles {
+  position: absolute; inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  overflow: hidden;
+  transition: opacity 400ms cubic-bezier(.4,.0,.2,1);
+}
+#nikko-loader.leaving .nl-particles { opacity: 0; }
+
+#nikko-loader .nl-bubble {
+  position: absolute;
+  bottom: -80px;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 32% 28%, rgba(255,255,255,.95) 0%, rgba(255,255,255,.5) 28%, color-mix(in oklch, var(--sun) 32%, transparent) 62%, transparent 100%);
+  border: 1px solid color-mix(in oklch, var(--sun) 38%, transparent);
+  opacity: 0;
+  animation: nl-rise linear infinite;
+  box-shadow:
+    inset 0 -3px 8px color-mix(in oklch, var(--sun) 24%, transparent),
+    inset 1px 1px 4px rgba(255,255,255,.65),
+    0 2px 5px rgba(206,132,76,.14);
+}
+#nikko-loader .nl-bubble.cool {
+  background:
+    radial-gradient(circle at 32% 28%, rgba(255,255,255,.95) 0%, rgba(255,255,255,.5) 28%, color-mix(in oklch, var(--accent-2) 30%, transparent) 62%, transparent 100%);
+  border-color: color-mix(in oklch, var(--accent-2) 42%, transparent);
+}
+@keyframes nl-rise {
+  0%   { transform: translate3d(0,0,0) scale(.65); opacity: 0; }
+  10%  { opacity: 0.7; }
+  50%  { transform: translate3d(14px, -55vh, 0) scale(1); opacity: 0.7; }
+  90%  { opacity: 0.55; }
+  100% { transform: translate3d(-8px, -112vh, 0) scale(1.05); opacity: 0; }
+}
+
+#nikko-loader .nl-star {
+  position: absolute;
+  border-radius: 50%;
+  background: #e6efff;
+  opacity: 0;
+  animation: nl-twinkle ease-in-out infinite;
+  box-shadow: 0 0 6px rgba(220, 232, 255, 0.7);
+}
+#nikko-loader .nl-star.blue {
+  background: #b7d3ff;
+  box-shadow: 0 0 8px rgba(183, 211, 255, 0.55);
+}
+@keyframes nl-twinkle {
+  0%, 100% { opacity: 0.15; transform: scale(0.85); }
+  50%      { opacity: 0.95; transform: scale(1.05); }
+}
+#nikko-loader .nl-stars {
+  position: absolute; inset: 0;
+  animation: nl-drift 240s linear infinite;
+  transform-origin: 50% 50%;
+}
+#nikko-loader .nl-stars.b { animation-duration: 360s; animation-direction: reverse; }
+@keyframes nl-drift {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+[data-theme="light"] #nikko-loader .nl-stars-layer { display: none; }
+[data-theme="dark"]  #nikko-loader .nl-bubbles-layer { display: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  #nikko-loader .nl-avatar,
+  #nikko-loader .nl-halo,
+  #nikko-loader .nl-pill .dot,
+  #nikko-loader .nl-bubble,
+  #nikko-loader .nl-star,
+  #nikko-loader .nl-stars,
+  #nikko-loader .nl-status .blip {
+    animation: none !important;
+  }
+  #nikko-loader .nl-bubble { opacity: 0.45; bottom: auto; top: 30vh; }
+  #nikko-loader .nl-star   { opacity: 0.6; }
+  #nikko-loader .nl-track  { transition: none; }
+}
+
+/* ─────────── REQ-FIS-LS11: 60-second timeout message ─────────── */
+/* Non-alarming — carousel and animations continue running.
+   Inserted above the footer st

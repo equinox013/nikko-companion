@@ -6,41 +6,26 @@ const NIKKO_MEM_HEADER = '# Nikko Personal Memory File';
 const NIKKO_MEM_FILE_MAGIC = 'NIKKO-MEM-v1';
 const NIKKO_MEM_EXT = '.nikko-mem.enc';
 
-// makeEmptyMemoryMd — produces the initial plaintext skeleton.
-// Only two fields come from the user at creation time: their preferred name
-// (used by Nikko to personalise tone, never as an identifier) and their
-// password (which derives the encryption key and is never stored anywhere).
-// All other sections are populated through in-session interaction: Nikko
-// proposes entries during conversation and the user approves or declines
-// each one (REQ-850-011). The mood diary is written from the Mood Diary
-// panel in the UI (panels.jsx). Nothing is ever auto-filled by the system.
-function makeEmptyMemoryMd(preferredName = '') {
+function makeEmptyMemoryMd() {
   const today = new Date().toISOString().slice(0, 10);
-  const nameLine = preferredName.trim()
-    ? `> Name: ${preferredName.trim()} | Generated: ${today} | Version: 1.0`
-    : `> Generated: ${today} | Version: 1.0`;
   return `${NIKKO_MEM_HEADER}
-${nameLine}
+> Generated: ${today} | Version: 1.0
 
 ## User Preferences
-<!-- Nikko will suggest entries here based on your conversation. You approve each one. -->
-<!-- Example: preferred tone — direct | prefers validation before information -->
+<!-- Tone, communication style, what user wants Nikko to know about how they prefer to interact -->
 
 ## Emotional Patterns
-<!-- Nikko will suggest entries here when recurring themes emerge. You approve each one. -->
-<!-- Example: stress spikes during work deadlines | sleep affects mood significantly -->
+<!-- Recurring themes, known triggers, self-reported patterns -->
 
 ## Mood Diary
-<!-- Entries are added from the Mood Diary panel during your sessions. -->
-<!-- Format: YYYY-MM-DD | score: N/10 | emotions: ... | context: ... | note: ... -->
+<!-- Timestamped entries: YYYY-MM-DD | mood: <descriptor> | energy: <optional> -->
+<!-- note: <optional free-text approved by user> -->
 
 ## Helpful Interventions
-<!-- Nikko will suggest entries here when something works well for you. You approve each one. -->
-<!-- Example: grounding exercises help during anxiety spikes -->
+<!-- Coping strategies and responses the user has found effective -->
 
 ## Support Notes
-<!-- Nikko will suggest entries here when you express a preference for how it responds. -->
-<!-- Example: prefers Nikko to ask before offering suggestions -->
+<!-- Specific guidance for Nikko's response style based on user experience -->
 `;
 }
 
@@ -137,32 +122,17 @@ function downloadFile(name, content) {
   setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 200);
 }
 
-// ── Generate modal: disclosure → name → password ───────────────────
-// Three-step flow:
-//   1. Disclosure — user reads and acknowledges the privacy/security notice
-//   2. Name — user optionally provides a preferred first name (not a legal
-//      identifier; used by Nikko for personalised tone only). Stored
-//      plaintext inside the encrypted file, never outside it.
-//   3. Password — user sets the encryption password. This is the ONLY thing
-//      that gates access to the file. Everything else (preferences, patterns,
-//      mood diary, interventions) is added through in-session interaction.
+// ── Generate modal: disclosure + password ──────────────────────────
 function MemoryGenerateModal({ open, onClose, onCreated }) {
-  const [step, setStep] = React.useState('disclosure'); // disclosure | name | password
+  const [step, setStep] = React.useState('disclosure'); // disclosure | password
   const [acked, setAcked] = React.useState(false);
-  const [preferredName, setPreferredName] = React.useState('');
   const [pw1, setPw1] = React.useState('');
   const [pw2, setPw2] = React.useState('');
   const [busy, setBusy] = React.useState(false);
   const [err, setErr] = React.useState('');
 
   React.useEffect(() => {
-    if (open) {
-      setStep('disclosure');
-      setAcked(false);
-      setPreferredName('');
-      setPw1(''); setPw2('');
-      setErr(''); setBusy(false);
-    }
+    if (open) { setStep('disclosure'); setAcked(false); setPw1(''); setPw2(''); setErr(''); setBusy(false); }
   }, [open]);
 
   if (!open) return null;
@@ -173,9 +143,7 @@ function MemoryGenerateModal({ open, onClose, onCreated }) {
     if (pw1 !== pw2) { setErr('Passwords don\'t match.'); return; }
     setBusy(true);
     try {
-      // Pass the preferred name into the file — it becomes part of the
-      // encrypted content, not part of the filename or any server record.
-      const md = makeEmptyMemoryMd(preferredName);
+      const md = makeEmptyMemoryMd();
       const enc = await encryptMemory(md, pw1);
       downloadFile('nikko-memory' + NIKKO_MEM_EXT, enc);
       onCreated && onCreated(md);
@@ -193,14 +161,13 @@ function MemoryGenerateModal({ open, onClose, onCreated }) {
         {step === 'disclosure' ? (
           <>
             <h2>Create your <em>Personal Memory</em> file</h2>
-            <p className="lede">Read this carefully. Your memory file lives only on your device — Nikko's servers never receive it.</p>
+            <p className="lede">Read this disclaimer carefully. Your memory file lives only on your device — Nikko's servers will never receive it.</p>
             <ul className="warn-list">
-              <li><strong>Open-source encryption:</strong> AES-256-GCM via the browser's Web Crypto API. The implementation is publicly visible.</li>
-              <li><strong>Use a first name only</strong> — no surnames, dates of birth, government IDs, or contact details. The name stays inside the encrypted file.</li>
+              <li><strong>Open-source encryption:</strong> the implementation is publicly visible. AES-256-GCM is robust under current standards, but no security guarantee is absolute.</li>
+              <li><strong>Don't include identifying information</strong> — full name, date of birth, government IDs, contact details, anything that could identify you.</li>
               <li><strong>Store the file somewhere safe</strong> — not in a shared drive or unencrypted backup.</li>
               <li><strong>Don't reuse a password</strong> you use elsewhere.</li>
               <li><strong>If you lose your password, the file is unrecoverable.</strong> There is no reset.</li>
-              <li><strong>Nikko fills this in through conversation.</strong> Your preferences, patterns, and mood diary are added as you talk — you approve every entry.</li>
             </ul>
             <div
               className={`gate-attest ${acked ? 'checked' : ''}`}
@@ -222,37 +189,7 @@ function MemoryGenerateModal({ open, onClose, onCreated }) {
             </div>
             <div className="actions">
               <button className="btn-secondary" onClick={onClose}>Cancel</button>
-              <button className="btn-primary" disabled={!acked} onClick={() => setStep('name')}>Continue</button>
-            </div>
-          </>
-        ) : step === 'name' ? (
-          <>
-            <h2>What should Nikko call you?</h2>
-            <p className="lede">
-              Optional — a first name or nickname only. This stays inside your encrypted file and is never sent anywhere.
-              Leave it blank if you prefer.
-            </p>
-            {err && <div className="err">{err}</div>}
-            <div className="input-row">
-              <label htmlFor="mem-name">Preferred name</label>
-              <input
-                id="mem-name"
-                type="text"
-                value={preferredName}
-                onChange={e => setPreferredName(e.target.value)}
-                autoFocus
-                placeholder="e.g. Alex (optional)"
-                maxLength={40}
-                autoComplete="off"
-              />
-            </div>
-            <p className="lede" style={{ fontSize: '0.8rem', marginTop: '0.5rem' }}>
-              Everything else — your preferences, patterns, mood diary, and helpful interventions — is added
-              through your conversations with Nikko. You approve each entry before it's written.
-            </p>
-            <div className="actions">
-              <button className="btn-secondary" onClick={() => setStep('disclosure')}>Back</button>
-              <button className="btn-primary" onClick={() => { setErr(''); setStep('password'); }}>Continue</button>
+              <button className="btn-primary" disabled={!acked} onClick={() => setStep('password')}>Continue</button>
             </div>
           </>
         ) : (
@@ -269,7 +206,7 @@ function MemoryGenerateModal({ open, onClose, onCreated }) {
               <input id="pw2" type="password" value={pw2} onChange={e => setPw2(e.target.value)} placeholder="Type it again" />
             </div>
             <div className="actions">
-              <button className="btn-secondary" onClick={() => setStep('name')} disabled={busy}>Back</button>
+              <button className="btn-secondary" onClick={() => setStep('disclosure')} disabled={busy}>Back</button>
               <button className="btn-primary" onClick={generate} disabled={busy}>
                 {busy ? 'Generating…' : 'Generate & download'}
               </button>

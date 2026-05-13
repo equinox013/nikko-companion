@@ -1,0 +1,84 @@
+# .github/workflows/deploy-pages.yml
+# Deploys the Nikko frontend (web/) to GitHub Pages on every push to main.
+#
+# PRIVATE REPO STRATEGY:
+#   GitHub Pages on a private repo requires GitHub Pro/Team. To keep the
+#   source repo private for free, this workflow pushes web/ to a SEPARATE
+#   public deployment repo (e.g. equinox013/nikko) using a Personal Access
+#   Token (PAT). GitHub Pages then serves from that public repo.
+#
+# ONE-TIME SETUP (do this before the first deploy):
+#   1. Create a public GitHub repo named "nikko" under your account.
+#      This will serve at: https://equinox013.github.io/nikko
+#   2. In the PUBLIC repo, enable Pages: Settings -> Pages -> Source: main branch / root.
+#   3. Generate a PAT: GitHub -> Settings -> Developer settings -> Fine-grained tokens.
+#      Required permissions on the PUBLIC repo: Contents (read & write).
+#   4. In THIS (private source) repo: Settings -> Secrets -> Actions -> New secret.
+#      Name: PAGES_DEPLOY_TOKEN   Value: <the PAT you just created>
+#   5. Push to main -- this workflow fires automatically.
+#
+# ALTERNATIVE: If you upgrade to GitHub Pro or make this repo public, replace
+#   the "Deploy to public deployment repo" step with the official
+#   actions/deploy-pages approach (simpler, no PAT required).
+
+name: Deploy Frontend to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "web/**"          # only trigger when frontend files change
+  workflow_dispatch:      # allow manual trigger from GitHub Actions UI
+
+jobs:
+  deploy:
+    name: Deploy web/ to equinox013/nikko
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout source repo
+        uses: actions/checkout@v4
+
+      # Sanity check: make sure the key files are present before deploying.
+      - name: Verify web/ integrity
+        run: |
+          required=("Nikko.html" "styles.css" "loading.css" "loading.js" "nikko.jsx" "chat.jsx" "gate.jsx" "avatar.jsx")
+          for f in "${required[@]}"; do
+            if [ ! -f "web/$f" ]; then
+              echo "ERROR: web/$f is missing -- aborting deploy"
+              exit 1
+            fi
+          done
+          echo "All required files present."
+
+      - name: Checkout public deployment repo
+        uses: actions/checkout@v4
+        with:
+          # TARGET: the public repo that GitHub Pages serves from.
+          # Change "equinox013/nikko" to match your actual public repo name.
+          repository: equinox013/nikko
+          token: ${{ secrets.PAGES_DEPLOY_TOKEN }}
+          path: deploy-target
+
+      - name: Sync web/ into deployment repo
+        run: |
+          # Copy all frontend files into the deployment repo root.
+          # rsync --delete removes stale files from previous deploys.
+          rsync -av --delete             --exclude=".git"             web/ deploy-target/
+
+      - name: Commit and push to public repo
+        working-directory: deploy-target
+        run: |
+          git config user.name  "Nikko Deploy Bot"
+          git config user.email "actions@github.com"
+          git add -A
+          # Only commit if there are actual changes (avoids empty commits).
+          if git diff --cached --quiet; then
+            echo "No changes to deploy."
+          else
+            COMMIT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+            git commit -m "deploy: sync from nikko-companion@${COMMIT_SHA}"
+            git push
+            echo "Deployed successfully."
+          fi

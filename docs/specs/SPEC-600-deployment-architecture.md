@@ -35,15 +35,15 @@ last_reviewed: 2026-05-08
 ## 3. High-Level Production Architecture
 
 ```
-GitHub Pages (Frontend UI)
+GitHub Pages — equinox013.github.io/nikko (Frontend SPA)
   ↓
-Backend API Layer (Orchestrator)
+Fly.io — FastAPI + LangGraph Orchestration (Backend API Layer)
   ↓
 Router (SPEC-200)
   ↓
 Agent System (Signal / Evidence / Strategy / Eval)
   ↓
-LLM Inference Service (HF Spaces or API)
+HF Spaces + ZeroGPU — Base Model + PEFT Adapters (LLM Inference)
   ↓
 Response + Audit Log
 ```
@@ -96,6 +96,14 @@ Responsibilities:
 
 [REQ-600-061] Agent logic SHALL NOT live in the frontend.
 
+### 5.3 Orchestration hosting (v0 research preview)
+
+[REQ-600-DEP1] The backend orchestration service SHALL be hosted on **Fly.io** for the v0 research-preview deployment. Fly.io is selected for its persistent free-tier micro-VMs (no spin-down), global edge network, and Docker-native deployment model — all of which make it more operationally reliable than Render's free tier for an always-on API.
+
+[REQ-600-DEP2] If Fly.io deployment proves infeasible (e.g., resource limits, Docker compatibility issues), **Render** is the designated fallback. The Director MUST approve any fallback to Render and the associated cold-start UX implications (cold starts of ~30s are handled by the loading screen — see FRONTEND_INTEGRATION_SPEC §12).
+
+[REQ-600-DEP3] A `Dockerfile` and `fly.toml` MUST be provided in `backend/` before Phase 7 gate opens.
+
 ## 6. LLM Inference Layer
 
 ### 6.1 Hosting
@@ -104,7 +112,11 @@ Responsibilities:
 
 > **[GAP-G-INFRA-01]** A single hosting provider (HF Spaces) is a single point of failure for a safety-critical system. No DR / multi-region / failover policy is defined. Director ruling required.
 
-[REQ-600-HF1] Hugging Face Spaces is the sole inference host for v0 (research preview). This single-region, single-provider limitation MUST be documented in the UI via the research-preview label (REQ-600-UI1). Multi-provider failover is a GA-phase requirement.
+[REQ-600-HF1] Hugging Face Spaces with the **ZeroGPU** tier is the sole inference host for v0 (research preview). ZeroGPU provides free A100 access for custom model serving (base model + PEFT adapters). The Space SHALL be configured as a private FastAPI application, not a Gradio demo. This single-region, single-provider, session-gated limitation MUST be documented in the UI via the research-preview label (REQ-600-UI1). Multi-provider failover is a GA-phase requirement.
+
+[REQ-600-HF2] The HF Space MUST load the base model and all active PEFT adapters (ADP-A, ADP-B, ADP-C) at Space startup. Adapter weights SHALL be stored in a private HF Hub repository and pulled at startup — not bundled into the Space image.
+
+[REQ-600-HF3] The inference Space MUST expose a `/infer` POST endpoint consumed by the Fly.io orchestration layer. The Space MUST NOT be directly accessible from the frontend.
 
 ### 6.2 Model constraints
 
@@ -230,6 +242,16 @@ Response Draft
 
 [REQ-600-230] If no evidence is available: explicitly state uncertainty; avoid fabrication; defer to general psychoeducation framing.
 
+## 11a. Health Check Endpoint
+
+[REQ-600-HL1] The Fly.io orchestration service MUST expose a `GET /health` endpoint that returns `HTTP 200` when the service and its connection to the HF Spaces inference layer are ready to serve requests. Response body: `{ "status": "ok" }`.
+
+[REQ-600-HL2] The frontend MUST poll `GET /health` at 3-second intervals from the moment the loading screen is displayed until a `200` is received or the 60-second timeout is reached.
+
+[REQ-600-HL3] If `/health` does not return `200` within 60 seconds, the frontend MUST display: *"Nikko is taking longer than expected to wake up. Please try again in a moment."* and stop polling. A manual "Try again" button MUST be provided.
+
+[REQ-600-HL4] On receipt of `200` from `/health`, the frontend SHALL transition from the loading screen to the Gate component (see FRONTEND_INTEGRATION_SPEC §12 for transition animation spec).
+
 ## 12. Latency Constraints
 
 [REQ-600-240] The production system SHOULD aim for:
@@ -261,11 +283,11 @@ Response Draft
 
 ## 14. Deployment Environments
 
-| Environment | Configuration |
-|-------------|---------------|
-| Development | local RTX 3060; simulated agents; offline evaluation suite |
-| Staging | HF Spaces backend; full agent chain; evaluation logging active |
-| Production | stable model + adapters; full SPEC-500 validation passed; monitoring enabled |
+| Environment | Host | Configuration |
+|-------------|------|---------------|
+| Development | local machine | local FastAPI dev server; simulated agents; offline evaluation suite; model served via local `transformers` + PEFT |
+| Staging | Fly.io (orchestration) + HF Spaces ZeroGPU (inference) | full agent chain; evaluation logging active; GitHub Pages frontend pointed at staging API |
+| Production (v0 preview) | Fly.io + HF Spaces ZeroGPU + GitHub Pages | stable model + adapters; full SPEC-500 validation passed; monitoring enabled; research-preview label visible |
 
 [REQ-600-260] No build SHALL be promoted to Production without passing the full SPEC-500 evaluation set.
 

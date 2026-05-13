@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en" data-theme="light" data-aesthetic="organic">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Nikko — research preview</title>
+  <meta name="description" content="A safety-aligned, non-diagnostic wellbeing companion. Research preview, Australia only." />
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="loading.css" />
+  <link rel="icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 80 80'><circle cx='40' cy='40' r='38' fill='%23f6e9c8'/><circle cx='40' cy='40' r='16' fill='%23e9b35a'/></svg>" />
+</head>
+<body>
+
+  <!-- Cold-start loading screen. loading.js removes this element once
+       window.NikkoLoading.ready() fires (called by nikko.jsx on first mount). -->
+  <div id="nikko-loader" aria-busy="true" aria-live="polite">
+    <div class="nl-wash" aria-hidden="true"></div>
+
+    <div class="nl-top">
+      <button class="nl-theme" type="button" aria-label="Toggle dark mode" title="Toggle theme">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="4"></circle>
+          <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"></path>
+        </svg>
+      </button>
+    </div>
+
+    <section class="nl-center">
+      <!-- REQ-FIS-LS12: aria-label required on breathing avatar for screen readers -->
+      <div class="nl-avatar" aria-label="Nikko is loading" role="img">
+        <svg viewBox="0 0 80 80" aria-hidden="true">
+          <defs>
+            <radialGradient id="nl-halo-g" cx="50%" cy="50%" r="50%">
+              <stop offset="0%" stop-color="#CE844C" stop-opacity="0.5"></stop>
+              <stop offset="55%" stop-color="#CE844C" stop-opacity="0.18"></stop>
+              <stop offset="100%" stop-color="#CE844C" stop-opacity="0"></stop>
+            </radialGradient>
+            <radialGradient id="nl-sun-g" cx="50%" cy="40%" r="65%">
+              <stop offset="0%" stop-color="#CE844C" stop-opacity="1"></stop>
+              <stop offset="100%" stop-color="#CE844C" stop-opacity="0.7"></stop>
+            </radialGradient>
+          </defs>
+          <circle class="nl-halo" cx="40" cy="40" r="38" fill="url(#nl-halo-g)"></circle>
+          <circle cx="40" cy="40" r="16" fill="url(#nl-sun-g)" stroke="#CE844C" stroke-width="0.8" stroke-opacity="0.6"></circle>
+        </svg>
+      </div>
+
+      <div class="nl-title">
+        <h1 class="nl-wordmark">Nikko</h1>
+        <p class="nl-subtitle">Agentic wellbeing assistant</p>
+        <span class="nl-pill"><span class="dot"></span>Research preview</span>
+      </div>
+
+      <div class="nl-carousel" role="region" aria-roledescription="carousel" aria-label="About Nikko">
+        <div class="nl-viewport">
+          <div class="nl-track">
+            <article class="nl-card" aria-roledescription="slide" aria-label="1 of 4">
+              <span class="eyebrow">What Nikko is</span>
+              <p>Nikko listens <em>without judgment</em>, drawing on evidence-based wellbeing strategies.</p>
+            </article>
+            <article class="nl-card" aria-roledescription="slide" aria-label="2 of 4">
+              <span class="eyebrow">What Nikko isn't</span>
+              <p>Not a therapist — a <em>thinking partner</em> for your mental wellbeing.</p>
+            </article>
+            <article class="nl-card" aria-roledescription="slide" aria-label="3 of 4">
+              <span class="eyebrow">Privacy</span>
+              <p>Your conversation is private. Nothing is stored. Close the tab and <em>it's gone</em>.</p>
+            </article>
+            <article class="nl-card" aria-roledescription="slide" aria-label="4 of 4">
+              <span class="eyebrow">In a crisis?</span>
+              <p>If you're in crisis, Nikko will always point you to <em>real human support</em>.</p>
+            </article>
+          </div>
+        </div>
+        <div class="nl-dots" role="tablist" aria-label="Card navigation"></div>
+      </div>
+    </section>
+
+    <footer class="nl-footer">
+      <div class="nl-status">
+        <span class="blip" aria-hidden="true"></span>
+        <span class="nl-status-text">Waking Nikko up…</span>
+      </div>
+      <!-- REQ-FIS-LS8: footer links must be openable without interrupting health-check poll -->
+      <div class="nl-links">
+        <a href="eula.html" target="_blank" rel="noopener noreferrer">Terms &amp; Conditions</a>
+        <span class="sep" aria-hidden="true"></span>
+        <a href="privacy.html" target="_blank" rel="noopener noreferrer">Privacy Policy</a>
+      </div>
+    </footer>
+
+    <div class="nl-particles" aria-hidden="true">
+      <div class="nl-bubbles-layer"></div>
+      <div class="nl-stars-layer">
+        <div class="nl-stars a"></div>
+        <div class="nl-stars b"></div>
+      </div>
+    </div>
+  </div>
+  <!-- /nikko-loader -->
+
+  <!-- loading.js must run before React so NikkoLoading is defined before nikko.jsx mounts -->
+  <script src="loading.js"></script>
+
+  <div id="root"></div>
+
+  <!-- React + Babel (unpkg CDN). Requires an internet connection. -->
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js"></script>
+  <!-- Fallback error: if React still hasn't loaded 8s after page load,
+       surface a clear message rather than a permanent white screen. -->
+  <script>
+    setTimeout(function () {
+      if (window.React) return; // all good
+      var st =
