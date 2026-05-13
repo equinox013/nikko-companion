@@ -113,3 +113,31 @@ last_reviewed: 2026-05-09
 - No conversation data is written to any persistent store under any conditions
 - Operational logs contain no conversation content
 - All session data is purged on session termination
+
+---
+
+## 11. User Sovereign Memory Exception
+
+[REQ-800-023] The zero-retention model (REQ-800-003 through REQ-800-008) governs **Nikko's server-side infrastructure and system components**. It does not prohibit user-initiated, user-controlled, client-side local file storage conducted entirely outside the server perimeter.
+
+[REQ-800-024] The **User Sovereign Memory (USM)** feature, specified in [SPEC-850](./SPEC-850-user-sovereign-memory.md), is a permitted exception to the zero-retention model under the following conditions, all of which are binding:
+
+- The feature MUST be strictly opt-in; no memory is created without explicit user action.
+- All encryption and decryption MUST occur in the user's browser (client-side only). The server MUST NOT receive plaintext or ciphertext USM content at any point.
+- USM files are stored on the user's local device. Nikko's infrastructure has no awareness of, access to, or dependency on these files.
+- USM content MUST NEVER enter the model training pipeline. The training prohibition (REQ-800-004) remains absolute and is not affected by this exception.
+
+[REQ-800-025] The phrase "under any circumstances" in REQ-800-003 and the phrase "no file-based persistence" in the G-MEMORY-01 ratification ([GAPS.md](../GAPS.md#g-memory-01--conversation-state-store)) are scoped to Nikko's server-side infrastructure. Client-side user-controlled files created under the conditions of SPEC-850 are outside that scope.
+
+[REQ-800-026] If a future architectural change would require any USM ciphertext or plaintext to transit or be processed by the server, USM MUST be disabled until a fully client-side pathway is restored. This requirement supersedes any operational convenience argument.
+
+---
+
+## 12. USM UI Disclosure
+
+[REQ-800-027] When USM is available in the product, the mandatory disclosures in §6 MUST be supplemented with **Disclosure E**:
+
+**Disclosure E — Personal Memory File (displayed only if USM is implemented):**
+> "Nikko offers an optional Personal Memory File. If you enable it, your notes are encrypted on your device and never sent to Nikko's servers. Your password cannot be recovered if lost. Do not store personally identifying information in this file."
+
+[REQ-800-028] Disclosure E MUST appear in the pre-chat acknowledgement screen alongside Disclosures A through C. It is informational only and does not require a separate acknowledgement step beyond the one in REQ-800-014 — unless the user is actively enabling USM for the first time, in which case the dedicated USM disclosure (REQ-850-090) applies.

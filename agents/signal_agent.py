@@ -25,14 +25,16 @@ model config can be added when the Phase 2 schema is next revised.
 
 Model strategy
 --------------
-Phase 3 uses a base causal LM (Mistral 7B v0.3 by default) in zero-shot
-mode with the system prompt from agent_prompts.md §3.1. Fine-tuned adapters
-(Empathy + Safety) are a Phase 4 deliverable and will be swapped in via
-PEFT's `load_adapter()` without changing this class interface.
+Phase 3 uses Qwen2.5-3B-Instruct in zero-shot mode with the system prompt
+from agent_prompts.md §3.1. It produces well-structured JSON and fits in
+8GB VRAM without quantization. Fine-tuned adapters (Empathy + Safety) are
+a Phase 4 deliverable and will be swapped in via PEFT's `load_adapter()`
+without changing this class interface.
 
-Quantization: 4-bit NF4 via bitsandbytes is enabled by default to fit
-Mistral 7B within a consumer GPU's VRAM budget (REQ from Phase 3 handoff:
-`bitsandbytes==0.43.1` is a pinned dependency for this reason).
+Production target (Phase 4+): Mistral-7B-Instruct-v0.3 with 4-bit NF4
+quantization via bitsandbytes. Swapping is a one-line change to DEFAULT_MODEL_ID
+and quantize_4bit. bitsandbytes==0.45.5 is the pinned version (resolved
+Windows CUDA runtime DLL issue — see G-ENV-01 in docs/GAPS.md).
 """
 
 from __future__ import annotations
@@ -66,7 +68,10 @@ from docs.schemas.validate import (
 
 # Default base model — Apache 2.0 licence, primary choice per G-MODEL-01.
 # Override at instantiation for testing with a smaller model (e.g. phi-3-mini).
-DEFAULT_MODEL_ID: str = "mistralai/Mistral-7B-Instruct-v0.3"
+# Phase 3 development model — Qwen2.5-3B fits in 8GB VRAM without quantization.
+# Production target (Phase 4+): Mistral-7B-Instruct-v0.3 with quantize_4bit=True.
+# swap back when the Windows bitsandbytes CUDA runtime issue is resolved.
+DEFAULT_MODEL_ID: str = "Qwen/Qwen2.5-3B-Instruct"
 
 # Max new tokens for signal output. The JSON schema is compact; 512 is generous.
 _MAX_NEW_TOKENS: int = 512
@@ -162,7 +167,7 @@ class SignalAgent:
     def __init__(
         self,
         model_id:      str  = DEFAULT_MODEL_ID,
-        quantize_4bit: bool = True,
+        quantize_4bit: bool = False,   # disabled for Phase 3 dev — Qwen2.5-3B fits without it
         device_map:    str  = "auto",
     ) -> None:
         """

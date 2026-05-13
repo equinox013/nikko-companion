@@ -52,6 +52,8 @@ Reference candidates:
 
 [REQ-400-BM2] License terms for the selected base model MUST be documented in this spec before adapter training begins. The chosen model MUST NOT require commercial licensing for the intended research deployment.
 
+> **[DIRECTOR DECISION — 2026-05-10]** Base model selected: **Mistral 7B v0.3** (Apache 2.0). Rationale: fully permissive license with zero commercial or geographic restrictions, strong instruction-following at 7B scale, well-supported LoRA/QLoRA community, and compatible 8k context window for Guidance Mode evidence retrieval. Hugging Face: `mistralai/Mistral-7B-Instruct-v0.3`. This decision satisfies REQ-400-BM2. Gap GAP-G-MODEL-01 is hereby closed for the selected model.
+
 ### 3.2 Adapter System (Mandatory)
 
 [REQ-400-030] Training MUST use LoRA or QLoRA adapters in the following layout:
@@ -125,6 +127,38 @@ Training SHALL optimize multiple competing objectives.
 [REQ-400-LF1] v0 training approach: Supervised Fine-Tuning (SFT) with rejection sampling. This is the mandatory v0 formulation — simpler, faster, compatible with the open-license corpus constraint. DPO (Direct Preference Optimization) is the planned upgrade path once a preference dataset (ranked response pairs) exists. RLHF, KTO, and PPO are not used in v0.
 [REQ-400-LF2] Objective weights for empathy / safety loss components MUST be specified and ratified during Phase 4 planning before training begins.
 
+> **[DIRECTOR DECISION — 2026-05-10]** Objective weights ratified. Gap GAP-G-LOSS-01 is hereby closed. Three sub-decisions recorded below.
+
+#### 7.0.1 ADP-A Training-Time Dataset Mix (ratified)
+
+ADP-A (Empathy Layer) SFT training SHALL use the following dataset mix ratios, ordered by REQ-400-160 priority tiers:
+
+| Tier | Dataset | Mix Weight | Rationale |
+|------|---------|------------|-----------|
+| 1 | AnnoMI | 30% | Expert-annotated MI transcripts; highest signal quality |
+| 1 | Amod / mental_health_counseling_conversations | 25% | Real licensed-professional Q&A; anonymised |
+| 2 | ESConv | 20% | Peer-support with labeled strategy tags |
+| 3 | MentalChat16K | 15% | Synthetic multi-turn; must pass Evaluator filter (REQ-400-171) |
+| 4 | EmpatheticDialogues | 10% | General empathetic tone; volume filler |
+
+AnnoMI is upweighted disproportionate to its raw size (133 transcripts) because it is the only expert-annotated motivational-interviewing source in the stack, directly fulfilling REQ-400-050.
+
+#### 7.0.2 ADP-B and ADP-C Rejection Sampling Asymmetry (ratified)
+
+[REQ-400-LF3] ADP-B (Safety) and ADP-C (Evaluator) rejection sampling filters SHALL apply a **2:1 false-negative to false-positive penalty ratio**. A missed safety violation (false negative) MUST be penalized twice as heavily as an incorrect refusal (false positive). Rationale: prevents clinical drift and authority leakage while avoiding the anti-generic-assistant failure mode defined in REQ-400-140.
+
+#### 7.0.3 Runtime Adapter Composition Weights — α scaling (ratified)
+
+[REQ-400-LF4] When multiple adapters are active simultaneously, their LoRA weight deltas SHALL be combined using the following α scaling factors:
+
+| Mode | α_empathy (ADP-A) | α_safety (ADP-B) | Governing spec |
+|------|-------------------|------------------|----------------|
+| Comfort Mode | 0.65 | 0.35 | SPEC-700 §5.1 |
+| Guidance Mode | 0.50 | 0.50 | SPEC-700 §5.2 |
+| Crisis Mode | 0.00 | 1.00 | SPEC-300, SPEC-700 §5.3 |
+
+These are v0 baseline values. SPEC-500 checkpoint evaluation MAY surface the need for adjustment; any change to these values requires a new Director decision recorded in this spec.
+
 ### 7.1 Empathy Loss
 
 [REQ-400-100] The empathy loss MUST reward: emotional alignment; reflective phrasing; conversational-flow stability.
@@ -138,7 +172,7 @@ Training SHALL optimize multiple competing objectives.
 
 [REQ-400-120] The evaluation loss MUST reward: detection of unsafe outputs; hallucination identification; inconsistency detection.
 
-> **[GAP-G-LOSS-01]** Concrete loss formulations (e.g., DPO, KTO, RLHF reward shapes; weights between objectives) are not specified. Required for an executable training plan.
+> **[GAP-G-LOSS-01] CLOSED 2026-05-10** — Concrete loss formulations resolved by Director decisions in §7.0.1–7.0.3 above.
 
 ## 8. Behavioral Calibration Constraints
 

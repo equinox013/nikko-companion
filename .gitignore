@@ -31,7 +31,7 @@ desktop.ini
 *.pth
 *.gguf
 *.onnx
-checkpoints/
+checkpoints*/
 runs/
 wandb/
 mlruns/
@@ -54,6 +54,7 @@ evaluation/results/*.csv
 
 # --- Notebook scratch ---
 .ipynb_checkpoints/
+.virtual_documents/
 
 # --- Temp / build ---
 build/

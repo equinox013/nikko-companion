@@ -20,6 +20,7 @@ datasets:
     name: AnnoMI — Annotated Motivational Interviewing
     source_url: https://huggingface.co/datasets/to-be/annomi-motivational-interviewing-therapy-conversations
     source_url_canonical: https://github.com/uccollab/AnnoMI
+    hf_dataset_id_verified: to-be/annomi-motivational-interviewing-therapy-conversations  # verified 2026-05-11; short-form "AnnoMI" returns 404
     license: Public Domain / OpenRAIL
     license_status: GREEN
     mix_weight: 0.30

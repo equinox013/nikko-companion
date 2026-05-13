@@ -102,8 +102,16 @@ last_reviewed: 2026-05-08
 - MensLine Australia: 1300 78 99 78
 
 [REQ-300-RS3] The expandable section MUST NOT infer demographic identity from conversation context. It is presented to all users equally.
-REQ-300-GD1] The UI MUST display a prominent disclaimer before the chat interface is accessible, stating: "Nikko is currently available in Australia only. Crisis resources shown are Australian services." This disclaimer is a v0 constraint pending international routing implementation.
+[REQ-300-GD1] The UI MUST display a prominent disclaimer before the chat interface is accessible, stating: "Nikko is currently available in Australia only. Crisis resources shown are Australian services." This disclaimer is a v0 constraint pending international routing implementation.
 [REQ-300-GD2] Crisis resources MUST NOT be presented to users without the geographic scope disclaimer.
+
+### Quick-exit target domain
+
+[REQ-300-QE1] The quick-exit button MUST always be visible during any active session (Comfort, Guidance, and Crisis Modes). On activation, it MUST: (1) immediately clear all session state (`sessionStorage`, non-essential `localStorage`), and (2) replace the browser history entry and navigate to `https://www.bom.gov.au/`.
+
+[REQ-300-QE2] The navigation target `bom.gov.au` (Australian Bureau of Meteorology) is the ratified v0 quick-exit domain. Design rationale: Australian government domain, visually innocuous (weather service), no mental health or social-media content, provides plausible cover for users who require privacy from others in the same space. This domain MUST NOT be changed without Director approval.
+
+> **[RATIFIED 2026-05-11]:** `bom.gov.au` confirmed as quick-exit target per Director ruling on G-P5-001. See [GAPS.md G-P5-001](../GAPS.md#g-p5-001--quick-exit-domain-not-in-spec-300).
 
 ### Step 3 — Encourage Human Contact
 

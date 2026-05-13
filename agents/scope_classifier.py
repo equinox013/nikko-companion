@@ -111,11 +111,26 @@ _OUT_OF_SCOPE_PATTERNS: list[tuple[re.Pattern, float]] = [
 ]
 
 _IN_SCOPE_PATTERNS: list[tuple[re.Pattern, float]] = [
+    # --- Crisis-tier signals (weight 1.00) — MUST always pass through ---
+    # Any match here makes the input unambiguously in-scope.
+    # Note: no trailing \b after incomplete stems like "suicid" — "suicidal",
+    # "suicidality", "suicide" all need to match. Same for "self.harm\w*".
+    (re.compile(r"\b(want to (die|disappear|end it|hurt myself|not exist|give up))\b", re.I), 1.00),
+    (re.compile(r"\b(kill(ing)? (myself|oneself)|end(ing)? my life|take my (own )?life)\b", re.I), 1.00),
+    (re.compile(r"\b(thinking about (ending|suicide|killing|hurting)|plan(ning)? to (end|kill|hurt))\b", re.I), 1.00),
+    (re.compile(r"\bsuicid\w*\b", re.I), 1.00),  # suicide, suicidal, suicidality
+    (re.compile(r"\bself[.\-\s]harm\w*\b", re.I), 1.00),
+    (re.compile(r"\bself[.\-\s]injur\w*\b", re.I), 1.00),
+    # Farewell framing — indirect but high-risk (REQ-100-060, risk.passive tier)
+    (re.compile(r"\b(said goodbye|saying goodbye|wrote a (note|letter)|gave away my)\b", re.I), 0.90),
+    (re.compile(r"\b(do not want to exist|don'?t want to (be here|exist|be alive))\b", re.I), 1.00),
+
     # --- Explicit distress / emotional language ---
-    (re.compile(r"\b(i('m| am) (feeling|struggling|overwhelmed|depressed|anxious|scared|hopeless|numb|exhausted|breaking down|falling apart))\b", re.I), 0.95),
-    (re.compile(r"\b(i (don't|can't|couldn't) (cope|sleep|eat|go on|do (it|this) anymore))\b", re.I), 0.95),
-    (re.compile(r"\b(want to (die|disappear|end it|hurt myself|not exist|give up))\b", re.I), 1.00),  # crisis signal — always in scope
-    (re.compile(r"\b(suicid|self.harm|self.injur)\b", re.I), 1.00),
+    # Broad subject match: "I'm", "I am", "I have been", "I keep", "I cannot"
+    (re.compile(r"\bi (am|'m|have been|keep|cannot|can'?t) (feeling|struggling|crying|shaking|breaking down|falling apart)\b", re.I), 0.95),
+    (re.compile(r"\bi (am|'m|have been) (feeling )?(really |so )?(low|lost|hopeless|empty|numb|broken|overwhelmed|exhausted|depressed|anxious)\b", re.I), 0.90),
+    (re.compile(r"\bi (don'?t|can'?t|couldn'?t) (cope|sleep|eat|go on|do (it|this) anymore|stop (crying|thinking))\b", re.I), 0.95),
+    (re.compile(r"\bcannot stop (crying|thinking|feeling)\b", re.I), 0.90),
 
     # --- Relational / mental health topics ---
     (re.compile(r"\b(mental health|therapy|therapist|counselling|counseling|psychologist|psychiatrist|burnout|trauma|grief|loss|loneliness|isolation)\b", re.I), 0.85),
@@ -123,21 +138,20 @@ _IN_SCOPE_PATTERNS: list[tuple[re.Pattern, float]] = [
 
     # --- Mood and emotion words ---
     (re.compile(r"\b(sad|depressed|anxious|angry|scared|afraid|hopeless|helpless|worthless|lonely|empty|numb|ashamed|guilty|overwhelmed)\b", re.I), 0.65),
-    (re.compile(r"\b(i feel|i've been feeling|feeling (like|that)|my mood|my anxiety|my depression)\b", re.I), 0.75),
+    (re.compile(r"\b(i feel|i'?ve been feeling|feeling (like|that)|my mood|my anxiety|my depression)\b", re.I), 0.75),
 
     # --- Help-seeking language ---
-    (re.compile(r"\b(need (help|support|someone to talk to)|don't know what to do|don't know where to turn|no one (understands|listens|cares))\b", re.I), 0.85),
-    (re.compile(r"\b(can you help me|i need advice|i need to talk)\b", re.I), 0.50),  # weak signal — could be off-topic
+    (re.compile(r"\b(need (help|support|someone to talk to)|don'?t know what to do|don'?t know where to turn|no one (understands|listens|cares))\b", re.I), 0.85),
+    (re.compile(r"\b(can you help me|i need advice|i need to talk)\b", re.I), 0.50),
 
     # --- Coping / wellbeing topics ---
-    (re.compile(r"\b(coping (strategy|strategies|with|mechanism)|mindfulness|meditation|breathing (exercise|technique)|panic attack|anxiety attack)\b", re.I), 0.80),
+    # "panic attacks?" — trailing s? makes the plural match too
+    (re.compile(r"\b(coping (strategy|strategies|with|mechanism)|mindfulness|meditation|breathing (exercise|technique)|panic attacks?|anxiety attacks?)\b", re.I), 0.80),
     (re.compile(r"\b(sleep (problems?|issues?|disorder)|insomnia|nightmare|intrusive thought|rumination|negative thought)\b", re.I), 0.75),
 
     # --- Ambiguous-but-plausible distress surface forms (AMBIGUOUS bias) ---
-    # These are weak signals that alone wouldn't classify IN_SCOPE confidently,
-    # but they tip ambiguous inputs away from OUT_OF_SCOPE.
-    (re.compile(r"\b(i don't know (what|where|how|why)|i can't (figure|understand|deal)|everything is (hard|difficult|too much))\b", re.I), 0.45),
-    (re.compile(r"\b(stressed|stress(ful|ed)|pressure|burnt? out|tired of|fed up|can't take)\b", re.I), 0.55),
+    (re.compile(r"\b(i don'?t know (what|where|how|why)|i can'?t (figure|understand|deal)|everything is (hard|difficult|too much))\b", re.I), 0.45),
+    (re.compile(r"\b(stressed|stress(ful|ed)|pressure|burnt? out|tired of|fed up|can'?t take)\b", re.I), 0.55),
 ]
 
 
@@ -162,13 +176,14 @@ def _score_rule_based(text: str) -> tuple[float, float]:
     Python that also mentions anxiety).
     """
     def score_set(patterns: list[tuple[re.Pattern, float]]) -> float:
-        total_weight = sum(w for _, w in patterns)
-        hit_weight   = sum(w for pat, w in patterns if pat.search(text))
-        if total_weight == 0:
-            return 0.0
-        # Normalise — but clamp to 1.0 in case hits exceed the theoretical max
-        # (shouldn't happen, but defensive coding for future pattern additions)
-        return min(hit_weight / total_weight, 1.0)
+        # Sum the weights of every matching pattern, then cap at 1.0.
+        # We do NOT normalise by total_weight — that would divide each hit by
+        # the sum of all pattern weights (~10-11), collapsing every score to
+        # near-zero regardless of match quality. Instead, a single strong-
+        # weight match (e.g. 0.95) should yield a high score on its own, and
+        # multiple weaker matches should compound up to the 1.0 ceiling.
+        hit_weight = sum(w for pat, w in patterns if pat.search(text))
+        return min(hit_weight, 1.0)
 
     in_score  = score_set(_IN_SCOPE_PATTERNS)
     out_score = score_set(_OUT_OF_SCOPE_PATTERNS)

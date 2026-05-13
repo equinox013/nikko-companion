@@ -77,6 +77,10 @@ PUBMED_CACHE_POLICY = CachePolicy(
     invalidation_triggers=["ttl_expiry", "director_manual_purge"],
 )
 
+# SUPERSEDED 2026-05-10 — Director-directed change G-RETRIEVAL-01.
+# HealthdirectAdapter, BetterHealthAdapter, WHOAdapter have been replaced by
+# WebSearchAdapter. These CachePolicy constants are retained for audit trail
+# but are no longer referenced by any active adapter.
 HEALTHDIRECT_CACHE_POLICY = CachePolicy(
     ttl_days=30,
     head_check_interval=timedelta(weeks=1),
@@ -93,6 +97,15 @@ WHO_CACHE_POLICY = CachePolicy(
     ttl_days=30,
     head_check_interval=timedelta(weeks=1),
     invalidation_triggers=["ttl_expiry", "head_check_change", "director_manual_purge"],
+)
+
+# Active replacement policy (G-RETRIEVAL-01).
+# Web search results are cached for 3 days — shorter than the old static-corpus
+# TTLs because live web content changes more frequently than curated corpora.
+WEB_SEARCH_CACHE_POLICY = CachePolicy(
+    ttl_days=3,
+    head_check_interval=None,   # DDG snippet results don't support HEAD checks
+    invalidation_triggers=["ttl_expiry", "director_manual_purge"],
 )
 
 
@@ -387,24 +400,50 @@ class BetterHealthAdapter(BaseRetrievalAdapter):
     def is_cache_valid(self, entry: EvidenceItem) -> bool: ...
 
 
+# SUPERSEDED 2026-05-10 (G-RETRIEVAL-01) — replaced by WebSearchAdapter below.
 class WHOAdapter(BaseRetrievalAdapter):
     """
-    World Health Organization articles static cache adapter.
-    Primary grey-literature source. Priority: 4 in the Evidence Retrieval
-    Agent source list. (REQ-200-071)
-
-    Phase 3 notes:
-    - No live API in v0. Search operates against a pre-loaded StaticCacheIndex.
-    - Cache index file: docs/schemas/who_cache.json (to be created in Phase 3).
-    - WHO content is freely redistributable for non-commercial use; confirm
-      terms before building the index. (REQ-200-ER4)
-    - Cache TTL: 30 days + weekly HEAD check (WHO_CACHE_POLICY).
+    SUPERSEDED — Director-directed change 2026-05-10 (G-RETRIEVAL-01).
+    who.int is now one of five sanctioned domains in WebSearchAdapter.
+    This stub is retained for schema audit trail only.
     """
-
     SOURCE_NAME   = "World Health Organization"
     SOURCE_TIER   = SourceTier.PRIMARY
     EVIDENCE_TIER = EvidenceTier.GREY_LITERATURE
     CACHE_POLICY  = WHO_CACHE_POLICY
+
+    def search(self, params: StaticCacheQueryParams) -> RetrievalResult | RetrievalError: ...
+    def is_cache_valid(self, entry: EvidenceItem) -> bool: ...
+
+
+class WebSearchAdapter(BaseRetrievalAdapter):
+    """
+    General web search adapter restricted to sanctioned health domains.
+    Replaces HealthdirectAdapter, BetterHealthAdapter, WHOAdapter.
+    (G-RETRIEVAL-01 — Director-directed architectural change 2026-05-10)
+
+    Priority: 2 in ADAPTER_PRIORITY_ORDER (immediately after PubMed).
+
+    Sanctioned domains (searched first, via DuckDuckGo site: operator):
+      1. healthdirect.gov.au        — Australian Government health information
+      2. betterhealth.vic.gov.au    — Better Health Channel (Victoria, AU)
+      3. who.int                    — World Health Organization
+      4. beyondblue.org.au          — Beyond Blue (AU mental health charity)
+      5. blackdoginstitute.org.au   — Black Dog Institute (AU mental health research)
+
+    Fallback: if sanctioned results < MIN_SANCTIONED_RESULTS, broadens search
+    to general web. External results are tagged SourceTier.SECONDARY and carry
+    a scrutiny warning in their abstract field. (Director ruling 2026-05-10)
+
+    Phase 3 implementation: retrieval/web_search_adapter.py
+    Search backend: duckduckgo-search (PyPI, no API key required)
+    Content extraction: requests + BeautifulSoup4 (sanctioned URLs only)
+    Cache TTL: 3 days (WEB_SEARCH_CACHE_POLICY)
+    """
+    SOURCE_NAME   = "Sanctioned Web Search"
+    SOURCE_TIER   = SourceTier.PRIMARY
+    EVIDENCE_TIER = EvidenceTier.GREY_LITERATURE
+    CACHE_POLICY  = WEB_SEARCH_CACHE_POLICY
 
     def search(self, params: StaticCacheQueryParams) -> RetrievalResult | RetrievalError: ...
     def is_cache_valid(self, entry: EvidenceItem) -> bool: ...
@@ -415,16 +454,13 @@ class WHOAdapter(BaseRetrievalAdapter):
 # ---------------------------------------------------------------------------
 
 ADAPTER_PRIORITY_ORDER: list[type[BaseRetrievalAdapter]] = [
-    PubMedAdapter,         # Priority 1 — peer-reviewed, primary
-    HealthdirectAdapter,   # Priority 2 — grey-lit, primary
-    BetterHealthAdapter,   # Priority 3 — grey-lit, primary
-    WHOAdapter,            # Priority 4 — grey-lit, primary
-    # NHS, CDC, Mayo Clinic — secondary fallbacks, Phase 3+ only
+    PubMedAdapter,      # Priority 1 — peer-reviewed, live NCBI E-utilities API
+    WebSearchAdapter,   # Priority 2 — grey-lit, sanctioned web + external fallback
+    # (G-RETRIEVAL-01: HealthdirectAdapter, BetterHealthAdapter, WHOAdapter superseded)
+    # NHS, CDC, Mayo Clinic — secondary fallbacks, Phase 4+ if required
 ]
 """
 Ordered list of adapter classes for the Evidence Retrieval Agent.
+Updated 2026-05-10 per Director ruling (G-RETRIEVAL-01).
 The agent MUST query adapters in this order. (REQ-200-071)
-
-Secondary sources (NHS, CDC, Mayo Clinic) are NOT included in v0.
-Add them here in priority order when implemented.
 """

@@ -244,10 +244,24 @@ class StubDraftGenerator:
 # retrieved dynamically. The only permissible change is an admin update when
 # a hotline number changes in the real world. (REQ-700-070)
 BASELINE_CRISIS_RESOURCES: list[CrisisResource] = [
-    CrisisResource(name="Lifeline Australia",    number="13 11 14",    tier="baseline"),
-    CrisisResource(name="Beyond Blue",           number="1300 22 4636", tier="baseline"),
-    CrisisResource(name="13YARN (First Nations)", number="13 92 76",    tier="baseline"),
-    CrisisResource(name="Emergency Services",    number="000",          tier="baseline"),
+    # REQ-300-RS1: these four resources MUST always be displayed during Crisis Mode.
+    # Order matches SPEC-300 §5 Step 2 and G-CRISIS-03 ratification.
+    # Do NOT remove or reorder without Director approval.
+    CrisisResource(name="Lifeline Australia",           number="13 11 14",     tier="baseline"),
+    CrisisResource(name="Beyond Blue",                  number="1300 22 4636", tier="baseline"),
+    CrisisResource(name="Suicide Call Back Service",    number="1300 659 467", tier="baseline"),
+    CrisisResource(name="Emergency Services",           number="000",           tier="baseline"),
+]
+
+# REQ-300-RS2: demographic-specific resources — presented in the UI as a
+# "More tailored support" expandable alongside the baseline set.
+# NOT inferred from conversation context (REQ-300-RS3).
+DEMOGRAPHIC_CRISIS_RESOURCES: list[CrisisResource] = [
+    CrisisResource(name="QLife (LGBTIQ+)",            number="1800 184 527", tier="demographic"),
+    CrisisResource(name="13YARN (First Nations)",     number="13 92 76",     tier="demographic"),
+    CrisisResource(name="Kids Helpline (under 25)",   number="1800 55 1800", tier="demographic"),
+    CrisisResource(name="1800RESPECT (family violence)", number="1800 737 732", tier="demographic"),
+    CrisisResource(name="MensLine Australia",         number="1300 78 99 78", tier="demographic"),
 ]
 
 

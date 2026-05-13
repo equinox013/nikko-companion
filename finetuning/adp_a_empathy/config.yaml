@@ -64,7 +64,9 @@ training:
   learning_rate: 2.0e-4        # Standard QLoRA learning rate. Reduce to 1e-4 if loss spikes.
   lr_scheduler: cosine         # Cosine decay — smooth convergence for instruction-tuned base.
   warmup_ratio: 0.03           # 3% warmup steps before full LR. Prevents early instability.
-  max_seq_length: 2048         # Token budget per example. Covers multi-turn counseling turns.
+  max_seq_length: 768          # Token budget per example. Director-ratified 2026-05-11 (G-TRAIN-01).
+                               # 2048 was in draft config but exceeds safe VRAM budget on RTX 3070
+                               # at batch_size=4. 768 covers all single/two-turn exchanges in corpus.
   fp16: false
   bf16: true                   # bfloat16 training — required for Mistral 7B stability.
   gradient_checkpointing: true # Trade compute for VRAM — essential for 7B on single GPU.
@@ -76,7 +78,10 @@ training:
 rejection_sampling:
   enabled: true
   evaluator_model: adp_c       # ADP-C performs the screening pass.
-  accept_threshold: 0.70       # Responses scoring below 0.70 on empathy quality are rejected.
+  accept_threshold: 0.50       # Lowered from 0.70 → 0.50 (Director-ratified 2026-05-11, G-DATA-06).
+                               # ADP-C calibrated on synthetic redline pairs; organic empathy datasets
+                               # (AnnoMI, ESConv, EmpatheticDialogues) scored 1–12% at 0.70 threshold —
+                               # distribution mismatch, not quality failure. 0.50 is the working floor.
   # NOTE: ADP-A does NOT apply the 2:1 false-negative asymmetry — that applies
   # to ADP-B and ADP-C safety/critique training only (REQ-400-LF3).
 
