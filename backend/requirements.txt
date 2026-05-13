@@ -5,10 +5,11 @@
 fastapi==0.115.*
 uvicorn[standard]==0.32.*
 pydantic==2.9.*
+httpx==0.27.*
 
 # Phase 5: uncomment when wiring agent pipeline
 # langgraph==0.2.*
 # langchain-core==0.3.*
 # transformers==4.46.3
 # peft==0.13.2
-# torch==2.5.*
+#
