@@ -1,0 +1,36 @@
+# render.yaml -- Render.com deployment config for Nikko backend.
+# Free tier web service; spins down after 15 min inactivity.
+# The loading screen's 60-second timeout UX handles the cold-start delay.
+#
+# Deploy steps:
+#   1. Connect this repo to Render (Dashboard -> New -> Web Service -> GitHub)
+#   2. Render auto-detects this file and creates the service
+#   3. Set HF_SPACE_URL and NIKKO_INTERNAL_TOKEN in Render Dashboard -> Environment
+#
+# [PROPOSED-RECONCILIATION: Director-approved] Switched from Fly.io to Render
+# free tier to avoid billing. Fly.io config preserved in backend/fly.toml.
+
+services:
+  - type: web
+    name: nikko-backend
+    runtime: python
+    plan: free
+    region: singapore        # closest free-tier region to Australia (SYD not available)
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT --workers 1 --loop uvloop
+
+    healthCheckPath: /health
+
+    envVars:
+      - key: NIKKO_ENV
+        value: production
+      - key: PYTHON_VERSION
+        value: "3.11.0"
+      # Set these in Render Dashboard -> Environment (never commit secrets):
+      # HF_SPACE_URL       = https://equinox013-nikko-inference.hf.space
+      # NIKKO_INTERNAL_TOKEN = <shared secret, same value as HF Space secret>
+      - key: HF_SPACE_URL
+        sync: false
+      - key: NIKKO_INTERNAL_TOKEN
+        sync: false
