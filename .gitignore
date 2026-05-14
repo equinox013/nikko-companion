@@ -85,4 +85,4 @@ finetuning/
 run_adp_a_v2_pipeline.bat
 
 # --- HF Space (separate git repo, pushed directly to HF Spaces) ---
-hf_space/
+# hf_space/ -- tracked in main repo (Space deployed via HF git)
