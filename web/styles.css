@@ -2078,3 +2078,21 @@ body::before {
 /* Persistent strip below the composer. Cannot be dismissed by design —
    users must always be aware they are talking to an AI that can err.   */
 .ai-disclaimer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px 2px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--faint);
+  line-height: 1.4;
+}
+.ai-disclaimer svg {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  opacity: 0.55;
+}
+[data-theme="dark"] .ai-disclaimer { color: var(--muted); }

@@ -349,6 +349,35 @@
   #nikko-loader .nl-track  { transition: none; }
 }
 
-/* ─────────── REQ-FIS-LS11: 60-second timeout message ─────────── */
-/* Non-alarming — carousel and animations continue running.
-   Inserted above the footer st
+/* REQ-FIS-LS11: 60-second timeout message */
+/* Non-alarming -- carousel continues. Inserted above footer once 60s elapses. */
+.nl-timeout {
+  margin-bottom: 10px;
+  padding: 10px 14px 12px;
+  background: color-mix(in oklch, var(--sun) 10%, var(--bg));
+  border: 1px solid color-mix(in oklch, var(--sun) 25%, transparent);
+  border-radius: 12px;
+  text-align: center;
+}
+.nl-timeout p {
+  margin: 0 0 8px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink);
+}
+.nl-retry {
+  appearance: none;
+  padding: 5px 16px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+.nl-retry:hover {
+  border-color: var(--sun);
+  color: var(--sun);
+}
