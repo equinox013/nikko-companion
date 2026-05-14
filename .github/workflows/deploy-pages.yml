@@ -48,14 +48,7 @@ jobs:
           done
           echo "All required files present."
 
-      - name: Configure GitHub Pages
-        uses: actions/configure-pages@v5
-
-      - name: Upload web/ as Pages artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: web/
-
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+      # Compile JSX → JS using esbuild (zero-config, no Babel runtime needed).
+      # esbuild transform mode (no --bundle flag) converts JSX syntax to
+      # React.createElement() calls but does NOT resolve imports/modules —
+      # correct for this globals-based architecture where React + ReactDO

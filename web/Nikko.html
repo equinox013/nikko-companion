@@ -104,13 +104,13 @@
 
   <div id="root"></div>
 
-  <!-- React + Babel (unpkg CDN). Requires an internet connection. -->
+  <!-- React (unpkg CDN). Requires an internet connection.
+       JSX is pre-compiled to JS by esbuild in CI — no runtime Babel needed. -->
   <script src="https://unpkg.com/react@18.3.1/umd/react.development.js"></script>
   <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js"></script>
-  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js"></script>
   <!-- Fallback error: if React still hasn't loaded 8s after page load,
        surface a clear message rather than a permanent white screen. -->
   <script>
     setTimeout(function () {
       if (window.React) return; // all good
-      var st =
+      var st = document.q
