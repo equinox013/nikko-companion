@@ -357,6 +357,11 @@ function Chat({ theme, onToggleTheme }) {
         }
       }
 
+      // If the stream closed without any text, the backend errored after
+      // sending headers (e.g. HF_SPACE_URL not configured). The catch block
+      // will run the local pattern-match fallback so the user always gets a reply.
+      if (!accText) throw new Error('Empty stream — backend produced no text');
+
     } catch (err) {
       // ── Fallback: backend unreachable (Render cold-start, network error) ──
       // Gracefully degrade to the hardcoded pattern matcher so the user always
@@ -581,14 +586,22 @@ function Chat({ theme, onToggleTheme }) {
                     </div>
                     <div className="body">
                       {m.traceId && !m.streaming && <AgentRibbon traceId={m.traceId} />}
-                      <div className="bubble">
-                        <MessageBody
-                          text={m.text}
-                          sourceOrder={sourceOrderRef.current}
-                          onCiteClick={onCiteClick}
-                          streaming={!!m.streaming}
-                        />
-                      </div>
+                      {m.text === '' && m.streaming ? (
+                        <div className="bubble thinking-bubble" aria-label="Nikko is thinking" role="status">
+                          <span className="t-dot" />
+                          <span className="t-dot" />
+                          <span className="t-dot" />
+                        </div>
+                      ) : (
+                        <div className="bubble">
+                          <MessageBody
+                            text={m.text}
+                            sourceOrder={sourceOrderRef.current}
+                            onCiteClick={onCiteClick}
+                            streaming={!!m.streaming}
+                          />
+                        </div>
+                      )}
                       {idx === 0 && showSuggestions && (
                         <div className="suggest-row">
                           {NIKKO_SUGGESTIONS.map(s => (
