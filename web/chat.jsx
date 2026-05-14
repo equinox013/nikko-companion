@@ -172,6 +172,9 @@ function quickExit() {
   catch (e) { window.location.href = 'https://www.bom.gov.au/'; }
 }
 
+// ── Backend URL (REQ-FIS-001) ─────────────────────────────────────
+const BACKEND_URL = 'https://nikko-companion.onrender.com';
+
 // ── Chat root ─────────────────────────────────────────────────────
 function Chat({ theme, onToggleTheme }) {
   const [messages, setMessages] = useState([
@@ -186,6 +189,14 @@ function Chat({ theme, onToggleTheme }) {
   const sourceOrderRef = useRef({});
   const [, forceRerender] = useState(0);
   const threadRef = useRef(null);
+
+  // Stable session ID for this Gate entry (REQ-FIS-SM1).
+  // Generated once on mount; passed to every /api/message call.
+  const contextID = React.useMemo(() => {
+    const bytes = crypto.getRandomValues(new Uint8Array(6));
+    const hex = Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+    return `nikko-${Date.now()}-${hex}`;
+  }, []);
 
   // Tutorial — first time only
   const [tutorialOpen, setTutorialOpen] = useState(() => {
@@ -261,41 +272,130 @@ function Chat({ theme, onToggleTheme }) {
     setRightTab('sources');
   }, []);
 
+  // ── streamReply: POST /api/message → SSE → char-by-char animation ──
+  // [REQ-FIS-001] Primary chat endpoint. Streams SSE from the Render backend
+  // (which orchestrates ADP-B → ADP-A → ADP-C on the HF Space).
+  // Falls back to matchNikkoPattern() if the backend is unreachable so the
+  // frontend never goes blank during Render cold-start or network errors.
   const streamReply = useCallback(async (userText) => {
-    const pattern = matchNikkoPattern(userText);
-    if (pattern.safety) setSafetyVisible(true);
     setStreaming(true);
     const id = 'm-' + Date.now();
-    // Build and register an agent trace for this turn so the per-message
-    // ribbon and (gesture-protected) debug overlay have something to show.
-    const trace = buildAgentTrace(id, userText, pattern);
-    NikkoAgentLog.add(trace);
-    setMessages(prev => [...prev, { id, role: 'assistant', text: '', emotion: pattern.chunks[0].emotion, streaming: true, traceId: id }]);
+    setMessages(prev => [...prev, { id, role: 'assistant', text: '', emotion: 'listen', streaming: true, traceId: id }]);
     scrollToBottom();
     setCurrentEmotion('think');
-    await sleep(420 + Math.random() * 220);
-    let acc = '';
-    for (let i = 0; i < pattern.chunks.length; i++) {
-      const chunk = pattern.chunks[i];
-      setCurrentEmotion(chunk.emotion);
-      const target = (acc ? acc + '\n\n' : '') + chunk.text;
-      const stride = 3;
-      let pos = acc ? acc.length + 2 : 0;
-      while (pos < target.length) {
-        pos = Math.min(target.length, pos + stride);
-        const slice = target.slice(0, pos);
-        setMessages(prev => prev.map(m => m.id === id ? { ...m, text: slice, emotion: chunk.emotion } : m));
-        forceRerender(x => x + 1);
-        scrollToBottom();
-        await sleep(14 + Math.random() * 10);
+
+    // [CONCEPT] SSE (Server-Sent Events): a unidirectional HTTP stream where
+    // the server pushes events as "event: <name>\ndata: <json>\n\n" blocks.
+    // We read it with fetch() + ReadableStream instead of EventSource because
+    // EventSource doesn't support POST requests.
+    try {
+      const response = await fetch(`${BACKEND_URL}/api/message`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: userText, contextID }),
+      });
+
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let currentEvent = '';
+      let accText = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        // Split on newlines; keep any incomplete final line in buffer.
+        const lines = buffer.split('\n');
+        buffer = lines.pop();
+
+        for (const line of lines) {
+          if (line.startsWith('event: ')) {
+            currentEvent = line.slice(7).trim();
+          } else if (line.startsWith('data: ')) {
+            let data;
+            try { data = JSON.parse(line.slice(6)); } catch { continue; }
+
+            if (currentEvent === 'message_start') {
+              setCurrentEmotion(data.emotion || 'listen');
+
+            } else if (currentEvent === 'chunk') {
+              // Safety flag check — show banner if crisis detected.
+              if (data.safetyFlags?.includes('crisis_detected')) setSafetyVisible(true);
+
+              if (data.text) {
+                const emotion = data.emotion || 'speak';
+                setCurrentEmotion(emotion);
+                // Animate the incoming text char-by-char so the UX feels alive.
+                const target = accText + data.text;
+                const stride = 3;
+                let pos = accText.length;
+                while (pos < target.length) {
+                  pos = Math.min(target.length, pos + stride);
+                  const slice = target.slice(0, pos);
+                  setMessages(prev => prev.map(m =>
+                    m.id === id ? { ...m, text: slice, emotion } : m
+                  ));
+                  scrollToBottom();
+                  await sleep(14 + Math.random() * 10);
+                }
+                accText = target;
+              } else {
+                // Empty text chunk = emotion-state signal only (e.g. "think").
+                setCurrentEmotion(data.emotion || 'think');
+              }
+
+            } else if (currentEvent === 'message_end') {
+              if (data.safetyFlags?.includes('crisis_detected')) setSafetyVisible(true);
+            }
+          }
+        }
       }
-      acc = target;
-      await sleep(260);
+
+    } catch (err) {
+      // ── Fallback: backend unreachable (Render cold-start, network error) ──
+      // Gracefully degrade to the hardcoded pattern matcher so the user always
+      // gets a response. Logged to console for debugging; not surfaced to user.
+      console.warn('[Nikko] Backend unavailable — using local fallback:', err.message);
+      const pattern = matchNikkoPattern(userText);
+      if (pattern.safety) setSafetyVisible(true);
+      const trace = buildAgentTrace(id, userText, pattern);
+      NikkoAgentLog.add(trace);
+      // Update initial message emotion to match fallback pattern.
+      setMessages(prev => prev.map(m =>
+        m.id === id ? { ...m, emotion: pattern.chunks[0].emotion } : m
+      ));
+      setCurrentEmotion('think');
+      await sleep(420 + Math.random() * 220);
+      let acc = '';
+      for (let i = 0; i < pattern.chunks.length; i++) {
+        const chunk = pattern.chunks[i];
+        setCurrentEmotion(chunk.emotion);
+        const target = (acc ? acc + '\n\n' : '') + chunk.text;
+        const stride = 3;
+        let pos = acc ? acc.length + 2 : 0;
+        while (pos < target.length) {
+          pos = Math.min(target.length, pos + stride);
+          const slice = target.slice(0, pos);
+          setMessages(prev => prev.map(m =>
+            m.id === id ? { ...m, text: slice, emotion: chunk.emotion } : m
+          ));
+          forceRerender(x => x + 1);
+          scrollToBottom();
+          await sleep(14 + Math.random() * 10);
+        }
+        acc = target;
+        await sleep(260);
+      }
     }
+
     setMessages(prev => prev.map(m => m.id === id ? { ...m, streaming: false } : m));
     setStreaming(false);
     setCurrentEmotion('calm');
-  }, [scrollToBottom]);
+  }, [scrollToBottom, contextID]);
 
   const onSend = useCallback((text) => {
     // /help command — reopens the tutorial without sending a message.
