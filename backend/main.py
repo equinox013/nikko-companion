@@ -168,20 +168,29 @@ async def _pipeline(request: MessageRequest) -> AsyncGenerator[SSEChunk, None]:
     Stage 1 -- ADP-B safety check
     Stage 2 -- ADP-A empathy response (skipped on crisis)
     Stage 3 -- ADP-C evaluation with one regen loop
+
+    Each _infer() call is individually wrapped so a HF Space error in any
+    stage degrades gracefully: ADP-B failure -> treat as safe (no crisis);
+    ADP-A failure -> emit a warm holding response; ADP-C failure -> APPROVE.
+    The frontend always receives a text chunk and message_end.
     """
     user_msg = request.text.strip()
     messages = [{"role": "user", "content": user_msg}]
 
     # ── Stage 1: Safety / crisis check (ADP-B) ────────────────────────────────
-    # [CONCEPT] ADP-B is a classifier -- it outputs a structured JSON verdict
-    # rather than a conversational response. Low temperature (0.2) in the Space
-    # config keeps the output deterministic and parseable.
     yield SSEChunk(emotion="think", text="")
 
-    safety_raw = await _infer("adp_b", messages, system=SAFETY_SYSTEM)
-    safety     = _parse_json_verdict(safety_raw)
-    is_crisis  = safety.get("crisis", False)
-    flags      = safety.get("flags", [])
+    try:
+        safety_raw = await _infer("adp_b", messages, system=SAFETY_SYSTEM)
+        safety     = _parse_json_verdict(safety_raw)
+        is_crisis  = safety.get("crisis", False)
+        flags      = safety.get("flags", [])
+    except Exception as exc:
+        # ADP-B unavailable -- fail open (treat as safe) and log.
+        # Never block a user from getting support because the classifier is down.
+        import logging
+        logging.getLogger("nikko").warning(f"ADP-B failed: {exc}")
+        is_crisis, flags = False, []
 
     # [REQ-300-161] Crisis path: bypass ADP-A, return hard-coded resources.
     if is_crisis:
@@ -195,37 +204,48 @@ async def _pipeline(request: MessageRequest) -> AsyncGenerator[SSEChunk, None]:
     # ── Stage 2: Empathy response (ADP-A) ─────────────────────────────────────
     yield SSEChunk(emotion="listen", text="")
 
-    draft = await _infer("adp_a", messages, system=NIKKO_SYSTEM)
+    try:
+        draft = await _infer("adp_a", messages, system=NIKKO_SYSTEM)
+    except Exception as exc:
+        import logging
+        logging.getLogger("nikko").warning(f"ADP-A failed: {exc}")
+        # Warm holding response -- better than silence.
+        draft = (
+            "I'm here with you. It sounds like there's a lot on your mind — "
+            "would you like to share a bit more about what's been going on?"
+        )
 
     # ── Stage 3: Evaluate draft (ADP-C) ───────────────────────────────────────
-    # [CONCEPT] ADP-C acts as the Evaluator in SPEC-500. It returns APPROVE or
-    # REGENERATE. One regen is attempted; if ADP-C still rejects, the safe
-    # fallback response is used to prevent an infinite loop.
     eval_messages = [
         {"role": "user",      "content": f"User message: {user_msg}"},
         {"role": "assistant", "content": f"Proposed response: {draft}"},
     ]
     yield SSEChunk(emotion="think", text="")
 
-    eval_raw = await _infer("adp_c", eval_messages, system=EVAL_SYSTEM)
-    verdict  = _parse_json_verdict(eval_raw).get("verdict", "APPROVE")
+    try:
+        eval_raw = await _infer("adp_c", eval_messages, system=EVAL_SYSTEM)
+        verdict  = _parse_json_verdict(eval_raw).get("verdict", "APPROVE")
+    except Exception as exc:
+        import logging
+        logging.getLogger("nikko").warning(f"ADP-C failed: {exc}")
+        verdict = "APPROVE"  # fail open -- surface the ADP-A draft as-is
 
     if verdict == "REGENERATE":
-        # One regen attempt -- pass the evaluator's reason back as context.
         regen_messages = messages + [
             {"role": "assistant", "content": draft},
             {"role": "user",      "content": "Please try a different, more empathetic approach."},
         ]
-        draft = await _infer("adp_a", regen_messages, system=NIKKO_SYSTEM)
-
-        eval2_raw = await _infer("adp_c", [
-            {"role": "user",      "content": f"User message: {user_msg}"},
-            {"role": "assistant", "content": f"Proposed response: {draft}"},
-        ], system=EVAL_SYSTEM)
-        verdict2 = _parse_json_verdict(eval2_raw).get("verdict", "APPROVE")
+        try:
+            draft = await _infer("adp_a", regen_messages, system=NIKKO_SYSTEM)
+            eval2_raw = await _infer("adp_c", [
+                {"role": "user",      "content": f"User message: {user_msg}"},
+                {"role": "assistant", "content": f"Proposed response: {draft}"},
+            ], system=EVAL_SYSTEM)
+            verdict2 = _parse_json_verdict(eval2_raw).get("verdict", "APPROVE")
+        except Exception:
+            verdict2 = "APPROVE"
 
         if verdict2 == "REGENERATE":
-            # Safe fallback -- regen loop exhausted (REQ SPEC-200 regen policy).
             draft = (
                 "I want to make sure I'm being as helpful as possible. "
                 "Could you tell me a little more about what's on your mind?"
