@@ -49,7 +49,31 @@ jobs:
           done
           echo "All required files present."
 
-      # Compile JSX to JS using esbuild (zero-config, no Babel runtime needed).
-      # esbuild transform mode converts JSX syntax to React.createElement()
-      # calls without module bundling -- correct for this globals-based
-      # architecture where Reac
+      # Compile JSX to JS using esbuild. Transform mode (no --bundle flag)
+      # converts JSX to React.createElement() calls without resolving modules --
+      # correct for this globals-based architecture where React + ReactDOM
+      # are provided by CDN script tags loaded before the component files.
+      - name: Compile JSX to JS
+        run: |
+          cd web
+          npx --yes esbuild@0.25.3 \
+            avatar.jsx gate.jsx nikko-data.jsx memory.jsx panels.jsx agent-debug.jsx chat.jsx nikko.jsx \
+            --loader=jsx \
+            --jsx-factory=React.createElement \
+            --jsx-fragment=React.Fragment \
+            --outdir=. \
+            --log-level=info
+          echo "Compiled files:"
+          ls -lh avatar.js gate.js nikko-data.js memory.js panels.js agent-debug.js chat.js nikko.js
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload web/ as Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: web/
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
