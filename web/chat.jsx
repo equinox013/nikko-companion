@@ -605,4 +605,49 @@ function Chat({ theme, onToggleTheme }) {
 
           <div className="composer-wrap">
             <div className="composer-inner">
-              {safetyVisible && <SafetyBanner onDismiss={() => setSafet
+              {safetyVisible && <SafetyBanner onDismiss={() => setSafetyVisible(false)} />}
+              <Composer onSend={onSend} disabled={streaming} />
+              {/* G-UI-01: persistent AI disclaimer — always              {safetyVisible && <SafetyBanner onDismiss={() => setSafetyVisible(false)} />}
+              <Composer onSend={onSend} disabled={streaming} />
+              {/* G-UI-01: persistent AI disclaimer — always visible per REQ-300-164 */}
+              <AiDisclaimer />
+            </div>
+          </div>
+        </div>
+        {/* /thread-wrap */}
+
+        {rightTab === 'sources' && (
+          <SourcesPanel
+            sourceOrder={sourceOrderRef.current}
+            activeKey={activeCite}
+            onClose={() => setRightTab(null)}
+          />
+        )}
+      </main>
+
+      {/* Memory modals */}
+      {memOpen && (
+        <MemoryGenerateModal
+          open={memOpen}
+          onClose={() => setMemOpen(false)}
+          onCreated={() => setMemOpen(false)}
+        />
+      )}
+      {loadOpen && (
+        <MemoryLoadModal
+          open={loadOpen}
+          onClose={() => setLoadOpen(false)}
+          onLoaded={(name) => { setLoadOpen(false); onMemoryLoaded(name); }}
+        />
+      )}
+
+      {/* First-run tutorial */}
+      <Tutorial open={tutorialOpen} onSkip={closeTutorial} onDone={closeTutorial} />
+
+      {/* Agent debug overlay — gesture-gated: 2-click then 3s hold on avatar */}
+      <AgentDebugOverlay open={debugOpen} onClose={() => setDebugOpen(false)} />
+    </div>
+  );
+}
+
+Object.assign(window, { Chat });
