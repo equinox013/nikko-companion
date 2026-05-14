@@ -58,7 +58,7 @@ jobs:
           cd web
           npx --yes esbuild@0.25.3 \
             avatar.jsx gate.jsx nikko-data.jsx memory.jsx panels.jsx agent-debug.jsx chat.jsx nikko.jsx \
-            --loader=jsx \
+            --loader:.jsx=jsx \
             --jsx-factory=React.createElement \
             --jsx-fragment=React.Fragment \
             --outdir=. \
