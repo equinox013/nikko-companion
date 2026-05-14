@@ -36,9 +36,11 @@ HF_SPACE_URL = os.getenv("HF_SPACE_URL", "").rstrip("/")
 # Shared secret with the HF Space -- set via: fly secrets set NIKKO_INTERNAL_TOKEN=...
 INTERNAL_TOKEN = os.getenv("NIKKO_INTERNAL_TOKEN", "")
 
-# Timeout for each /infer call to HF Space.
-# ZeroGPU cold-start can take up to 30s; warm inference is ~5-10s.
-INFER_TIMEOUT_S = 90
+# Timeout for the /pipeline call to HF Space.
+# Cold start (first call after Space rebuild): ~120s model load + inference.
+# Warm (subsequent calls, GPU context warm): ~30-60s for 3 adapter passes.
+# Regen pass adds another ~20-30s. 360s gives comfortable headroom.
+PIPELINE_TIMEOUT_S = 360
 
 # Nikko system prompt -- sets the persona and safety framing for ADP-A.
 # Kept short so it fits within the 2048-token context window after conversation history.
@@ -114,85 +116,78 @@ class MessageRequest(BaseModel):
     moodSnapshot:  MoodSnapshot | None = None
 
 class SSEChunk(BaseModel):
-    text:        str       = ""
-    emotion:     str       = "calm"
-    sourcesUsed: list[str] = Field(default_factory=list)
-    safetyFlags: list[str] = Field(default_factory=list)
+    text:        str        = ""
+    emotion:     str        = "calm"
+    sourcesUsed: list[str]  = Field(default_factory=list)
+    safetyFlags: list[str]  = Field(default_factory=list)
+    trace:       dict | None = None   # pipeline trace for debug panel
 
 # ── HF Space client ───────────────────────────────────────────────────────────
 
-async def _infer(adapter: str, messages: list[dict], system: str = "") -> str:
+async def _call_pipeline(messages: list[dict]) -> dict:
     """
-    Calls POST /infer on the HF Space and returns the generated text.
+    Calls POST /pipeline on the HF Space -- runs ADP-B → ADP-A → ADP-C in
+    a single ZeroGPU GPU session, returning the full pipeline result.
 
-    [CONCEPT] httpx.AsyncClient is used instead of requests so this coroutine
-    doesn't block the FastAPI event loop while waiting for the GPU. Other
-    requests (e.g. /health probes) can still be served during the wait.
+    [CONCEPT] httpx.AsyncClient doesn't block the FastAPI event loop while
+    waiting for the GPU. /health probes and other requests are served normally
+    during the (potentially long) pipeline wait.
     """
     if not HF_SPACE_URL:
         raise RuntimeError("HF_SPACE_URL env var not set. Run: fly secrets set HF_SPACE_URL=...")
 
     payload = {
-        "messages": messages,
-        "adapter":  adapter,
-        "system":   system,
-        "token":    INTERNAL_TOKEN,
+        "messages":      messages,
+        "system":        NIKKO_SYSTEM,
+        "safety_system": SAFETY_SYSTEM,
+        "eval_system":   EVAL_SYSTEM,
+        "token":         INTERNAL_TOKEN,
     }
 
-    async with httpx.AsyncClient(timeout=INFER_TIMEOUT_S) as client:
-        resp = await client.post(f"{HF_SPACE_URL}/infer", json=payload)
+    async with httpx.AsyncClient(timeout=PIPELINE_TIMEOUT_S) as client:
+        resp = await client.post(f"{HF_SPACE_URL}/pipeline", json=payload)
         resp.raise_for_status()
-        return resp.json()["text"]
+        return resp.json()
 
 # ── Pipeline ──────────────────────────────────────────────────────────────────
 
-def _parse_json_verdict(raw: str) -> dict:
-    """
-    Extracts a JSON object from ADP-B or ADP-C output.
-    The model occasionally wraps the JSON in markdown code fences -- strip them.
-    """
-    raw = raw.strip()
-    if raw.startswith("```"):
-        raw = raw.split("```")[1]
-        if raw.startswith("json"):
-            raw = raw[4:]
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        return {}
-
 async def _pipeline(request: MessageRequest) -> AsyncGenerator[SSEChunk, None]:
     """
-    Three-stage inference pipeline per SPEC-200 and SPEC-300.
+    Single-call pipeline per SPEC-200 and SPEC-300.
 
-    Stage 1 -- ADP-B safety check
-    Stage 2 -- ADP-A empathy response (skipped on crisis)
-    Stage 3 -- ADP-C evaluation with one regen loop
+    Sends one POST /pipeline to the HF Space which runs ADP-B → ADP-A → ADP-C
+    (+ optional regen) inside a single @spaces.GPU context. This eliminates
+    the 80-110s CPU→VRAM overhead that was incurred per adapter when using
+    three separate /infer calls.
 
-    Each _infer() call is individually wrapped so a HF Space error in any
-    stage degrades gracefully: ADP-B failure -> treat as safe (no crisis);
-    ADP-A failure -> emit a warm holding response; ADP-C failure -> APPROVE.
-    The frontend always receives a text chunk and message_end.
+    Graceful degradation: if the HF Space call fails entirely, a warm holding
+    response is emitted so the frontend always receives text.
     """
     user_msg = request.text.strip()
     messages = [{"role": "user", "content": user_msg}]
 
-    # ── Stage 1: Safety / crisis check (ADP-B) ────────────────────────────────
+    # Signal "thinking" while the pipeline runs (~30-120s depending on warm/cold).
     yield SSEChunk(emotion="think", text="")
 
     try:
-        safety_raw = await _infer("adp_b", messages, system=SAFETY_SYSTEM)
-        safety     = _parse_json_verdict(safety_raw)
-        is_crisis  = safety.get("crisis", False)
-        flags      = safety.get("flags", [])
+        result    = await _call_pipeline(messages)
+        is_crisis = result.get("is_crisis", False)
+        flags     = result.get("flags", [])
+        text      = result.get("text", "")
     except Exception as exc:
-        # ADP-B unavailable -- fail open (treat as safe) and log.
-        # Never block a user from getting support because the classifier is down.
         import logging
-        logging.getLogger("nikko").warning(f"ADP-B failed: {exc}")
-        is_crisis, flags = False, []
+        logging.getLogger("nikko").warning(f"Pipeline failed: {exc}")
+        # Full pipeline down -- emit a warm holding response.
+        yield SSEChunk(
+            text=(
+                "I'm here with you. It sounds like there's a lot on your mind — "
+                "would you like to share a bit more about what's been going on?"
+            ),
+            emotion="speak",
+        )
+        return
 
-    # [REQ-300-161] Crisis path: bypass ADP-A, return hard-coded resources.
+    # [REQ-300-161] Crisis path -- pipeline sets is_crisis=True, text is empty.
     if is_crisis:
         yield SSEChunk(
             text=CRISIS_RESPONSE,
@@ -201,57 +196,37 @@ async def _pipeline(request: MessageRequest) -> AsyncGenerator[SSEChunk, None]:
         )
         return
 
-    # ── Stage 2: Empathy response (ADP-A) ─────────────────────────────────────
-    yield SSEChunk(emotion="listen", text="")
-
-    try:
-        draft = await _infer("adp_a", messages, system=NIKKO_SYSTEM)
-    except Exception as exc:
-        import logging
-        logging.getLogger("nikko").warning(f"ADP-A failed: {exc}")
-        # Warm holding response -- better than silence.
-        draft = (
-            "I'm here with you. It sounds like there's a lot on your mind — "
-            "would you like to share a bit more about what's been going on?"
+    if not text:
+        text = (
+            "I want to make sure I'm being as helpful as possible. "
+            "Could you tell me a little more about what's on your mind?"
         )
 
-    # ── Stage 3: Evaluate draft (ADP-C) ───────────────────────────────────────
-    eval_messages = [
-        {"role": "user",      "content": f"User message: {user_msg}"},
-        {"role": "assistant", "content": f"Proposed response: {draft}"},
-    ]
-    yield SSEChunk(emotion="think", text="")
+    # Build a trace payload for the debug panel so the user can see
+    # adapter activity without checking HF/Render logs.
+    trace = {
+        "is_crisis": is_crisis,
+        "flags":     flags,
+        "verdict":   result.get("verdict", "APPROVE"),
+        "regen":     result.get("regen", False),
+        "elapsed":   result.get("elapsed", 0),
+        "adp_b": {
+            "label":   "Safety / crisis check",
+            "verdict": "CRISIS" if is_crisis else "CLEAR",
+            "flags":   flags,
+        },
+        "adp_a": {
+            "label": "Empathy response draft",
+            "chars": len(text),
+        },
+        "adp_c": {
+            "label":   "Quality gate (evaluator)",
+            "verdict": result.get("verdict", "APPROVE"),
+            "regen":   result.get("regen", False),
+        },
+    }
 
-    try:
-        eval_raw = await _infer("adp_c", eval_messages, system=EVAL_SYSTEM)
-        verdict  = _parse_json_verdict(eval_raw).get("verdict", "APPROVE")
-    except Exception as exc:
-        import logging
-        logging.getLogger("nikko").warning(f"ADP-C failed: {exc}")
-        verdict = "APPROVE"  # fail open -- surface the ADP-A draft as-is
-
-    if verdict == "REGENERATE":
-        regen_messages = messages + [
-            {"role": "assistant", "content": draft},
-            {"role": "user",      "content": "Please try a different, more empathetic approach."},
-        ]
-        try:
-            draft = await _infer("adp_a", regen_messages, system=NIKKO_SYSTEM)
-            eval2_raw = await _infer("adp_c", [
-                {"role": "user",      "content": f"User message: {user_msg}"},
-                {"role": "assistant", "content": f"Proposed response: {draft}"},
-            ], system=EVAL_SYSTEM)
-            verdict2 = _parse_json_verdict(eval2_raw).get("verdict", "APPROVE")
-        except Exception:
-            verdict2 = "APPROVE"
-
-        if verdict2 == "REGENERATE":
-            draft = (
-                "I want to make sure I'm being as helpful as possible. "
-                "Could you tell me a little more about what's on your mind?"
-            )
-
-    yield SSEChunk(text=draft, emotion="speak", safetyFlags=flags)
+    yield SSEChunk(text=text, emotion="speak", safetyFlags=flags, trace=trace)
 
 # ── SSE helpers ───────────────────────────────────────────────────────────────
 

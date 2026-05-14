@@ -175,6 +175,64 @@ function quickExit() {
 // ── Backend URL (REQ-FIS-001) ─────────────────────────────────────
 const BACKEND_URL = 'https://nikko-companion.onrender.com';
 
+// ── ThinkingBubble ────────────────────────────────────────────────
+// Staged thinking indicator for the pipeline wait (30-120s).
+// Phases:
+//   0–6s   — "Reading your message…"
+//   6–14s  — "Checking in on what you shared…"
+//   14–24s — "Putting together a response for you…"
+//   24s+   — Cycles through affirmations every 5s
+const THINK_STAGES = [
+  { at: 0,  label: 'Reading your message…' },
+  { at: 6,  label: 'Checking in on what you shared…' },
+  { at: 14, label: 'Putting together a response for you…' },
+];
+const AFFIRMATIONS = [
+  'Making the best response. Because you matter.',
+  'Taking a moment to get this right…',
+  'Finding the right words for you…',
+  'Still here — good things take a little time.',
+  'Reading between the lines…',
+  'You deserve a thoughtful reply.',
+];
+
+function ThinkingBubble() {
+  const [elapsed, setElapsed] = React.useState(0);
+  const [affIdx, setAffIdx]   = React.useState(0);
+
+  useEffect(() => {
+    const start = Date.now();
+    const tick = setInterval(() => {
+      const s = Math.floor((Date.now() - start) / 1000);
+      setElapsed(s);
+      // Advance affirmation every 5s once we're in that phase.
+      if (s >= 24 && s % 5 === 0) {
+        setAffIdx(i => (i + 1) % AFFIRMATIONS.length);
+      }
+    }, 1000);
+    return () => clearInterval(tick);
+  }, []);
+
+  // Determine label: find the last stage whose `at` threshold we've passed.
+  let label;
+  if (elapsed < 24) {
+    label = THINK_STAGES.reduce((acc, s) => elapsed >= s.at ? s.label : acc, THINK_STAGES[0].label);
+  } else {
+    label = AFFIRMATIONS[affIdx];
+  }
+
+  return (
+    <div className="bubble thinking-bubble" aria-label="Nikko is thinking" role="status">
+      <div className="t-dots-row">
+        <span className="t-dot" />
+        <span className="t-dot" />
+        <span className="t-dot" />
+      </div>
+      <p className="t-label">{label}</p>
+    </div>
+  );
+}
+
 // ── Chat root ─────────────────────────────────────────────────────
 function Chat({ theme, onToggleTheme }) {
   const [messages, setMessages] = useState([
@@ -195,7 +253,7 @@ function Chat({ theme, onToggleTheme }) {
   const contextID = React.useMemo(() => {
     const bytes = crypto.getRandomValues(new Uint8Array(6));
     const hex = Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
-    return `nikko-${Date.now()}-${hex}`;
+    return 'nikko-' + Date.now() + '-' + hex;
   }, []);
 
   // Tutorial — first time only
@@ -291,13 +349,13 @@ function Chat({ theme, onToggleTheme }) {
     // We read it with fetch() + ReadableStream instead of EventSource because
     // EventSource doesn't support POST requests.
     try {
-      const response = await fetch(`${BACKEND_URL}/api/message`, {
+      const response = await fetch(BACKEND_URL + '/api/message', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text: userText, contextID }),
       });
 
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      if (!response.ok) throw new Error('HTTP ' + response.status);
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
@@ -326,7 +384,7 @@ function Chat({ theme, onToggleTheme }) {
 
             } else if (currentEvent === 'chunk') {
               // Safety flag check — show banner if crisis detected.
-              if (data.safetyFlags?.includes('crisis_detected')) setSafetyVisible(true);
+              if (data.safetyFlags && data.safetyFlags.includes('crisis_detected')) setSafetyVisible(true);
 
               if (data.text) {
                 const emotion = data.emotion || 'speak';
@@ -345,13 +403,18 @@ function Chat({ theme, onToggleTheme }) {
                   await sleep(14 + Math.random() * 10);
                 }
                 accText = target;
+                // If this chunk carries real pipeline trace data, push it to the
+                // agent debug panel so the user can inspect adapter results.
+                if (data.trace) {
+                  NikkoAgentLog.add({ id, userText, ...data.trace, liveData: true });
+                }
               } else {
                 // Empty text chunk = emotion-state signal only (e.g. "think").
                 setCurrentEmotion(data.emotion || 'think');
               }
 
             } else if (currentEvent === 'message_end') {
-              if (data.safetyFlags?.includes('crisis_detected')) setSafetyVisible(true);
+              if (data.safetyFlags && data.safetyFlags.includes('crisis_detected')) setSafetyVisible(true);
             }
           }
         }
@@ -426,7 +489,7 @@ function Chat({ theme, onToggleTheme }) {
         <div className="pillbar">
           <div className="brand-mini">
             <span
-              className={`debug-trigger ${debugGesture.holding ? 'holding' : ''}`}
+              className={'debug-trigger' + (debugGesture.holding ? ' holding' : '')}
               {...debugGesture.handlers}
               aria-hidden="true"
             >
@@ -450,7 +513,7 @@ function Chat({ theme, onToggleTheme }) {
           {memLoaded && (
             <>
               <div className="divider" />
-              <span className="mem-indicator" title={memName ? `Memory: ${memName}` : 'Memory active'}>
+              <span className="mem-indicator" title={memName ? 'Memory: ' + memName : 'Memory active'}>
                 <span className="pulse" />Memory active
               </span>
             </>
@@ -460,7 +523,7 @@ function Chat({ theme, onToggleTheme }) {
         {/* Right pillbar — memory · theme · quick exit */}
         <div className="pillbar">
           <div className="mem-pop-host" style={{ position: 'relative' }}>
-            <button className={`ghostbtn ${memLoaded ? 'active' : ''}`}
+            <button className={'ghostbtn' + (memLoaded ? ' active' : '')}
                     onClick={() => setMemPop(p => !p)}
                     aria-expanded={memPop}
                     title="Personal memory file">
@@ -474,10 +537,10 @@ function Chat({ theme, onToggleTheme }) {
             {memPop && (
               <div className="popover" role="dialog" aria-label="Personal memory">
                 <h4>Personal memory</h4>
-                <div className={`status ${memLoaded ? 'on' : ''}`}>
+                <div className={'status' + (memLoaded ? ' on' : '')}>
                   <span className="dot" />
                   {memLoaded
-                    ? (memName ? `Loaded · ${memName.length > 24 ? memName.slice(0, 22) + '…' : memName}` : 'Loaded')
+                    ? (memName ? 'Loaded · ' + (memName.length > 24 ? memName.slice(0, 22) + '…' : memName) : 'Loaded')
                     : 'No memory file loaded'}
                 </div>
                 <div className="row">
@@ -503,8 +566,8 @@ function Chat({ theme, onToggleTheme }) {
           </div>
 
           <button className="iconbtn" onClick={onToggleTheme}
-                  aria-label={`Switch to ${theme === 'light' ? 'dark' : 'light'} mode`}
-                  title={`Switch to ${theme === 'light' ? 'dark' : 'light'} mode`}>
+                  aria-label={'Switch to ' + (theme === 'light' ? 'dark' : 'light') + ' mode'}
+                  title={'Switch to ' + (theme === 'light' ? 'dark' : 'light') + ' mode'}>
             {theme === 'light' ? (
               <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M11.5 9.5A4 4 0 0 1 6.5 4.5a5 5 0 1 0 5 5z" />
@@ -587,11 +650,7 @@ function Chat({ theme, onToggleTheme }) {
                     <div className="body">
                       {m.traceId && !m.streaming && <AgentRibbon traceId={m.traceId} />}
                       {m.text === '' && m.streaming ? (
-                        <div className="bubble thinking-bubble" aria-label="Nikko is thinking" role="status">
-                          <span className="t-dot" />
-                          <span className="t-dot" />
-                          <span className="t-dot" />
-                        </div>
+                        <ThinkingBubble />
                       ) : (
                         <div className="bubble">
                           <MessageBody
@@ -619,8 +678,6 @@ function Chat({ theme, onToggleTheme }) {
           <div className="composer-wrap">
             <div className="composer-inner">
               {safetyVisible && <SafetyBanner onDismiss={() => setSafetyVisible(false)} />}
-              <Composer onSend={onSend} disabled={streaming} />
-              {/* G-UI-01: persistent AI disclaimer — always              {safetyVisible && <SafetyBanner onDismiss={() => setSafetyVisible(false)} />}
               <Composer onSend={onSend} disabled={streaming} />
               {/* G-UI-01: persistent AI disclaimer — always visible per REQ-300-164 */}
               <AiDisclaimer />

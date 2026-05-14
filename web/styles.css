@@ -1950,6 +1950,106 @@ body::before {
   color: var(--faint);
   text-align: center;
 }
+
+/* ── Adapter cards (debug panel) ───────────────────────────── */
+.adp-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 14px 0;
+}
+.adp-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  background: var(--surface-raised, rgba(0,0,0,0.03));
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+}
+[data-theme="dark"] .adp-card { background: rgba(255,255,255,0.04); }
+.adp-card-step {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--ink-3, #ccc);
+  color: var(--bg, #fff);
+  font-size: 0.7rem;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+.adp-card-body { flex: 1; min-width: 0; }
+.adp-card-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 5px;
+}
+.adp-card-name {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+.adp-card-role {
+  font-size: 0.72rem;
+  color: var(--ink-2);
+}
+.adp-card-result {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.adp-card-running {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+.adp-card-verdict {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+.adp-card-detail {
+  font-size: 0.72rem;
+  color: var(--ink-2);
+}
+.adp-card-elapsed {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  color: var(--faint);
+  margin-left: auto;
+}
+/* Meta pills */
+.debug-meta-pill {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  padding: 2px 7px;
+  border-radius: 20px;
+  letter-spacing: 0.04em;
+}
+.debug-meta-pill.live    { background: rgba(34,170,100,0.12); color: #1a9; }
+.debug-meta-pill.sim     { background: rgba(0,0,0,0.07); color: var(--ink-2); }
+.debug-meta-pill.regen   { background: rgba(230,144,0,0.12); color: #c70; }
+/* Raw payload */
+.debug-raw { margin-top: 6px; }
+.debug-raw-toggle {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+  cursor: pointer;
+  padding: 4px 0;
+  user-select: none;
+}
+.debug-raw-toggle:hover { color: var(--ink); }
 .mood-section > label {
   font-family: var(--font-mono);
   font-size: 10px;
@@ -2100,10 +2200,17 @@ body::before {
 /* ── Thinking / typing indicator (REQ-FIS-001 streaming UX) ───── */
 .thinking-bubble {
   display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 14px 18px;
+  min-width: 200px;
+  max-width: 300px;
+}
+.t-dots-row {
+  display: flex;
   align-items: center;
   gap: 5px;
-  padding: 14px 18px;
-  min-width: 62px;
 }
 .t-dot {
   display: inline-block;
@@ -2119,4 +2226,16 @@ body::before {
 @keyframes tBounce {
   0%, 60%, 100% { transform: translateY(0); opacity: 0.35; }
   30% { transform: translateY(-6px); opacity: 1; }
+}
+.t-label {
+  font-size: 0.76rem;
+  color: var(--ink-2, #888);
+  font-style: italic;
+  line-height: 1.4;
+  margin: 0;
+  animation: tLabelFade 0.4s ease;
+}
+@keyframes tLabelFade {
+  from { opacity: 0; transform: translateY(3px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
