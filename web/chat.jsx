@@ -228,6 +228,13 @@ function Chat({ theme, onToggleTheme }) {
     return () => document.removeEventListener('mousedown', onDoc);
   }, [memPop]);
 
+  // scrollToBottom must be declared BEFORE any hook that lists it as a dep,
+  // otherwise the const TDZ throws a ReferenceError on first render.
+  const scrollToBottom = useCallback(() => {
+    const el = threadRef.current; if (!el) return;
+    requestAnimationFrame(() => { el.scrollTop = el.scrollHeight; });
+  }, []);
+
   // Welcome-back assistant message when memory loads
   const onMemoryLoaded = useCallback((name) => {
     setMemLoaded(true);
@@ -260,11 +267,6 @@ function Chat({ theme, onToggleTheme }) {
       return next;
     });
   };
-
-  const scrollToBottom = useCallback(() => {
-    const el = threadRef.current; if (!el) return;
-    requestAnimationFrame(() => { el.scrollTop = el.scrollHeight; });
-  }, []);
 
   // Cite click → open sources panel
   const onCiteClick = useCallback((k) => {
@@ -603,6 +605,4 @@ function Chat({ theme, onToggleTheme }) {
 
           <div className="composer-wrap">
             <div className="composer-inner">
-              {safetyVisible && <SafetyBanner onDismiss={() => setSafetyVisible(false)} />}
-              <Composer onSend={onSend} disabled={streaming} />
-              {/* G-UI-01: persistent AI disclaimer — always
+              {safetyVisible && <SafetyBanner onDismiss={() => setSafet
