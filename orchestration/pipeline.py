@@ -835,4 +835,25 @@ class NikkoPipeline:
         re-calling just the Evaluator.
         """
         if (
-            evaluation.verdic
+            evaluation.verdict == EvaluationVerdict.REGENERATE
+            and regen_count < MAX_REGEN_ATTEMPTS
+        ):
+            logger.info(
+                "Evaluator REGENERATE — attempt %d/%d. Re-running pipeline.",
+                regen_count + 1, MAX_REGEN_ATTEMPTS,
+            )
+            return self.run(user_input, session_id=session_id, regen_count=regen_count + 1)
+
+        # FAIL verdict or regen limit exhausted → safe fallback.
+        trace.final_action = "evaluator_safe_fallback"
+        trace.latency_ms = (time.perf_counter() - t0) * 1000
+        logger.warning(
+            "Evaluator %s (regen=%d) — emitting safe fallback.",
+            evaluation.verdict.value, regen_count,
+        )
+        return PipelineResult(
+            response_text=SAFE_FALLBACK_RESPONSE,
+            safe_fallback_used=True,
+            evaluation=evaluation,
+            trace=trace,
+        )
