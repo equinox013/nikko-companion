@@ -32,6 +32,11 @@ var NikkoPanels = (() => {
       } }, "Peer-reviewed")), /* @__PURE__ */ React.createElement("div", { className: "title" }, s.title), s.url && /* @__PURE__ */ React.createElement("a", { className: "linkrow", href: s.url, target: "_blank", rel: "noopener noreferrer" }, s.url.replace(/^https?:\/\//, "").slice(0, 60), s.url.length > 67 ? "\u2026" : ""), /* @__PURE__ */ React.createElement("div", { className: "apa" }, formatAPA7(s)))), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "var(--muted)", padding: "10px 4px 0" } }, "References formatted to APA 7th edition (best-effort \u2014 full author/volume metadata requires Phase 5 PubMed enrichment).")));
     }
     const ordered = Object.entries(sourceOrder).sort((a, b) => a[1] - b[1]).map(([k, n]) => ({ key: k, num: n, ...NIKKO_SOURCES[k] || {} }));
+    pe(() => {
+      if (!activeKey) return;
+      const el = document.querySelector(`[data-anchor="source-${activeKey}"]`);
+      if (el) el.scrollIntoView({ block: "center" });
+    }, [activeKey]);
     return /* @__PURE__ */ React.createElement("aside", { className: "panel right", "aria-label": "Sources used" }, /* @__PURE__ */ React.createElement("div", { className: "panel-head" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("h3", null, "Sources"), /* @__PURE__ */ React.createElement("div", { className: "meta" }, ordered.length, " reference", ordered.length === 1 ? "" : "s", " \xB7 APA 7")), /* @__PURE__ */ React.createElement("button", { className: "iconbtn", onClick: onClose, "aria-label": "Close sources" }, /* @__PURE__ */ React.createElement("svg", { viewBox: "0 0 16 16", fill: "none", stroke: "currentColor", strokeWidth: "1.5", strokeLinecap: "round" }, /* @__PURE__ */ React.createElement("path", { d: "m4 4 8 8M12 4l-8 8" })))), /* @__PURE__ */ React.createElement("div", { className: "panel-body" }, ordered.length === 0 && /* @__PURE__ */ React.createElement("div", { style: { color: "var(--muted)", fontSize: 13, padding: "8px 4px" } }, "No sources cited yet. They'll appear here when Nikko references one."), ordered.map((s) => /* @__PURE__ */ React.createElement(
       "div",
       {
