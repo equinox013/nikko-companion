@@ -235,10 +235,6 @@ The filter demolished every organic, real-human empathy dataset while letting ne
 - Fixed Fly.io / Render label contradiction across README and CLAUDE.md.
 - Removed `CLAUDE.md`, `fly.toml`, `docs/DEPLOY-HYBRID-MVP.md`, and `docs/GAPS.md` from git tracking.
 
-### Where I went wrong
-
-**I let "Fly.io" stay in the README, the deployment diagram, and CLAUDE.md for the entire Phase 7 infra session without noticing it said Fly.io while the URL said onrender.com.** These are different companies. The contradiction was sitting in plain text in the README's architecture diagram, the deployment table, and the CLAUDE.md phase sign-off note all at once. Nobody caught it until today. **The fix:** when a URL and a service name appear in the same sentence, read them together. A Render URL next to a Fly.io label is not subtle.
-
 ### Learnings
 
 - Documentation debt accumulates faster than code debt. `INDEX.md` still showed Phase 1 as "awaiting Director sign-off" six phases later.
