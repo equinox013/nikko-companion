@@ -24,13 +24,7 @@ Model sharing
 The pipeline loads one model instance and passes it to both LLM-backed
 agents (Signal Agent and this one) to avoid loading the model twice.
 Phase 3 dev model: Qwen2.5-3B-Instruct (no quantization, fits in 8GB VRAM).
-Production target (Phase 4+, Director-approved 2026-05-14):
-  ADP-A (empathy/response generation): Qwen3-4B base (no LoRA for MVP)
-  ADP-B (safety/crisis detection):     Gemma-2-2b-it
-  ADP-C (response evaluation):         Gemma-2-2b-it
-Mistral-7B-Instruct-v0.3 was the previous target but was infeasible on RTX 3070
-8GB VRAM. bitsandbytes/NF4 quantization is no longer used in production.
-See hf_space/app.py for the dual-model deployment architecture.
+Production target (Phase 4+): Mistral-7B-Instruct-v0.3 with quantize_4bit=True.
 If model/tokenizer are not injected at __init__, the agent lazy-loads
 its own copy — useful for standalone testing.
 """
@@ -163,7 +157,7 @@ class SupportStrategyAgent:
         self._quantize_4bit = quantize_4bit
         self._device_map    = device_map
         # Accept injected model/tokenizer from the pipeline so we don't
-        # load the base model twice. If None, lazy-load on first strategize() call.
+        # load Mistral twice. If None, lazy-load on first strategize() call.
         self._model     = model
         self._tokenizer = tokenizer
 

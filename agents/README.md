@@ -11,9 +11,9 @@ The pipeline calls agents in strict SPEC-700 sequence. No agent can be skipped, 
 | Agent | Role | LLM? | Authority |
 |-------|------|------|-----------|
 | `scope_classifier.py` | Intercepts off-topic messages before any other agent runs | No — rule-based | Highest — final OUT_OF_SCOPE decisions are irreversible |
-| `signal_agent.py` | Detects psychological distress signals in user text | Yes — Qwen/Mistral | Low — output is read-only by downstream agents |
+| `signal_agent.py` | Detects psychological distress signals in user text | Yes — Qwen (dev) / Phi-3.5-mini (prod) | Low — output is read-only by downstream agents |
 | `router.py` | Assigns operational mode (Comfort / Guidance / Crisis) | No — deterministic logic | Maximum — sole mode authority |
-| `support_strategy_agent.py` | Translates mode + signals into tone/framing instructions for the LLM | Yes — Qwen/Mistral | Medium — produces guidance, never user-facing text |
+| `support_strategy_agent.py` | Translates mode + signals into tone/framing instructions for the LLM | Yes — Qwen (dev) / Phi-3.5-mini (prod) | Medium — produces guidance, never user-facing text |
 | `synthesizer_agent.py` | Ranks and scores evidence retrieved from external sources | No — deterministic | Medium — evidence is immutable once synthesized |
 | `evaluator_agent.py` | Content gate: rejects drafts that violate safety red lines | Optional LLM (ADP-C) | High — can block or request regeneration of any response |
 | `verification_supervisor.py` | Structural gate: checks pipeline integrity, not content | No — deterministic | High — can trigger safe fallback |
@@ -47,7 +47,7 @@ The pipeline calls agents in strict SPEC-700 sequence. No agent can be skipped, 
 - **LLM strategy:** Prompted to return a JSON object matching the `SignalPayload` schema. A regex-based JSON extractor handles models that wrap JSON in prose. If parsing fails, a LOW-distress fallback payload is returned rather than crashing.
 - **Output immutability:** Once `analyze()` returns, no downstream agent may alter the payload (REQ-700-032). Enforcement is by convention.
 - **Phase 3 model:** Qwen2.5-3B-Instruct (zero-shot, no quantization, fits in 8 GB VRAM).
-- **Phase 4 target:** Mistral-7B-Instruct-v0.3 with ADP-A (Empathy) + ADP-B (Safety) adapters loaded via PEFT's `load_adapter()`. The class interface does not change — adapter injection is a constructor argument.
+- **Phase 4 target (Director-approved 2026-05-14):** Phi-3.5-mini-instruct (ADP-A empathy) + Gemma-2-2b-it (ADP-B safety, ADP-C evaluation) via PEFT `load_adapter()`. The class interface does not change — adapter injection is a constructor argument. Mistral-7B retired (archived `agents/mistral-7b/`).
 - **Spec refs:** SPEC-100, SPEC-200 §5.2, REQ-200-050 through REQ-200-053.
 
 ---

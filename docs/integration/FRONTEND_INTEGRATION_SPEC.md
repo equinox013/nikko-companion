@@ -30,14 +30,26 @@ User types message in Composer
     ↓
 Chat.onSend(text)
     ↓
-POST /api/message { text, contextID, userId? }
+POST /api/message { text, contextID, userId? }         ← Fly.io (FastAPI)
     ↓
-Backend: Crisis Detection Agent → CBT Support Agent → Resource Referral
+POST /pipeline { messages, system, safety_system,      ← HF Spaces (ZeroGPU)
+                 eval_system, token }
+    ↓ single @spaces.GPU(duration=300) session
+  ADP-B (Safety / crisis check, Gemma-2-2b-it bf16)
+    ↓ if CLEAR
+  ADP-A (Empathy response draft, Phi-3.5-mini-instruct bf16)
     ↓
-Streaming response with { chunk, emotion, sources[] }
+  ADP-C (Quality evaluator; triggers one regen if REGENERATE)
     ↓
-Chat receives stream, renders MessageBody with emotion-driven avatar
+  { text, is_crisis, flags, verdict, regen, elapsed }
+    ↓
+SSE stream: message_start → chunk(s) → message_end    ← back to frontend
+    ↓
+Chat receives stream, renders MessageBody with emotion-driven avatar.
+Final chunk carries pipeline trace for AgentDebugOverlay.
 ```
+
+> **Phase 7 architecture note:** ADP-B, ADP-A, and ADP-C previously ran as three separate `/infer` calls, each incurring an 80–110s CPU→VRAM transfer on HF Spaces ZeroGPU. Consolidating them into a single `/pipeline` call under one `@spaces.GPU` context eliminates two transfer overhead costs, reducing warm-turn latency from ~240–330s to ~20–40s. The Fly.io backend no longer calls `/infer`; it calls `/pipeline` with all three system prompts in a single request. `PIPELINE_TIMEOUT_S = 360`.
 
 ### WebSocket (alternative for Phase 6+)
 
@@ -97,9 +109,19 @@ Each `chunk` event:
 {
   "text": "string chunk of the response",
   "emotion": "calm | listen | search | speak | care | think",
-  "sourcesUsed": ["s_sleep", "s_breath"]
+  "sourcesUsed": ["s_sleep", "s_breath"],
+  "safetyFlags": [],
+  "trace": null
 }
 ```
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `text` | string | Partial response text. Empty string on emotion-only signal chunks. |
+| `emotion` | string | One of the six avatar states (see table below). |
+| `sourcesUsed` | string[] | Source keys for the citation library. Empty on most chunks. |
+| `safetyFlags` | string[] | `["crisis_detected"]` on crisis path. Empty otherwise. |
+| `trace` | object \| null | **Phase 7 addition.** Pipeline trace for the agent debug panel. Only present on the final substantive chunk of a response (never on the empty `emotion: "think"` signal chunk). Shape: `{is_crisis, flags, verdict, regen, elapsed, adp_b: {label, verdict, flags}, adp_a: {label, chars}, adp_c: {label, verdict, regen}}`. Frontend stores this in `NikkoAgentLog` for the debug overlay. `null` on fallback/canned responses. |
 
 End-of-message footer:
 
@@ -215,13 +237,32 @@ When backend emits `sourcesUsed: ["s_sleep"]`, frontend looks up the source in a
 
 ## 7. Error handling & fallback
 
-### Network timeout (5 seconds)
+### Pipeline latency & waiting UX
 
-If the POST request has no response after 5 seconds, frontend shows:
+**[Phase 7 update]** The backend pipeline (ADP-B → ADP-A → ADP-C) runs inside a single HF Spaces ZeroGPU session. Observed latency:
 
-> "Nikko's taking a moment to think. Trying again…"
+| Condition | Latency |
+|-----------|---------|
+| Warm (GPU context live) | 20–40s |
+| Cold start (first call / after idle) | 90–120s |
+| Regen pass (ADP-C triggered REGENERATE) | +20–30s |
 
-And retries with exponential backoff (1s, 2s, 4s, then gives up).
+A 5-second "no response" timeout is therefore **not applied**. The `PIPELINE_TIMEOUT_S` on the backend is 360s (6 minutes), giving comfortable headroom for cold start + regen.
+
+**Frontend waiting UX (`ThinkingBubble`):** While `m.text === ''` and `m.streaming === true`, the frontend renders a `ThinkingBubble` component (not a static spinner) that displays staged labels timed to expected pipeline phases:
+
+| Elapsed | Label |
+|---------|-------|
+| 0–6s | "Reading your message…" |
+| 6–14s | "Checking in on what you shared…" |
+| 14–24s | "Putting together a response for you…" |
+| 24s+ | Cycles through affirmations every 5s (e.g. "Making the best response. Because you matter.") |
+
+This manages user expectation during the full cold-start wait without triggering anxiety or suggesting an error state.
+
+### Network timeout (360 seconds)
+
+If the POST request has no HTTP response after 360 seconds (matching `PIPELINE_TIMEOUT_S`), frontend falls back to `matchNikkoPattern()` (canned response) and logs a console warning. This should be treated as a backend failure, not normal operation.
 
 ### JSON parse error in stream
 
@@ -369,4 +410,4 @@ See REQ-600-HL1–HL4 for server-side requirements.
 - [SPEC-200 — Agent Communication Protocol](../specs/SPEC-200-agent-communication-protocol.md): Message structure, agent handoff.
 - [SPEC-300 — Crisis Response Protocol](../specs/SPEC-300-crisis-response-protocol.md): Safety thresholds.
 - [SPEC-600 — Deployment Architecture](../specs/SPEC-600-deployment-architecture.md): API server topology.
-- [SPEC-800 — Data Retention & Privacy](../specs/SPEC-800
+- [SPEC-800 — Data Retention & Privacy](../specs/SPEC-800-data-retention-privacy.md): Zero-retention policy.

@@ -185,17 +185,17 @@ function AgentDebugOverlay({ open, onClose }) {
             </div>
 
             <div className="adp-cards">
-              <AdapterCard step="1" name="ADP-B" role="Mistral-7B · Safety / crisis"
+              <AdapterCard step="1" name="ADP-B" role="Gemma-2-2b-it · Safety / crisis"
                 verdict={current.adp_b?.verdict}
                 detail={current.adp_b?.flags?.length ? `flags: ${current.adp_b.flags.join(', ')}` : 'no flags'}
                 running={false}
               />
-              <AdapterCard step="2" name="ADP-A" role="Mistral-7B · Empathy response"
+              <AdapterCard step="2" name="ADP-A" role="Phi-3.5-mini · Empathy response"
                 verdict={current.is_crisis ? 'BYPASSED' : 'GENERATED'}
                 detail={current.adp_a?.chars ? `${current.adp_a.chars} chars` : null}
                 running={false}
               />
-              <AdapterCard step="3" name="ADP-C" role="Mistral-7B · Quality evaluator"
+              <AdapterCard step="3" name="ADP-C" role="Gemma-2-2b-it · Quality evaluator"
                 verdict={current.adp_c?.verdict}
                 detail={current.adp_c?.regen ? 'regen pass triggered' : null}
                 running={false}

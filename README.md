@@ -14,67 +14,192 @@ This architecture exists because mental-health-adjacent AI carries real risk. A 
 
 ---
 
-## How the Agents and LLM Work Together
+## Model Stack
 
-A user message flows through ten steps before a response is returned. Here is what happens at each one.
+Nikko uses a **dual-model architecture** built around two fine-tuned base models and three specialised LoRA adapters. The previous candidate — Mistral-7B-Instruct-v0.3 — was retired after proving infeasible on an RTX 3070 8 GB (14 GB fp16 requirement, 14+ hours training with no convergence). All Mistral artefacts are preserved under `*/mistral-7b/`.
+
+| Adapter | Base model | Role | Temperature |
+|---------|-----------|------|-------------|
+| **ADP-A** | Phi-3.5-mini-instruct (3.8B, Microsoft Apache-2.0) | Empathy — generates the user-facing response | 0.75 (warm, varied) |
+| **ADP-B** | Gemma-2-2b-it (2.0B, Google Gemma licence) | Safety / crisis classifier | 0.2 (near-deterministic JSON) |
+| **ADP-C** | Gemma-2-2b-it (same base as ADP-B) | Response quality evaluator | 0.2 (near-deterministic JSON) |
+
+### Why two base models?
+
+Phi-3.5-mini converges empathy fine-tuning in ~2 hours and produces fluent, contextually warm responses — tasks that reward generative diversity. Gemma-2-2b-it is ideal for structured classification tasks (binary crisis flags, APPROVE/REGENERATE verdicts) where compact JSON output and near-greedy decoding matter more than creativity. ADP-B and ADP-C **share the Gemma-2 base**: they are loaded once as a single `PeftModel`, and `set_adapter()` hot-swaps their LoRA delta tensors at O(1) cost — no weight duplication, no second model load.
+
+### What a LoRA adapter is
+
+A LoRA (Low-Rank Adaptation) adapter is a small set of weight deltas — typically 50–100 MB — stored separately from the base model. During inference, the adapter's delta tensors are added to the base model's weight matrices, steering the model toward a specific task. Swapping adapters means replacing those delta tensors; the base model weights never change. This is why ADP-B and ADP-C can coexist in the same `PeftModel` and be selected at runtime with a single `set_adapter()` call.
+
+### VRAM budget (ZeroGPU A10G 24 GB)
+
+```
+Phi-3.5-mini-instruct (3.8B bf16)  ~  8.5 GB
+Gemma-2-2b-it         (2.0B bf16)  ~  4.5 GB
+Adapter weights (3 × ~50 MB)       ~  0.2 GB
+Activations + overhead             ~  2.0 GB
+────────────────────────────────────────────
+Total estimated                    ~ 15.2 GB   (fits A10G 24 GB with headroom)
+```
+
+`bitsandbytes` / NF4 quantization is not used. ZeroGPU only allocates GPU memory inside `@spaces.GPU` context functions; bitsandbytes checks for CUDA at import time, sees no GPU, and crashes before any context is established. Both models load cleanly in native bf16 within the A10G budget.
+
+---
+
+## How the Pipeline Works
+
+A user message flows through the following stages. Agent logic lives in `agents/` and `orchestration/`; the production inference layer is in `hf_space/app.py`.
 
 ### STEP 0 — Scope Classification
 
-The message hits the **Scope Classifier** first. This agent uses a weighted keyword scorer — no LLM, no model — to decide whether the message falls within Nikko's domain of emotional wellbeing and mental health support. If it clearly does not (code questions, legal advice, general knowledge), the pipeline stops immediately and returns a static warm-redirect response. If the message is ambiguous, it is passed through — the classifier always errs toward inclusion.
+The **Scope Classifier** uses a weighted keyword scorer — no LLM — to decide whether the message falls within Nikko's domain of emotional wellbeing and mental health support. If it clearly does not, the pipeline stops immediately and returns a static warm-redirect response. Ambiguous messages are passed through.
 
 ### STEP 1 — Input Sanitisation
 
-The message is stripped of patterns that could leak PII, inject control characters, or exceed safe input lengths. The sanitised text is what every downstream agent sees.
+The message is stripped of PII patterns, control characters, and anything exceeding safe input lengths. The sanitised text is what every downstream agent sees.
 
 ### STEP 2 — Psychological Signal Detection
 
-The **Signal Agent** makes the first LLM call. It receives the sanitised text and returns a structured `SignalPayload` — a validated data object describing detected distress level (LOW / MODERATE / HIGH / CRISIS), emotional states, cognitive patterns, risk indicators, and what kind of support the user seems to need. This payload is immutable: no downstream agent can alter it.
+The **Signal Agent** makes the first LLM call. It receives the sanitised text and returns a structured `SignalPayload` — a validated, immutable data object describing detected distress level (LOW / MODERATE / HIGH / CRISIS), emotional states, cognitive patterns, risk indicators, and what kind of support the user appears to need.
 
-The Signal Agent currently runs on Qwen2.5-3B-Instruct in zero-shot mode. Phase 4 will replace this with a fine-tuned Mistral-7B with the ADP-A (Empathy) and ADP-B (Safety) adapters loaded.
+In Phase 3 this runs on Qwen2.5-3B-Instruct (zero-shot, fits 8 GB VRAM). Phase 4 replaces the base model with the fine-tuned ADP-A / ADP-B stack via PEFT `load_adapter()` — the class interface does not change.
 
 ### STEP 3 — Routing
 
-The **Router** reads the `SignalPayload` and assigns exactly one operational mode for this turn. It uses deterministic rules — no LLM — and its decision is the single source of truth for everything that follows.
+The **Router** reads the `SignalPayload` and assigns exactly one operational mode using deterministic rules — no LLM. Its decision is the single source of truth for everything that follows.
 
 - **COMFORT** — validation, active listening, no information injection.
 - **GUIDANCE** — calm, evidence-grounded information for users seeking understanding.
-- **CRISIS** — immediate safety priority; evidence pipeline is skipped; crisis resources are injected; Safety adapter only.
+- **CRISIS** — immediate safety priority; evidence pipeline is skipped; crisis resources are injected unconditionally; ADP-B response is used directly.
 
 ### STEPs 4–8 — Evidence Retrieval and Synthesis (Guidance Mode only)
 
-If the Router assigned GUIDANCE, the **PubMed Adapter** queries NCBI's research database for peer-reviewed abstracts, followed by the **Web Search Adapter** which searches five sanctioned Australian health authority domains (Healthdirect, Better Health Channel, WHO, Beyond Blue, Black Dog Institute). Results are cached on disk to avoid repeat network calls.
+If the Router assigned GUIDANCE, the **PubMed Adapter** queries NCBI's research database and the **Web Search Adapter** searches five sanctioned Australian health authority domains (Healthdirect, Better Health Channel, WHO, Beyond Blue, Black Dog Institute). Results are cached on disk.
 
-The **Evidence Synthesizer** then ranks all retrieved items by quality — peer-reviewed content within the last five years scores highest — and produces a single `SynthesizedEvidence` object with a confidence score and citation list. This is all deterministic: no LLM is involved in ranking or scoring evidence.
+The **Evidence Synthesizer** then ranks all retrieved items by quality — peer-reviewed content within the last five years scores highest — and produces a single `SynthesizedEvidence` object. No LLM is involved in ranking or scoring.
 
 ### STEP 4 (parallel) — Support Strategy
 
-The **Support Strategy Agent** makes the second LLM call. It receives the Router's mode decision and the Signal Agent's payload and returns communication guidance for the Interaction Model: tone, framing strategy, and constraints. It never generates user-facing text. In Crisis Mode this step is bypassed and a fixed crisis instruction set is injected instead.
+The **Support Strategy Agent** makes the second LLM call. It receives the Router's mode and Signal payload and returns communication guidance for the Interaction Model: tone, framing strategy, and constraints. It never generates user-facing text. In Crisis Mode this step is bypassed — a fixed, hardcoded strategy object is injected instead.
 
-### STEP 10 — Draft Generation
+### STEP 10 — Draft Generation (ADP-A)
 
-The **Interaction Model** (the main LLM) now runs. It receives a `ResponseContextPayload` — a single assembled object containing the strategy guidance, synthesised evidence (if any), and the mode. It has no access to raw retrieval results, intermediate agent outputs, or conversation history beyond what the payload explicitly contains.
+The **Interaction Model** runs. It receives a `ResponseContextPayload` — strategy guidance, synthesised evidence if any, and the mode — and generates the empathetic user-facing response.
 
-In Phase 3 this is a stub. Phase 4 will wire in a fine-tuned Mistral-7B with the appropriate adapter combination (Empathy + Safety for Comfort/Guidance; Safety-only for Crisis).
+In production this is **ADP-A: Phi-3.5-mini-instruct** fine-tuned for empathetic, non-diagnostic wellbeing responses. The model has no access to raw retrieval results, intermediate agent outputs, or conversation history beyond what the payload explicitly contains.
 
-### STEP 11 — Evaluation
+### STEP 11 — Evaluation (ADP-C)
 
 The **Evaluator Agent** is the content gate. It runs two passes:
 
-**Pass 1 (deterministic):** fifteen regex-based red lines are checked against the draft. These catch diagnostic labelling, treatment recommendations, clinical authority framing, and self-harm method disclosure. A single match means the response is blocked immediately — no LLM involved, no recovery.
+**Pass 1 (deterministic):** fifteen regex-based red lines are checked against the draft. These catch diagnostic labelling, treatment recommendations, clinical authority framing, and self-harm method disclosure. A single match blocks the response immediately.
 
-**Pass 2 (LLM judge, ADP-C):** a separate evaluator model checks tone compliance and hallucination indicators (did the response cite sources not in the synthesised evidence?). A failure here is recoverable — the pipeline re-runs the full draft generation up to two times before falling back to a safe canned response.
+**Pass 2 (LLM judge, ADP-C):** **Gemma-2-2b-it** with the ADP-C evaluator adapter checks tone compliance and hallucination indicators. A `REGENERATE` verdict triggers a full re-run of draft generation (up to two times) before falling back to a safe canned response. `set_adapter("adp_c")` switches the shared Gemma-2 base from its ADP-B safety role to its ADP-C evaluator role at no VRAM cost.
 
 ### STEP 12 — Verification Supervisor
 
-The **Verification Supervisor** is the structural gate. It checks that the pipeline ran correctly for the assigned mode — right agents in the right order, crisis resources present when they should be, evidence present in Guidance and absent in Comfort. It does not audit the response content; that is the Evaluator's job. A structural failure triggers a safe fallback response.
+The **Verification Supervisor** checks structural pipeline integrity — right agents in the right order, crisis resources present when they should be, evidence present in Guidance and absent in Comfort. A structural failure triggers a safe fallback response.
 
 ### STEP 13 — Assembly
 
-The final `PipelineResult` is assembled: response text, mode, crisis resources (if any), evaluation result, verification result, and a full execution trace.
+The final `PipelineResult` is assembled: response text, mode, crisis resources if any, evaluation result, verification result, and a full execution trace.
 
 ### STEP 15 — Trace Capture
 
-A `PipelineTrace` records every agent that ran, the router decision, distress level, evidence used, latency, and whether a safe fallback was used. Traces are session-scoped and ephemeral — they are never written to persistent storage.
+A `PipelineTrace` records every agent that ran, the router decision, distress level, evidence used, latency, and whether a safe fallback was used. Traces are session-scoped and ephemeral — never written to persistent storage.
+
+---
+
+## The ADP Pipeline in Production
+
+In the deployed stack (Phase 7), all three adapter passes run inside a **single `@spaces.GPU` session** on HF Spaces ZeroGPU. This is a deliberate consolidation from the earlier design where three separate `/infer` calls each triggered an 80–110s CPU→VRAM model transfer. The consolidated `/pipeline` endpoint eliminates two of those transfers, reducing warm-turn latency to ~20–40s.
+
+```
+User message (React frontend)
+    │
+    │  POST /api/message
+    ▼
+Fly.io backend (FastAPI, nikko-companion.onrender.com)
+    │
+    │  POST /pipeline  (single ZeroGPU GPU session, timeout 360s)
+    ▼
+HF Spaces ZeroGPU (A10G 24 GB)
+    │
+    ├─ ADP-B  (Gemma-2 + adp_b adapter)  → crisis check
+    │         ↓ CRISIS → return immediately; ADP-A/C skipped
+    │
+    ├─ ADP-A  (Phi-3.5-mini + adp_a)     → empathetic response draft
+    │
+    └─ ADP-C  (Gemma-2 + adp_c adapter)  → evaluate draft; APPROVE or REGENERATE
+                                            (max 1 regen pass before safe fallback)
+    │
+    │  { text, is_crisis, flags, verdict, regen, elapsed }
+    ▼
+Fly.io backend
+    │
+    │  SSE stream: event: chunk  data: { text, emotion, safetyFlags, trace }
+    ▼
+React frontend
+```
+
+The `/pipeline` response payload is:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `text` | string | ADP-A response text (empty when `is_crisis=true`) |
+| `is_crisis` | bool | ADP-B crisis verdict |
+| `flags` | list[str] | Safety signal labels from ADP-B (e.g. `suicidal_ideation`) |
+| `verdict` | string | ADP-C verdict: `APPROVE` or `REGENERATE` |
+| `regen` | bool | Whether a regen pass was triggered |
+| `elapsed` | float | Total GPU time in seconds |
+
+---
+
+## Frontend–Backend Integration
+
+The React SPA (`web/`) communicates with the Fly.io backend exclusively via two endpoints defined in `docs/integration/FRONTEND_INTEGRATION_SPEC.md`.
+
+### Loading screen
+
+On app load, the frontend polls `GET /health` on Fly.io every 3 seconds until it receives `{"status": "ok", "space_ok": true}`. The `space_ok` flag reflects whether the HF Space `/health` probe returned 200. An interactive loading screen is shown until both services are confirmed live, preventing the user from sending messages into a cold pipeline.
+
+### Chat endpoint (`POST /api/message`)
+
+The primary chat flow uses **Server-Sent Events (SSE)** — a unidirectional HTTP stream. The frontend reads it with `fetch()` + `ReadableStream` rather than `EventSource` because `EventSource` does not support POST requests.
+
+SSE event sequence per turn:
+
+```
+event: message_start   data: { id, emotion: "listen" }
+event: chunk           data: { text: "", emotion: "think" }     ← signals pipeline running
+event: chunk           data: { text: "...", emotion: "speak", safetyFlags: [], trace: {...} }
+event: message_end     data: { id }
+```
+
+The `trace` field on the substantive chunk carries the full ADP-B / ADP-A / ADP-C result breakdown. The frontend forwards this to the `NikkoAgentLog` pub/sub store, which feeds the pipeline debug overlay.
+
+### ThinkingBubble
+
+Because the pipeline takes 30–120s depending on whether the HF Space GPU context is warm or cold, a `ThinkingBubble` component manages user expectation with staged labels:
+
+- 0–6s: *Reading your message…*
+- 6–14s: *Checking in on what you shared…*
+- 14–24s: *Putting together a response for you…*
+- 24s+: Cycles through affirmations every 5s
+
+### Fallback (backend unreachable)
+
+If the Fly.io backend is unreachable (Render cold-start, network error, or empty SSE stream), the frontend gracefully degrades to `matchNikkoPattern()` — a local regex-based keyword matcher in `nikko-data.jsx`. The user always receives a response. This fallback is logged to console and not surfaced to the user. It is a temporary measure; Phase 5 completion removes the hardcoded patterns entirely.
+
+### Agent debug overlay
+
+The pipeline debug overlay is gesture-gated (2 clicks then 3-second hold on the avatar) and shows per-turn adapter activity. When the backend is reachable and returns `trace` data, the overlay displays **live data** from the actual pipeline run — adapter verdicts, safety flags, regen status, and total elapsed time. When the fallback fires, it displays a simulated trace derived from local keyword classification.
+
+The overlay correctly labels the adapters:
+- **ADP-B** — Gemma-2-2b-it · Safety / crisis
+- **ADP-A** — Phi-3.5-mini · Empathy response
+- **ADP-C** — Gemma-2-2b-it · Quality evaluator
 
 ---
 
@@ -86,12 +211,34 @@ nikko-companion/
 │   ├── specs/          # 8 authoritative specification documents (SPEC-000 through SPEC-700)
 │   ├── derived/        # Architecture, agent definitions, safety guardrails, evaluation criteria
 │   ├── schemas/        # Pydantic v2 inter-agent data schemas (acp_schemas.py, retrieval_schemas.py)
-│   └── GAPS.md         # All open questions and Director rulings (35 gaps — all ratified)
-├── agents/             # Seven specialist agents (see agents/README.md)
-├── orchestration/      # Pipeline orchestrator (see orchestration/README.md)
-├── retrieval/          # PubMed + WebSearch evidence adapters (see retrieval/README.md)
-├── notebooks/          # 10 Jupyter notebooks — one per implementation step, all passing
-└── web/                # React frontend (Phase 5 — awaits backend API integration)
+│   ├── integration/    # FRONTEND_INTEGRATION_SPEC.md — frontend ↔ backend API contract
+│   └── GAPS.md         # All open questions and Director rulings
+├── agents/             # Seven specialist agents — see agents/README.md
+│   └── mistral-7b/     # Archived Mistral-7B agent implementations (retired 2026-05-14)
+├── orchestration/      # Pipeline orchestrator
+│   └── mistral-7b/     # Archived Mistral-7B pipeline (retired 2026-05-14)
+├── retrieval/          # PubMed + WebSearch evidence adapters
+├── finetuning/         # QLoRA training notebooks and configs for ADP-A/B/C
+│   └── mistral-7b/     # Archived Mistral-7B finetuning artefacts (retired 2026-05-14)
+├── notebooks/          # Step-by-step implementation notebooks (Steps 11–19 active)
+│   └── mistral-7b/     # Archived Mistral-7B notebooks (retired 2026-05-14)
+├── hf_space/           # ZeroGPU inference endpoint (Phi-3.5-mini + Gemma-2-2b-it)
+│   ├── app.py          # FastAPI + Gradio app — /pipeline endpoint
+│   └── mistral-7b/     # Archived Mistral-7B HF Space implementation
+├── backend/            # Fly.io orchestration API
+│   └── main.py         # FastAPI — /health + /api/message SSE endpoint
+└── web/                # React SPA (Phase 5 / Phase 7)
+    ├── Nikko.html      # Entry point
+    ├── nikko.jsx       # Root app + theme
+    ├── chat.jsx        # Message thread, SSE handler, ThinkingBubble, composer
+    ├── agent-debug.jsx # Pipeline trace overlay (NikkoAgentLog store + AdapterCards)
+    ├── agent-debug.js  # Compiled output — regenerated via esbuild
+    ├── avatar.jsx      # Emotional state visualisation (calm/listen/think/speak/care)
+    ├── gate.jsx        # Consent gate + onboarding
+    ├── memory.jsx      # USM file encryption (client-side, device-only)
+    ├── panels.jsx      # Mood diary, sources panel
+    ├── nikko-data.jsx  # Hardcoded fallback patterns (replaced in Phase 5)
+    └── styles.css      # Light/dark theme, animations
 ```
 
 ---
@@ -101,14 +248,27 @@ nikko-companion/
 Every design decision in Nikko traces to a named requirement in the spec. The key safety properties are:
 
 - **No clinical authority.** The LLM is never trained on medical content. Health information is always fetched from external sources, ranked by quality, and passed through the Synthesizer before the LLM sees it. The LLM cannot "know" medical facts — it can only relay what the retrieval system found.
-- **Hard-coded crisis routing.** The Router's CRISIS assignment is a deterministic rule, not an LLM judgment. Once CRISIS is assigned, the evidence pipeline stops, the Empathy adapter is deactivated, and four Australian crisis resources are injected unconditionally.
+- **Hard-coded crisis routing.** The Router's CRISIS assignment is a deterministic rule, not an LLM judgment. Once CRISIS is assigned, the evidence pipeline stops, ADP-A is skipped, and four Australian crisis resources are injected unconditionally. ADP-B makes the binary safety classification; the response is hardcoded, not generated.
 - **Fifteen safety red lines.** Before any response reaches the user, fifteen regex patterns check for diagnostic language, treatment recommendations, self-harm method disclosure, and clinical authority framing. These are deterministic — they cannot be confused or sweet-talked by the draft LLM.
-- **Structural integrity gate.** The Verification Supervisor checks that the pipeline ran correctly, not just that the response sounds safe. A CRISIS distress signal with a COMFORT mode response will be caught here even if the Evaluator passed it.
-- **Zero data retention.** No user conversation data enters the training pipeline. This constraint is permanent (REQ-000-P01) and is not overridable by any phase gate or instruction.
+- **Structural integrity gate.** The Verification Supervisor checks that the pipeline ran correctly, not just that the response sounds safe. A CRISIS distress signal paired with a COMFORT mode response will be caught here even if the Evaluator passed it.
+- **Zero data retention.** No user conversation data enters the training pipeline. This constraint is permanent (REQ-000-P01) and is not overridable by any phase gate or instruction. Session data lives in `sessionStorage` and is cleared on refresh.
 
 ---
 
-## Running the Pipeline
+## Deployment Stack
+
+| Layer | Service | Notes |
+|-------|---------|-------|
+| Frontend | GitHub Pages — `equinox013.github.io/nikko` | Static React SPA; zero cost |
+| Backend orchestration | Fly.io (nikko-companion.onrender.com) | FastAPI + pipeline logic; Docker-native |
+| LLM inference | HF Spaces ZeroGPU | `/pipeline` endpoint; A10G 24 GB; Phi-3.5-mini + Gemma-2-2b-it |
+| Adapter weights | HF Hub private repo | Pulled at Space startup; not bundled in image |
+
+Cold start (first request after Space rebuild): ~90–120s. Warm turns: ~20–40s. The ThinkingBubble and loading screen manage user expectation during both cases.
+
+---
+
+## Running the Pipeline Locally
 
 ```python
 from orchestration import NikkoPipeline
@@ -116,12 +276,22 @@ from orchestration import NikkoPipeline
 pipeline = NikkoPipeline()   # uses stubs for LLM; all deterministic agents are live
 result = pipeline.run("I've been feeling really overwhelmed lately.")
 
-print(result.response_text)    # generated response
-print(result.mode)             # OperationalMode.COMFORT / GUIDANCE / CRISIS
-print(result.trace.execution_path)  # which agents ran
+print(result.response_text)           # generated response
+print(result.mode)                    # OperationalMode.COMFORT / GUIDANCE / CRISIS
+print(result.trace.execution_path)   # which agents ran
 ```
 
 For a full walkthrough including edge cases (Crisis Mode, Guidance evidence path, regeneration loop, Verification Supervisor failures), see `notebooks/step10_pipeline.ipynb`.
+
+To test the production inference endpoint directly:
+
+```bash
+# Warm the Space and run all three adapters in one GPU session
+curl -X POST https://<your-hf-space-url>/pipeline \
+  -H "Content-Type: application/json" \
+  -d '{"messages": [{"role": "user", "content": "I have been feeling very low lately."}],
+       "system": "...", "safety_system": "...", "eval_system": "...", "token": "..."}'
+```
 
 ---
 

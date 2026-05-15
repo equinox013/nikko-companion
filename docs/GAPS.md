@@ -66,7 +66,7 @@
 | [G-DATA-06](#g-data-06--adp-c-threshold-calibration-mismatch) | 🟡 Medium | Training | ADP-C `accept_threshold=0.70` rejects 88–99% of organic empathy datasets (AnnoMI 6.7%, ESConv 11.5%, EmpatheticDialogues 1.0%). Only MentalChat (synthetic) passes. Threshold lowered to 0.50 — Director-ratified 2026-05-11. | ✅ RESOLVED 2026-05-11 |
 | [G-TRAIN-02](#g-train-02--v0-url-and-email-hallucination) | 🟠 High | Safety / Training | ADP-A and ADP-B v0 adapters hallucinate plausible-looking but fabricated URLs and email addresses (e.g. `vesselinquiry@health.gov.au`). Base model confabulation prior not fully overridden by v0 training data volume. | ⏳ OPEN — addressed in Step 17 |
 | [G-TRAIN-03](#g-train-03--v0-multi-turn-leakage) | 🟠 High | Safety / Training | ADP-A and ADP-B v0 adapters generate fake User:/Nikko: continuations after the response closes. Caused by multi-turn training format bleed-through. Pipeline VS check mitigates at inference time; root fix requires training data restructure. | ⏳ OPEN — addressed in Step 17 |
-| [G-UI-01](#g-ui-01--ai-limitation-disclaimer) | 🟡 Medium | Frontend / Safety | No persistent UI disclaimer communicating that Nikko is AI and may produce inaccurate information. Users may act on hallucinated content (e.g. fabricated contact details) without verification. Recommended copy: "Nikko is AI and can make mistakes. Do not action anything without further checking." | ⏳ OPEN |
+| [G-UI-01](#g-ui-01--ai-limitation-disclaimer) | 🟡 Medium | Frontend / Safety | No persistent UI disclaimer communicating that Nikko is AI and may produce inaccurate information. Users may act on hallucinated content (e.g. fabricated contact details) without verification. Recommended copy: "Nikko is AI and can make mistakes. Do not action anything without further checking." | ✅ RESOLVED 2026-05-14 |
 | [G-PHASE-01](#g-phase-01--phase-execution-order-reconciliation) | 🟡 Medium | Process | Original spec ordered Phase 5 → 6 → 7. Director-approved revised order: Phase 5 → Phase 7 infra → Phase 6 → Phase 7 sign-off. Rationale: system-tier evaluation requires a live deployed stack. | ✅ RATIFIED 2026-05-12 |
 | [G-UI-02](#g-ui-02--agent-debug-ribbon) | 🔵 Low | Frontend | `AgentRibbon` component in chat.jsx has no spec trace. Director ruling: internal debug aid, not a user-facing feature. No spec entry required. | ✅ RATIFIED 2026-05-14 |
 | [G-UI-03](#g-ui-03--research-preview-pill) | 🔵 Low | Frontend | "Research preview" status pill in chat header has no spec trace. Director ruling: transparency design choice, not spec-governed. | ✅ RATIFIED 2026-05-14 |
@@ -372,7 +372,9 @@
 **Spec touched:** SPEC-400 §3.1
 **Issue:** Llama 3 8B and Mistral 7B candidates have license terms that may limit commercial use, derivative distribution, and (Llama 3) require Acceptable Use Policy compliance.
 **Recommended:** legal review before adapter training begins.
-**[RATIFIED 2026-05-09]:** **[RATIFIED 2026-05-09]:** Research-use-only deployment — Nikko will not be commercialised. Recommended base model candidates with clean research-use licenses: (1) Mistral 7B v0.3 (Apache 2.0 — fully permissive, recommended primary); (2) Phi-3-medium-4k-instruct (MIT — fully permissive, strong reasoning); (3) Llama 3.1 8B (Meta Llama 3.1 Community License — permits research, requires AUP compliance). License terms MUST be documented in SPEC-400 before adapter training begins. SPEC-400 §3.1 updated.
+**[RATIFIED 2026-05-09]:** Research-use-only deployment — Nikko will not be commercialised. Original candidates: (1) Mistral 7B v0.3 (Apache 2.0); (2) Phi-3-medium-4k-instruct (MIT); (3) Llama 3.1 8B (Meta Community). SPEC-400 §3.1 updated.
+
+**[REVISED 2026-05-14]:** Model selection updated. Mistral-7B-Instruct-v0.3 retired (infeasible on RTX 3070 8 GB VRAM). New production targets: **Phi-3.5-mini-instruct** (MIT — ADP-A) + **Gemma-2-2b-it** (Gemma licence — ADP-B/C). License review confirmed both permit research deployment. SPEC-400 §3.1 updated. Gap fully closed.
 
 ---
 
@@ -468,7 +470,8 @@ Until ratified, every gap is a Phase-1-blocker for the spec it touches. Phase-2 
 
 **Follow-on actions completed:**
 - `environment.yml` updated to `bitsandbytes==0.45.5`.
-- `Qwen/Qwen2.5-3B-Instruct` retained as the Phase 3 dev model (Director confirmed — output quality sufficient for structured JSON agent tasks). Mistral-7B-Instruct-v0.3 is the production target; swap is a one-line change per agent file at deployment.
+- `Qwen/Qwen2.5-3B-Instruct` retained as the Phase 3 dev model (Director confirmed — output quality sufficient for structured JSON agent tasks).
+- Production model selection revised 2026-05-14: Phi-3.5-mini-instruct (ADP-A) + Gemma-2-2b-it (ADP-B/C). `bitsandbytes` removed from production stack entirely (ZeroGPU CUDA init-time incompatibility — see G-ENV-01 resolution above; Phase 7 infra uses native bf16). See SPEC-400 §3.1 and `hf_space/app.py`.
 
 ---
 
@@ -674,6 +677,19 @@ Only MentalChat (a synthetic dataset) cleared 70%. Total yield was 336 records a
 **Severity:** 🟡 Medium
 **Phase discovered:** Phase 4, ADP-B v0 smoke test review (2026-05-12)
 **Spec touched:** SPEC-000 §3.1 (non-deception principle), SPEC-300 §5, SPEC-600 (UI)
-**Status:** ⏳ OPEN
+**Status:** ✅ RESOLVED 2026-05-14
 
-**Issue:** The frontend currently shows a non-diagnostic notice in the Gate (onboarding) screen but no persistent disclaimer during the chat session. If the model produces hallucinated contact details or inaccurate information, a user who bypassed the g
+**Issue:** The frontend currently shows a non-diagnostic notice in the Gate (onboarding) screen but no persistent disclaimer during the chat session. If the model produces hallucinated contact details or inaccurate information, a user who bypassed the gate or forgot the onboarding notice has no in-session reminder that Nikko is AI and may be wrong.
+
+**Director-proposed copy:** *"Nikko is AI and can make mistakes. Do not action anything without further checking."*
+
+**Recommended placement:** Persistent footer or sub-composer label — always visible below the text input, never dismissible.
+
+**Options for Director:**
+1. Static footer text below the composer (lowest friction, always visible).
+2. Contextual banner that appears whenever Nikko cites a specific resource or contact number (higher signal value, more complex to implement).
+3. Both.
+
+**Recommended default:** Option 1 for Phase 5; Option 3 by GA.
+
+**[RESOLVED 2026-05-14]:** Option 1 implemented. `AiDisclaimer` component added to `web/chat.jsx`, rendered permanently below the `Composer`. Copy: *"Nikko is AI and can make mistakes. Do not act on anything without further checking."* (minor wording tightening from Director-proposed copy — "action" → "act on", per plain-English house style). Requirement ID assigned: `REQ-300-164`. Component is non-dismissible by design. SPEC-000 §3.1 and SPEC-300 §5 cross-referenced in inline comment. Option 2 (contextual banner on resource citations) deferred to GA.

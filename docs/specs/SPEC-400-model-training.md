@@ -4,8 +4,8 @@ title: Model Training & Adapter Alignment Protocol (MTAP)
 status: authoritative
 supersedes: [SPEC-009]
 depends_on: [SPEC-000, SPEC-100, SPEC-200, SPEC-300]
-version: 1.0.0-draft
-last_reviewed: 2026-05-08
+version: 1.1.0
+last_reviewed: 2026-05-14
 ---
 
 # SPEC-400 — Model Training & Adapter Alignment Protocol (MTAP)
@@ -35,35 +35,55 @@ last_reviewed: 2026-05-08
 [REQ-400-020] All training MUST start from a general instruction-tuned LLM.
 
 Recommended class:
-- 7B–8B parameter scale,
-- quantization-friendly architecture,
+- 2B–4B parameter scale (revised per Director decision 2026-05-14 — see below),
+- fits in 8 GB VRAM without quantization,
+- native `apply_chat_template()` support (system role, multi-turn),
 - strong instruction following.
 
-Reference candidates:
-- Llama 3 8B class
-- Mistral 7B class
+Reference candidates (revised 2026-05-14):
+- Phi-3.5-mini-instruct (3.8B, MIT) — empathy/response (ADP-A)
+- Gemma-2-2b-it (2B, Gemma licence) — safety/crisis + evaluation (ADP-B/C)
 
-> **[GAP-G-MODEL-01]** No specific licensing review (commercial-use, derivative-work, geographic restrictions) for the candidate models is included. Required before training begins.
+> **[GAP-G-MODEL-01] CLOSED 2026-05-14** — Licensing review completed. Both selected models permit research deployment without commercial restrictions. See Director Decision below.
 
-[REQ-400-BM1] Nikko is a research-only deployment and will not be commercialised. Base model candidates with compatible research-use licenses (in priority order):
-1. **Mistral 7B v0.3** (Apache 2.0 — fully permissive; recommended primary candidate)
-2. **Phi-3-medium-4k-instruct** (MIT — fully permissive; strong reasoning capability)
-3. **Llama 3.1 8B** (Meta Llama 3.1 Community License — permits research; requires AUP compliance acknowledgement)
+[REQ-400-BM1] Nikko is a research-only deployment and will not be commercialised. Base model candidates with compatible research-use licenses (updated priority order, Director decision 2026-05-14):
+1. **Phi-3.5-mini-instruct** (MIT — fully permissive; selected for ADP-A empathy)
+2. **Gemma-2-2b-it** (Google Gemma licence — permits research/commercial use; selected for ADP-B/C)
+3. **Qwen2.5-3B-Instruct** (Apache 2.0 — retained as Phase 3 dev/testing baseline only)
 
-[REQ-400-BM2] License terms for the selected base model MUST be documented in this spec before adapter training begins. The chosen model MUST NOT require commercial licensing for the intended research deployment.
+*Retired candidates (archived to `finetuning/mistral-7b/`):*
+- ~~Mistral 7B v0.3~~ — infeasible on RTX 3070 8 GB VRAM (14 GB fp16 footprint; training exceeded 14h with no convergence signal at Step 19). See archived notebooks in `notebooks/mistral-7b/`.
+- ~~Llama 3.1 8B~~ — same VRAM constraint.
 
-> **[DIRECTOR DECISION — 2026-05-10]** Base model selected: **Mistral 7B v0.3** (Apache 2.0). Rationale: fully permissive license with zero commercial or geographic restrictions, strong instruction-following at 7B scale, well-supported LoRA/QLoRA community, and compatible 8k context window for Guidance Mode evidence retrieval. Hugging Face: `mistralai/Mistral-7B-Instruct-v0.3`. This decision satisfies REQ-400-BM2. Gap GAP-G-MODEL-01 is hereby closed for the selected model.
+[REQ-400-BM2] License terms for the selected base models MUST be documented in this spec before adapter training begins. The chosen models MUST NOT require commercial licensing for the intended research deployment.
+
+> **[DIRECTOR DECISION — 2026-05-14]** Base model selection **revised**. Previous selection (Mistral-7B-Instruct-v0.3, 2026-05-10) superseded. New selection:
+>
+> | Adapter | Base Model | HF Identifier | Licence | VRAM (bf16) |
+> |---------|-----------|---------------|---------|-------------|
+> | ADP-A (Empathy) | Phi-3.5-mini-instruct | `microsoft/Phi-3.5-mini-instruct` | MIT | ~8.5 GB |
+> | ADP-B (Safety) | Gemma-2-2b-it | `google/gemma-2-2b-it` | Gemma | ~4.5 GB |
+> | ADP-C (Evaluator) | Gemma-2-2b-it | `google/gemma-2-2b-it` | Gemma | shared with ADP-B |
+>
+> Rationale: Mistral-7B-Instruct-v0.3 was infeasible on the Director's RTX 3070 8 GB VRAM (14 GB bf16 footprint). Phi-3.5-mini-instruct (3.8B) converges ADP-A empathy fine-tuning in ~2h with `packing=True`, `weight_decay=0.01`, `lr=1e-4`. Gemma-2-2b-it (2B) is architecturally ideal for ADP-B/C binary classification tasks and shares its base across both adapters via PEFT `set_adapter()`, eliminating a third model load. Total A10G VRAM budget: ~15 GB (fits 24 GB ZeroGPU with headroom). `trust_remote_code=True` is required for Phi-3.5-mini tokenizer and model classes. bitsandbytes / NF4 quantization is NOT used (ZeroGPU CUDA init-time incompatibility). Both models use native `apply_chat_template()` with system role support. This decision satisfies REQ-400-BM2. Gap GAP-G-MODEL-01 is hereby closed.
 
 ### 3.2 Adapter System (Mandatory)
 
-[REQ-400-030] Training MUST use LoRA or QLoRA adapters in the following layout:
+[REQ-400-030] Training MUST use LoRA or QLoRA adapters. The production deployment
+uses a **dual-base-model** layout (Director-approved 2026-05-14):
 
 ```
-Base Model
-├── Adapter A: Empathy Layer        (ADP-A)
-├── Adapter B: Safety Alignment     (ADP-B)
-└── Adapter C: Evaluator Behavior   (ADP-C)
+Phi-3.5-mini-instruct (base)
+└── Adapter A: Empathy Layer        (ADP-A)   ← response generation
+
+Gemma-2-2b-it (base, shared)
+├── Adapter B: Safety Alignment     (ADP-B)   ← crisis/safety classification
+└── Adapter C: Evaluator Behavior   (ADP-C)   ← response quality gate
 ```
+
+ADP-B and ADP-C share the Gemma-2-2b-it base. Runtime adapter hot-swap is handled
+by `PeftModel.set_adapter()` — no base weight duplication occurs. See `hf_space/app.py`
+for the production loading and dispatch logic.
 
 [REQ-400-031] Adapters MUST be independently trainable and runtime-swappable.
 

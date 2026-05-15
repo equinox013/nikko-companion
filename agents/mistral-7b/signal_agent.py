@@ -31,14 +31,10 @@ from agent_prompts.md §3.1. It produces well-structured JSON and fits in
 a Phase 4 deliverable and will be swapped in via PEFT's `load_adapter()`
 without changing this class interface.
 
-Production target (Phase 4+, Director-approved 2026-05-14):
-  ADP-A (empathy/response): Qwen3-4B base (Qwen/Qwen3-4B) — no LoRA for MVP
-  ADP-B (safety/crisis):    Gemma-2-2b-it          (google/gemma-2-2b-it)
-  ADP-C (evaluation):       Gemma-2-2b-it          (google/gemma-2-2b-it)
-Mistral-7B-Instruct-v0.3 was the previous target but was infeasible on RTX 3070
-8GB VRAM (14GB fp16 requirement; training exceeded 14h with no convergence).
-bitsandbytes / NF4 quantization is no longer used. See hf_space/app.py for the
-dual-model deployment architecture and SPEC-400 for updated model selection.
+Production target (Phase 4+): Mistral-7B-Instruct-v0.3 with 4-bit NF4
+quantization via bitsandbytes. Swapping is a one-line change to DEFAULT_MODEL_ID
+and quantize_4bit. bitsandbytes==0.45.5 is the pinned version (resolved
+Windows CUDA runtime DLL issue — see G-ENV-01 in docs/GAPS.md).
 """
 
 from __future__ import annotations
@@ -73,9 +69,8 @@ from docs.schemas.validate import (
 # Default base model — Apache 2.0 licence, primary choice per G-MODEL-01.
 # Override at instantiation for testing with a smaller model (e.g. phi-3-mini).
 # Phase 3 development model — Qwen2.5-3B fits in 8GB VRAM without quantization.
-# Production target (Phase 4+, Director-approved 2026-05-14):
-#   ADP-A (empathy): Qwen3-4B (base, no LoRA for MVP)    ADP-B/C: Gemma-2-2b-it
-# See hf_space/app.py for the dual-model loading and adapter dispatch logic.
+# Production target (Phase 4+): Mistral-7B-Instruct-v0.3 with quantize_4bit=True.
+# swap back when the Windows bitsandbytes CUDA runtime issue is resolved.
 DEFAULT_MODEL_ID: str = "Qwen/Qwen2.5-3B-Instruct"
 
 # Max new tokens for signal output. The JSON schema is compact; 512 is generous.
@@ -177,13 +172,11 @@ class SignalAgent:
     ) -> None:
         """
         Args:
-            model_id:      HuggingFace model identifier. Defaults to Qwen2.5-3B (Phase 3 dev).
-                           Production models are Qwen3-4B (ADP-A, base) and Gemma-2-2b-it
-                           (ADP-B/C) — see hf_space/app.py for production dispatch.
-            quantize_4bit: Load the model in 4-bit NF4 (bitsandbytes). Not used in
-                           production (bitsandbytes removed from Phase 7 stack due to
-                           ZeroGPU CUDA init-time incompatibility). Retained here for
-                           Phase 3 local dev flexibility if VRAM is constrained.
+            model_id:      HuggingFace model identifier. Defaults to Mistral 7B v0.3.
+                           Can be overridden with any instruction-tuned causal LM.
+            quantize_4bit: Load the model in 4-bit NF4 (bitsandbytes). Recommended
+                           for consumer GPUs to fit within VRAM budget. Disable only
+                           if you have sufficient VRAM (>= 16 GB for Mistral 7B in fp16).
             device_map:    Passed to from_pretrained(). "auto" lets accelerate place
                            layers across available devices. (REQ-Phase3-handoff)
         """
@@ -277,11 +270,10 @@ class SignalAgent:
         Load the causal LM with optional 4-bit quantization.
 
         Why 4-bit NF4 (bitsandbytes)?
-        This path is retained for Phase 3 local dev testing but is NOT used in
-        production. The Phase 7 stack (hf_space/app.py) loads Qwen3-4B and
-        Gemma-2-2b-it in native bf16 — bitsandbytes was removed because ZeroGPU
-        only allocates a GPU inside @spaces.GPU context, causing bitsandbytes to
-        crash at import time when it checks for CUDA and finds none.
+        Mistral 7B in fp16 requires ~14 GB VRAM. 4-bit quantization reduces
+        this to ~4-5 GB with minimal quality loss for instruction-following
+        tasks. The Director's RTX 3070 has 8 GB VRAM — quantization is
+        required. (Phase 3 handoff note)
 
         Why double_quant=True?
         Double quantization quantizes the quantization constants themselves,
@@ -305,8 +297,8 @@ class SignalAgent:
             self._model_id,
             use_fast=True,
         )
-        # Most instruction-tuned tokenizers don't set pad_token by default —
-        # required for batched generation. Set it to eos_token (safe default).
+        # Mistral tokenizer doesn't set a pad token by default — required for
+        # batched generation. Set it to eos_token (common safe default).
         if self._tokenizer.pad_token is None:
             self._tokenizer.pad_token = self._tokenizer.eos_token
 
@@ -350,9 +342,9 @@ class SignalAgent:
         Build the full prompt using the instruction template from agent_prompts.md §3.2.
 
         The tokenizer's apply_chat_template() handles model-specific formatting
-        (e.g. Phi-3's <|user|> tags, Gemma-2's <start_of_turn> tags) automatically.
-        We always use the tokenizer's built-in template — never hardcode a
-        model-specific format — so the same code works across model families.
+        (e.g. Mistral's [INST] tags, Phi-3's <|user|> tags) automatically.
+        We always use the tokenizer's built-in template — never hardcode the
+        [INST] format ourselves — so the same code works across model families.
         """
         history_section = ""
         if conversation_history:
@@ -373,10 +365,9 @@ class SignalAgent:
         )
 
         # [CONCEPT] apply_chat_template()
-        # Each model family uses different role delimiter tokens (e.g. Phi-3.5 uses
-        # <|system|>/<|user|>/<|assistant|>, Gemma-2 uses <start_of_turn>/<end_of_turn>).
-        # apply_chat_template() handles all of this automatically — the tokenizer
-        # knows the correct format for the model it was loaded from.
+        # Instead of manually wrapping text in [INST]...[/INST] tags (which is
+        # Mistral-specific), we call apply_chat_template() with a messages list.
+        # The tokenizer knows the correct format for the model it was loaded from.
         # tokenize=False means we get a string back, not token IDs — we tokenize
         # separately so we can inspect the prompt if needed.
         messages = [

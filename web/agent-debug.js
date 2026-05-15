@@ -118,7 +118,7 @@ function AgentDebugOverlay({ open, onClose }) {
     {
       step: "1",
       name: "ADP-B",
-      role: "Mistral-7B \xB7 Safety / crisis",
+      role: "Gemma-2-2b-it \xB7 Safety / crisis",
       verdict: current.adp_b?.verdict,
       detail: current.adp_b?.flags?.length ? `flags: ${current.adp_b.flags.join(", ")}` : "no flags",
       running: false
@@ -128,7 +128,7 @@ function AgentDebugOverlay({ open, onClose }) {
     {
       step: "2",
       name: "ADP-A",
-      role: "Mistral-7B \xB7 Empathy response",
+      role: "Phi-3.5-mini \xB7 Empathy response",
       verdict: current.is_crisis ? "BYPASSED" : "GENERATED",
       detail: current.adp_a?.chars ? `${current.adp_a.chars} chars` : null,
       running: false
@@ -138,7 +138,7 @@ function AgentDebugOverlay({ open, onClose }) {
     {
       step: "3",
       name: "ADP-C",
-      role: "Mistral-7B \xB7 Quality evaluator",
+      role: "Gemma-2-2b-it \xB7 Quality evaluator",
       verdict: current.adp_c?.verdict,
       detail: current.adp_c?.regen ? "regen pass triggered" : null,
       running: false
