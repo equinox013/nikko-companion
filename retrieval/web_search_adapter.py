@@ -300,6 +300,14 @@ class WebSearchAdapter(CachedBaseAdapter):
                 logger.debug("[WebSearch] Skipping non-sanctioned URL: %s", url)
                 continue
 
+            # Skip captcha / bot-detection pages. DuckDuckGo occasionally routes
+            # through Startpage's CAPTCHA endpoint (startpage.com/sp/captcha) which
+            # returns HTTP 200 with a challenge page — not real content. Counting
+            # these as results inflates Phase 1 counts and prevents Phase 2 fallback.
+            if "/captcha" in url or "/sp/captcha" in url:
+                logger.info("[WebSearch] Skipping captcha URL: %s", url)
+                continue
+
             # Scrape content from the sanctioned URL.
             # Fall back to DDG snippet if scraping fails.
             content = self._scrape_content(url)
@@ -474,6 +482,14 @@ class WebSearchAdapter(CachedBaseAdapter):
             resp.raise_for_status()
         except Exception as exc:  # noqa: BLE001
             logger.debug("[WebSearch] Scrape request failed for %s: %s", url, exc)
+            return None
+
+        # Detect captcha / bot-challenge pages that return HTTP 200 but no content.
+        # Startpage (used by DDG as a proxy) redirects to /sp/captcha on bot detection.
+        # The final URL after redirects is the real indicator.
+        final_url = resp.url if hasattr(resp, "url") else url
+        if "/captcha" in str(final_url):
+            logger.info("[WebSearch] Captcha page detected after redirect — discarding %s", url)
             return None
 
         try:

@@ -446,6 +446,101 @@ def _retrieval_result_to_evidence_payload(result: RetrievalResult) -> EvidencePa
 
 
 # ---------------------------------------------------------------------------
+# Evidence search query builder
+# ---------------------------------------------------------------------------
+
+# Map signal key names (from SignalAgent) to human-readable search terms
+# suitable for DuckDuckGo and PubMed queries.
+_SUPPORT_NEED_TERMS: dict[str, str] = {
+    "coping_strategies":        "coping strategies",
+    "relaxation_techniques":    "relaxation techniques",
+    "psychoeducation":          "mental health education",
+    "behavioral_activation":    "behavioral activation",
+    "cognitive_restructuring":  "cognitive restructuring",
+    "problem_solving":          "problem solving strategies",
+    "social_support_resources": "social support",
+    "crisis_intervention":      "crisis intervention",
+    "grounding_exercises":      "grounding exercises",
+    "mindfulness":              "mindfulness meditation",
+}
+
+_EMOTIONAL_STATE_TERMS: dict[str, str] = {
+    "sadness_spectrum":         "low mood depression sadness",
+    "anxiety_spectrum":         "anxiety worry stress",
+    "emotional_dysregulation":  "emotional dysregulation",
+    "shame_guilt":              "shame guilt",
+    "emotional_numbness":       "emotional numbness",
+}
+
+_COGNITIVE_PATTERN_TERMS: dict[str, str] = {
+    "rumination":               "rumination overthinking",
+    "catastrophizing":          "catastrophizing negative thinking",
+    "black_white_thinking":     "black and white thinking",
+    "hopeless_projection":      "hopelessness",
+    "personalization":          "self-blame",
+    "negative_core_beliefs":    "negative self-beliefs",
+    "helplessness":             "learned helplessness",
+    "meaninglessness":          "loss of meaning",
+}
+
+
+def _build_evidence_query(signal: SignalPayload) -> str:
+    """
+    Build a focused clinical search query from the SignalPayload fields.
+
+    Rather than passing the raw user message (conversational, noisy, and
+    search-engine-hostile — e.g. "Hi, I'm feeling sad, could you help me?"),
+    we extract the clinical concepts SignalAgent detected and construct a
+    structured query that returns relevant results from sanctioned domains.
+
+    Priority: support_needs → emotional_states → cognitive_patterns.
+    Capped at 3 topic terms and 2 emotional context terms to avoid
+    over-specifying queries that return zero results.
+
+    Examples:
+      support_needs=["coping_strategies"], emotional_states=["sadness_spectrum"]
+      → "coping strategies for low mood depression sadness mental health"
+
+      support_needs=["relaxation_techniques", "mindfulness"],
+      emotional_states=["anxiety_spectrum"]
+      → "relaxation techniques mindfulness for anxiety worry stress mental health"
+
+      (no signals detected)
+      → "mental health wellbeing support"
+    """
+    topic_terms: list[str] = []
+    for key in (signal.support_needs or []):
+        term = _SUPPORT_NEED_TERMS.get(key)
+        if term and term not in topic_terms:
+            topic_terms.append(term)
+
+    emotional_terms: list[str] = []
+    for key in (signal.emotional_states or []):
+        term = _EMOTIONAL_STATE_TERMS.get(key)
+        if term and term not in emotional_terms:
+            emotional_terms.append(term)
+    for key in (signal.cognitive_patterns or []):
+        term = _COGNITIVE_PATTERN_TERMS.get(key)
+        if term and term not in topic_terms and term not in emotional_terms:
+            emotional_terms.append(term)
+
+    # Cap to avoid over-specifying (search engines score shorter queries higher).
+    topic_part    = " ".join(topic_terms[:3])
+    emotional_part = " ".join(emotional_terms[:2])
+
+    if topic_part and emotional_part:
+        return f"{topic_part} for {emotional_part} mental health"
+    elif topic_part:
+        return f"{topic_part} mental health"
+    elif emotional_part:
+        return f"{emotional_part} mental health support"
+    else:
+        # Fallback: generic — happens when SignalAgent found behavioral signals
+        # only (e.g. help_seeking_behavior), which don't map to topic terms.
+        return "mental health wellbeing coping strategies"
+
+
+# ---------------------------------------------------------------------------
 # Main pipeline
 # ---------------------------------------------------------------------------
 
@@ -580,7 +675,9 @@ class NikkoPipeline:
 
         if mode == OperationalMode.GUIDANCE:
             # REQ-700-060: evidence first, tone second.
-            evidence = self._steps4_7_guidance_evidence(clean_input, trace)
+            # Build a clinical topic query from SignalPayload rather than
+            # passing the raw user message — see _build_evidence_query().
+            evidence = self._steps4_7_guidance_evidence(signal, trace)
 
         elif mode == OperationalMode.CRISIS:
             # REQ-700-070: inject mandatory Australian crisis resources.
@@ -811,7 +908,7 @@ class NikkoPipeline:
         return decision
 
     def _steps4_7_guidance_evidence(
-        self, query: str, trace: PipelineTrace
+        self, signal: SignalPayload, trace: PipelineTrace
     ) -> Optional[SynthesizedEvidence]:
         """
         STEPS 4–8 (Guidance Mode) — Evidence retrieval + synthesis.
@@ -821,7 +918,18 @@ class NikkoPipeline:
 
         Runs ADAPTER_PRIORITY_ORDER sequentially: PubMed first, WebSearch
         fallback. Both results (if any) are passed to the Synthesizer.
+
+        Query construction: _build_evidence_query() converts the SignalPayload's
+        support_needs, emotional_states, and cognitive_patterns into a clinical
+        search query (e.g. "coping strategies for low mood sadness mental health")
+        rather than using the raw user message, which is conversational and
+        returns irrelevant or no results from sanctioned domains.
         """
+        # Build the search query from detected clinical signals, not the raw message.
+        query = _build_evidence_query(signal)
+        logger.info("Evidence query: %r  (from signal.support_needs=%s emotional_states=%s)",
+                    query, signal.support_needs, signal.emotional_states)
+
         retrieval_results: list[EvidencePayload] = []
         adapters_run = []
 

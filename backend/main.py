@@ -203,24 +203,51 @@ async def _pipeline(request: MessageRequest) -> AsyncGenerator[SSEChunk, None]:
     [CONCEPT] asyncio.to_thread() runs NikkoPipeline.run() in a background
     thread from FastAPI's thread pool. This is necessary because:
     1. NikkoPipeline is synchronous (all agent calls are sync).
-    2. HFSpaceFullGenerator.generate() makes a blocking HTTP call (30-120s).
+    2. HFSpaceFullGenerator.generate() makes a blocking HTTP call (30-370s
+       depending on ZeroGPU cold-start state).
     Wrapping in to_thread() keeps the FastAPI event loop free to serve
     /health probes and other concurrent requests during the long GPU wait.
+
+    Keep-alive strategy: Render/Fly.io nginx proxies close idle SSE
+    connections after ~30-60s of inactivity. The pipeline can run for up to
+    370s (360s HF Space timeout + local agent overhead). We poll the task
+    every _SSE_KEEPALIVE_S seconds and emit an empty 'think' chunk so the
+    proxy sees traffic and keeps the stream open. Empty chunks set the
+    frontend avatar state but produce no visible text (chat.jsx line 470).
 
     Graceful degradation: any unhandled exception from the pipeline produces
     a warm holding response so the frontend always receives text.
     """
-    # Signal 'thinking' to the frontend immediately — the pipeline takes time.
+    # Signal 'thinking' to the frontend immediately.
     yield SSEChunk(emotion="think", text="")
 
+    # How often to send keep-alive pings (seconds).
+    # Must be well under the proxy's idle-connection timeout (~30s on Render).
+    _SSE_KEEPALIVE_S = 20.0
+
     try:
-        # [CONCEPT] Run the full SPEC-700 pipeline in a thread:
-        # STEP 0  Scope → STEP 2  Signal → STEP 3 Route →
-        # STEP 4-8 RAG (Guidance only) → STEP 10 LLM draft via HF Space →
-        # STEP 11 EvaluatorAgent → STEP 12 VerificationSupervisor
-        result: PipelineResult = await asyncio.to_thread(
-            _pipeline_run_sync, request.text.strip()
+        # [CONCEPT] asyncio.create_task wraps to_thread so we can poll it
+        # with asyncio.wait_for + asyncio.shield. shield() protects the
+        # background thread from cancellation if wait_for times out — the
+        # thread keeps running while we yield the keep-alive ping.
+        task = asyncio.create_task(
+            asyncio.to_thread(_pipeline_run_sync, request.text.strip())
         )
+
+        # Keep-alive polling loop.
+        # Each iteration either: (a) gets the result and breaks, or
+        # (b) times out after 20s, emits a ping, and loops again.
+        while True:
+            try:
+                result: PipelineResult = await asyncio.wait_for(
+                    asyncio.shield(task), timeout=_SSE_KEEPALIVE_S
+                )
+                break   # pipeline completed — proceed to response building
+            except asyncio.TimeoutError:
+                # Pipeline still running — send keep-alive to prevent proxy timeout.
+                log.debug("Pipeline still running — emitting SSE keep-alive ping.")
+                yield SSEChunk(emotion="think", text="")
+
     except Exception as exc:
         log.warning("Pipeline raised unhandled exception: %s", exc, exc_info=True)
         yield SSEChunk(
