@@ -44,10 +44,11 @@ COPY retrieval/     ./retrieval/
 COPY docs/schemas/  ./docs/schemas/
 
 # ── Runtime ───────────────────────────────────────────────────────────────────
-# Fly.io expects the app on 0.0.0.0:8080.
+# PORT env var: Render injects $PORT at runtime; Fly.io uses 8080.
+# Shell form (not exec form) so $PORT expands correctly.
 # [CONCEPT] Module path is `backend.main:app` (not `main:app`) because WORKDIR
-# is the repo root — `backend` is a sub-package, not the working directory.
-# --workers 1: stateless API on a 256 MB Fly micro-VM; single worker is fine.
+# is the repo root -- `backend` is a sub-package, not the working directory.
+# --workers 1: stateless API on a free-tier VM; single worker is sufficient.
 # --loop uvloop: faster async event loop (bundled with uvicorn[standard]).
 EXPOSE 8080
-CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1", "--loop", "uvloop"]
+CMD ["sh", "-c", "uvicorn backend.main:app --host 0.0.0.0 --port ${PORT:-8080} --workers 1 --loop uvloop"]
