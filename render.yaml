@@ -26,6 +26,8 @@ services:
     envVars:
       - key: NIKKO_ENV
         value: production
+      - key: NIKKO_LOCAL_LLM
+        value: "false"   # Render has no GPU — all LLM inference runs on HF Spaces
       - key: PYTHON_VERSION
         value: "3.11.0"
       # Set these in Render Dashboard -> Environment (never commit secrets):

@@ -38,6 +38,7 @@ its own copy — useful for standalone testing.
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 from typing import Optional
@@ -49,6 +50,190 @@ from docs.schemas.acp_schemas import (
     StrategyPayload,
 )
 from agents.router import RouterDecision
+
+# ---------------------------------------------------------------------------
+# Deployment mode flag (mirrors signal_agent.py)
+# ---------------------------------------------------------------------------
+_LOCAL_LLM: bool = os.getenv("NIKKO_LOCAL_LLM", "true").lower() not in ("false", "0", "no")
+
+# ---------------------------------------------------------------------------
+# Decision table — rule-based strategy (primary path on Render / no-GPU)
+# ---------------------------------------------------------------------------
+# [CONCEPT] Strategy decision table
+# A (mode, distress_level) matrix that maps every valid routing outcome to
+# pre-ratified tone + framing + constraint guidance. This replaces the LLM
+# judge with deterministic output: given the same mode and distress level,
+# the strategy is identical every time — no model latency, no variability.
+#
+# The table covers all 8 cells of the (COMFORT|GUIDANCE) × (LOW|MODERATE|HIGH|CRISIS)
+# space. CRISIS mode is handled separately by crisis_bypass() per the spec;
+# the CRISIS rows here are defensive fallbacks in case routing is incorrect.
+#
+# Authority: MEDIUM — produces tone/framing guidance only. Cannot access
+# evidence sources or produce user-facing text. (SPEC-200 §5.3)
+
+_StrategyCell = dict  # type alias for readability
+
+_STRATEGY_TABLE: dict[tuple[OperationalMode, DistressLevel], _StrategyCell] = {
+
+    # ── COMFORT × LOW ──────────────────────────────────────────────────────
+    (OperationalMode.COMFORT, DistressLevel.LOW): {
+        "tone_guidance": (
+            "Warm, present, and gently curious. Match the user's energy without "
+            "over-intensifying. Sound human and unhurried."
+        ),
+        "framing_strategy": (
+            "Acknowledge whatever the user has shared, however lightly. Keep it "
+            "conversational. Information last — or never if not invited."
+        ),
+        "response_constraints": [
+            "No advice unless explicitly requested.",
+            "Keep responses brief — one to two sentences preferred.",
+            "No clinical language.",
+            "No solution-framing.",
+        ],
+    },
+
+    # ── COMFORT × MODERATE ─────────────────────────────────────────────────
+    (OperationalMode.COMFORT, DistressLevel.MODERATE): {
+        "tone_guidance": (
+            "Warm, steady, and validating. Acknowledge first — hold space before "
+            "anything else. No urgency. No advice energy."
+        ),
+        "framing_strategy": (
+            "Lead with the user's feelings. Reflect what they shared without "
+            "interpretation or judgment. One validation before any pivot."
+        ),
+        "response_constraints": [
+            "No unsolicited advice.",
+            "No evidence injection unless it arises from a direct validation need.",
+            "Do not solution-frame.",
+            "Keep responses short — do not overwhelm.",
+            "Human-first language throughout.",
+        ],
+    },
+
+    # ── COMFORT × HIGH ─────────────────────────────────────────────────────
+    (OperationalMode.COMFORT, DistressLevel.HIGH): {
+        "tone_guidance": (
+            "Calm, steady, and deeply validating. Slow the exchange — there is no "
+            "rush. The user feeling heard is the only goal right now."
+        ),
+        "framing_strategy": (
+            "Begin with a direct, specific acknowledgement of exactly what the user "
+            "said. Do not pivot to information or strategies until the user signals "
+            "readiness. Actively encourage connection with trusted human supports."
+        ),
+        "response_constraints": [
+            "No advice.",
+            "No solution-framing.",
+            "No clinical information.",
+            "Actively encourage human support (friends, family, professional).",
+            "Keep responses short — do not overwhelm at high distress.",
+            "Autonomy language required if any pivot becomes necessary.",
+            "Never minimise or normalise the distress.",
+        ],
+    },
+
+    # ── COMFORT × CRISIS (defensive — should be routed to CRISIS mode) ─────
+    (OperationalMode.COMFORT, DistressLevel.CRISIS): {
+        "tone_guidance": (
+            "Calm, grounded, and immediately present. Do not minimise. Do not panic. "
+            "Acknowledge directly."
+        ),
+        "framing_strategy": (
+            "Lead with acknowledgement of the person's safety. Provide crisis "
+            "resources immediately — do not pivot to any other content."
+        ),
+        "response_constraints": [
+            "Provide crisis hotlines immediately: Lifeline 13 11 14, Beyond Blue 1300 22 4636, 000 for immediate danger.",
+            "No coping strategies or psychoeducation before crisis resources.",
+            "Do not ask probing questions about the crisis plan.",
+            "Keep the response brief — clarity over completeness.",
+            "Do not frame Nikko as a substitute for professional crisis support.",
+        ],
+    },
+
+    # ── GUIDANCE × LOW ─────────────────────────────────────────────────────
+    (OperationalMode.GUIDANCE, DistressLevel.LOW): {
+        "tone_guidance": (
+            "Calm, informative, and grounded. Epistemic humility throughout. "
+            "Collaborative and exploratory — not prescriptive."
+        ),
+        "framing_strategy": (
+            "Information is offered as something others have found helpful, not as "
+            "a directive. Lead with the user's question, answer it clearly, then "
+            "invite their response."
+        ),
+        "response_constraints": [
+            "Evidence must be cited if synthesised evidence is present.",
+            "Autonomy language required: 'you might find', 'one approach is', 'some people find helpful'.",
+            "No directive advice ('you should', 'you need to').",
+            "Encourage professional verification for clinical content.",
+            "Do not assert clinical facts without hedging.",
+        ],
+    },
+
+    # ── GUIDANCE × MODERATE ────────────────────────────────────────────────
+    (OperationalMode.GUIDANCE, DistressLevel.MODERATE): {
+        "tone_guidance": (
+            "Warm and informative in equal measure. Balance genuine care with "
+            "grounded information. Epistemic humility throughout."
+        ),
+        "framing_strategy": (
+            "Validate the emotional context briefly (one sentence), then offer the "
+            "information. Frame all information as optional and self-determined — "
+            "the user is the expert on their own experience."
+        ),
+        "response_constraints": [
+            "Validation before information — always.",
+            "Autonomy language required throughout.",
+            "Evidence must be cited if present.",
+            "No directives.",
+            "Encourage professional consultation.",
+            "Do not assert facts without hedging.",
+        ],
+    },
+
+    # ── GUIDANCE × HIGH ────────────────────────────────────────────────────
+    (OperationalMode.GUIDANCE, DistressLevel.HIGH): {
+        "tone_guidance": (
+            "Gentle and grounding first — information is strictly secondary to "
+            "stability. Warmth over content. Epistemic humility throughout."
+        ),
+        "framing_strategy": (
+            "Acknowledge the distress clearly before offering any information. "
+            "Keep information minimal — one or two points at most. Lead with "
+            "support; information follows only if the user is ready."
+        ),
+        "response_constraints": [
+            "Acknowledgement required before any information.",
+            "Reduce information load — one or two points maximum.",
+            "Explicitly encourage human support.",
+            "Autonomy language required.",
+            "Evidence must be cited if present.",
+            "Do not assert clinical facts without hedging.",
+            "Monitor for distress escalation — if signals worsen, pivot to COMFORT framing.",
+        ],
+    },
+
+    # ── GUIDANCE × CRISIS (defensive — should be routed to CRISIS mode) ────
+    (OperationalMode.GUIDANCE, DistressLevel.CRISIS): {
+        "tone_guidance": (
+            "Calm, grounded, and immediately present. Do not minimise. Do not panic."
+        ),
+        "framing_strategy": (
+            "Acknowledge directly. Provide crisis resources without delay. "
+            "Do not lead with information or guidance content."
+        ),
+        "response_constraints": [
+            "Provide crisis hotlines immediately: Lifeline 13 11 14, Beyond Blue 1300 22 4636, 000 for immediate danger.",
+            "No information or coping content before crisis resources.",
+            "Keep the response brief and clear.",
+            "Do not frame Nikko as a substitute for professional crisis support.",
+        ],
+    },
+}
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -132,6 +317,7 @@ _CRISIS_STRATEGY = StrategyPayload(
 )
 
 
+
 # ---------------------------------------------------------------------------
 # Support Strategy Agent
 # ---------------------------------------------------------------------------
@@ -140,6 +326,11 @@ class SupportStrategyAgent:
     """
     Translates Router decision + Signal payload into communication guidance.
 
+    When NIKKO_LOCAL_LLM=false (Render / no GPU), strategize() uses the
+    deterministic _rule_strategize() decision table -- no model load attempted.
+    When NIKKO_LOCAL_LLM=true (HF Spaces / local GPU), the LLM path runs
+    first and falls back to _rule_strategize() on any load or parse failure.
+
     Usage (normal pipeline flow):
         agent = SupportStrategyAgent()
         if router_decision.mode == OperationalMode.CRISIS:
@@ -147,25 +338,23 @@ class SupportStrategyAgent:
         else:
             strategy = agent.strategize(router_decision, signal_payload)
 
-    Usage (with shared model — avoid double-loading in pipeline):
+    Usage (with shared model):
         agent = SupportStrategyAgent(model=shared_model, tokenizer=shared_tokenizer)
     """
 
     def __init__(
         self,
         model_id:      str   = "Qwen/Qwen2.5-3B-Instruct",
-        quantize_4bit: bool  = False,  # disabled for Phase 3 dev — see signal_agent.py note
+        quantize_4bit: bool  = False,
         device_map:    str   = "auto",
-        model=None,           # pre-loaded HuggingFace model (optional)
-        tokenizer=None,       # pre-loaded tokenizer (optional)
+        model=None,
+        tokenizer=None,
     ) -> None:
         self._model_id      = model_id
         self._quantize_4bit = quantize_4bit
         self._device_map    = device_map
-        # Accept injected model/tokenizer from the pipeline so we don't
-        # load the base model twice. If None, lazy-load on first strategize() call.
-        self._model     = model
-        self._tokenizer = tokenizer
+        self._model         = model
+        self._tokenizer     = tokenizer
 
     # ------------------------------------------------------------------
     # Public API
@@ -174,10 +363,7 @@ class SupportStrategyAgent:
     def crisis_bypass(self) -> StrategyPayload:
         """
         Return the static crisis strategy without calling the LLM.
-
         MUST be called instead of strategize() when Router mode = CRISIS.
-        This is enforced by convention — the pipeline orchestrator is
-        responsible for routing correctly. (agent_prompts.md §4.1)
         """
         return _CRISIS_STRATEGY
 
@@ -190,14 +376,8 @@ class SupportStrategyAgent:
         """
         Generate a StrategyPayload for COMFORT or GUIDANCE mode turns.
 
-        Args:
-            router_decision:      Validated RouterDecision from the Router.
-            signal:               Validated SignalPayload from the Signal Agent.
-            conversation_history: Optional prior turn summaries for context.
-
-        Returns:
-            StrategyPayload — validated. Falls back to a safe default on
-            any model or parse failure.
+        When NIKKO_LOCAL_LLM=false, delegates immediately to _rule_strategize()
+        (decision table lookup, no model call).
 
         Raises:
             ValueError: If called with mode=CRISIS. Use crisis_bypass() instead.
@@ -205,28 +385,66 @@ class SupportStrategyAgent:
         if router_decision.mode == OperationalMode.CRISIS:
             raise ValueError(
                 "strategize() must not be called in Crisis Mode. "
-                "Use crisis_bypass() instead. (agent_prompts.md §4.1)"
+                "Use crisis_bypass() instead. (agent_prompts.md 4.1)"
             )
 
-        # [CONCEPT] _ensure_model_loaded() is called here rather than before the
-        # try block so that a missing 'torch' / 'transformers' install on Render
-        # (free tier — no GPU, ~512 MB RAM) raises ModuleNotFoundError inside
-        # the try/except and routes cleanly to _safe_fallback(). Previously this
-        # call was before the try, causing the exception to leak up to the pipeline's
-        # _step_strategy except block and log a misleading error on every request.
+        # [CONCEPT] Deployment-mode fork
+        # When NIKKO_LOCAL_LLM=false (Render free tier), we skip the LLM
+        # entirely and go directly to the decision table. No model load,
+        # no transformers import, no RAM spike.
+        if not _LOCAL_LLM:
+            return self._rule_strategize(router_decision, signal)
+
+        # LLM path -- falls back to rule engine on any failure.
         try:
             self._ensure_model_loaded()
             prompt = self._build_prompt(router_decision, signal, conversation_history or [])
             raw_output = self._generate(prompt)
         except Exception as exc:
-            return self._safe_fallback(router_decision, signal, reason=f"Generation failed: {exc}")
+            print(f"[SupportStrategyAgent] LLM path failed ({exc}), using rule engine.")
+            return self._rule_strategize(router_decision, signal)
 
         try:
             parsed = self._extract_json(raw_output)
         except ValueError as exc:
-            return self._safe_fallback(router_decision, signal, reason=f"JSON extraction failed: {exc}")
+            print(f"[SupportStrategyAgent] JSON parse failed ({exc}), using rule engine.")
+            return self._rule_strategize(router_decision, signal)
 
         return self._build_payload(parsed, router_decision, signal)
+
+    # ------------------------------------------------------------------
+    # Rule-based strategy (primary path on Render / no-GPU deploys)
+    # ------------------------------------------------------------------
+
+    def _rule_strategize(
+        self,
+        router_decision: RouterDecision,
+        signal:          SignalPayload,
+    ) -> StrategyPayload:
+        """
+        Deterministic (mode, distress_level) decision table lookup.
+
+        Returns the pre-ratified tone_guidance, framing_strategy, and
+        response_constraints from _STRATEGY_TABLE. Falls through to
+        _safe_fallback() only on a missing table entry (defensive path).
+        """
+        mode     = router_decision.mode
+        distress = signal.distress_level
+        cell     = _STRATEGY_TABLE.get((mode, distress))
+
+        if cell is None:
+            return self._safe_fallback(
+                router_decision, signal,
+                reason=f"No strategy table entry for ({mode.value}, {distress.value})."
+            )
+
+        return StrategyPayload(
+            mode=mode,
+            distress_level=distress,
+            tone_guidance=cell["tone_guidance"],
+            framing_strategy=cell["framing_strategy"],
+            response_constraints=list(cell["response_constraints"]),
+        )
 
     def mock_strategize(
         self,
@@ -234,10 +452,7 @@ class SupportStrategyAgent:
         router_decision: RouterDecision,
         signal:          SignalPayload,
     ) -> StrategyPayload:
-        """
-        Inject a pre-built dict, bypassing the LLM call. For tests only.
-        Passes through the same build/validation path as a live call.
-        """
+        """Inject a pre-built dict, bypassing the LLM call. For tests only."""
         return self._build_payload(mock_response, router_decision, signal)
 
     # ------------------------------------------------------------------
@@ -288,11 +503,7 @@ class SupportStrategyAgent:
         signal:               SignalPayload,
         conversation_history: list[str],
     ) -> str:
-        """Build the instruction prompt from agent_prompts.md §4.2 template."""
-
-        # Serialise the signal payload to JSON for the model.
-        # We exclude the payload_type discriminator field — it's schema
-        # plumbing, not clinically meaningful for the strategy agent.
+        """Build the instruction prompt from agent_prompts.md 4.2 template."""
         signal_dict = signal.model_dump(exclude={"payload_type"})
 
         history_section = ""
@@ -311,7 +522,7 @@ class SupportStrategyAgent:
             f"{json.dumps(signal_dict, indent=2)}\n"
             f"{history_section}\n"
             "Emit a strategy payload conforming to the StrategyPayload schema.\n"
-            "Respond with ONLY the JSON object — no markdown, no explanation."
+            "Respond with ONLY the JSON object -- no markdown, no explanation."
         )
 
         messages = [
@@ -357,7 +568,7 @@ class SupportStrategyAgent:
     # ------------------------------------------------------------------
 
     def _extract_json(self, raw_output: str) -> dict:
-        """Extract JSON object from model output. Same pattern as SignalAgent."""
+        """Extract JSON object from model output."""
         text = raw_output.strip()
         text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.MULTILINE)
         text = re.sub(r"```\s*$",          "", text, flags=re.MULTILINE)
@@ -383,20 +594,13 @@ class SupportStrategyAgent:
         signal:          SignalPayload,
     ) -> StrategyPayload:
         """
-        Construct a StrategyPayload from the parsed model output.
-
-        The mode and distress_level are taken from the Router decision and
-        Signal payload respectively — not from the model output. The model
-        is not trusted to reproduce these correctly; we enforce them here.
-        This prevents the Strategy Agent from silently overriding routing
-        decisions. (REQ-200-060: outputs shall include tone/framing/constraints)
+        Construct a StrategyPayload from parsed model output.
+        mode and distress_level are taken from Router/Signal -- not the model.
         """
         tone        = str(parsed.get("tone_guidance",    "")).strip()
         framing     = str(parsed.get("framing_strategy", "")).strip()
         constraints = [str(c) for c in parsed.get("response_constraints", [])]
 
-        # Guard: if the model returns empty fields, fall back to safe defaults
-        # rather than passing empty strings to the Interaction Model.
         if not tone or not framing:
             return self._safe_fallback(
                 router_decision, signal,
@@ -404,8 +608,8 @@ class SupportStrategyAgent:
             )
 
         return StrategyPayload(
-            mode=router_decision.mode,            # always from Router, not model
-            distress_level=signal.distress_level, # always from Signal Agent
+            mode=router_decision.mode,
+            distress_level=signal.distress_level,
             tone_guidance=tone,
             framing_strategy=framing,
             response_constraints=constraints,
@@ -423,10 +627,8 @@ class SupportStrategyAgent:
     ) -> StrategyPayload:
         """
         Return a safe default strategy when the model call or parse fails.
-
-        Defaults are mode-appropriate: COMFORT fallback is warm/validating,
-        GUIDANCE fallback is calm/informative. Both are conservative — they
-        err toward less information and more validation.
+        COMFORT fallback is warm/validating; GUIDANCE fallback is calm/informative.
+        Both err toward less information and more validation.
         """
         print(f"[SupportStrategyAgent] FALLBACK triggered: {reason}")
 

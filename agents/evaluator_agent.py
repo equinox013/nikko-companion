@@ -57,9 +57,15 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import time
 from typing import Optional
+
+# ---------------------------------------------------------------------------
+# Deployment mode flag (mirrors signal_agent.py and support_strategy_agent.py)
+# ---------------------------------------------------------------------------
+_LOCAL_LLM: bool = os.getenv("NIKKO_LOCAL_LLM", "true").lower() not in ("false", "0", "no")
 
 from docs.schemas.acp_schemas import (
     EvaluationPayload,
@@ -216,6 +222,120 @@ _USM_VIOLATION_PATTERNS: list[tuple[str, re.Pattern]] = [
          r"(your|our) (ongoing|continuing|long.term) (relationship|journey|progress|sessions?))\b",
          re.IGNORECASE,
      )),
+]
+
+# ---------------------------------------------------------------------------
+# Rule-based soft-tone patterns (Pass 2 deterministic replacement)
+# ---------------------------------------------------------------------------
+# These patterns implement the same checks the LLM judge performs, but
+# deterministically. They catch the most important tone failures in each mode
+# and hallucination anti-patterns. False-negative rate is higher than an
+# LLM judge — but the fail-safe (default PASS on judge malfunction) was already
+# accepting this trade-off; rule-based is strictly better than silent pass.
+#
+# Two tables:
+#   _TONE_VIOLATION_PATTERNS  — (mode_scope, description, pattern)
+#     mode_scope: "COMFORT", "GUIDANCE", "CRISIS", "ANY"
+#   _HALLUCINATION_PATTERNS   — (description, pattern)
+#     Applied only when no evidence context is provided, or for ungrounded
+#     statistics in any mode.
+
+_I = re.IGNORECASE  # shorthand
+
+# ── Tone violations ────────────────────────────────────────────────────────
+# [CONCEPT] Mode-scoped tone checking
+# Each violation pattern carries a mode_scope tag. During evaluation we only
+# check patterns whose scope matches the current OperationalMode (or "ANY").
+# This prevents COMFORT-mode checks from firing in GUIDANCE mode (where some
+# directive phrasing is permitted) and vice versa.
+
+_TONE_VIOLATION_PATTERNS: list[tuple[str, str, re.Pattern]] = [
+
+    # COMFORT mode: directive / advice-giving language
+    ("COMFORT", "Directive advice in COMFORT mode",
+     re.compile(
+         r"\b(you should (try|consider|do|start|stop|look into|practice)|"
+         r"you (need to|must|have to|ought to) (try|do|start|stop|consider)|"
+         r"I (recommend|suggest|advise) (you|that you) (try|do|start)|"
+         r"the (best|most effective|right) (thing|approach|way) (to do|is|would be) (is |to )?)\b", _I)),
+
+    # COMFORT mode: solution-oriented framing
+    ("COMFORT", "Solution-framing in COMFORT mode",
+     re.compile(
+         r"\b((to (fix|solve|resolve|address|overcome|deal with) this)|"
+         r"(the solution|the answer|the fix|the key) (is|to)|"
+         r"(here('?s| is) what (you|to) do|here (are|is) (some |the )?steps?)|"
+         r"(try (these|this|the following) (techniques?|exercises?|strategies?|steps?|methods?)))\b", _I)),
+
+    # COMFORT mode: cold or clinical register
+    ("COMFORT", "Clinical/cold language in COMFORT mode",
+     re.compile(
+         r"\b((based on (your|what you'?ve) (described|shared|said)|"
+         r"from (a clinical|a psychological|a therapeutic|an analytical) perspective|"
+         r"(this|it|your experience) (indicates?|suggests?|is consistent with|is characteristic of)|"
+         r"(your symptoms?|symptom presentation|presenting (issues?|concerns?))))\b", _I)),
+
+    # GUIDANCE mode: unhedged factual assertions
+    ("GUIDANCE", "Unhedged fact assertion in GUIDANCE mode",
+     re.compile(
+         r"\b((this (will|definitely|certainly|always|is guaranteed to) (help|work|improve|reduce)|"
+         r"(it|this) is (proven|established|confirmed|definitive) that|"
+         r"(research|science|studies) (prove(s)?|confirm(s)?|demonstrate(s)? conclusively)|"
+         r"(always|definitely|certainly|without doubt) (effective|works?|helps?|recommended)))\b", _I)),
+
+    # CRISIS mode: absence of resources indicator (pattern-based heuristic)
+    # We check CRISIS mode responses for the absence of resource content by
+    # looking for the PRESENCE of content that should NOT come before resources.
+    ("CRISIS", "Non-crisis content before crisis resources",
+     re.compile(
+         r"\b((first|before (I|we) (give|provide|share)|let'?s (talk|explore|understand) (more|first)|"
+         r"(can|could) you (tell|describe|explain) (me |to me )?(more|further|what)|"
+         r"I'?d (like|love|want) to (understand|know|hear) (more|a bit more|a little more)))\b", _I)),
+
+    # ANY mode: minimising or invalidating
+    ("ANY", "Minimising or invalidating the user's experience",
+     re.compile(
+         r"\b((it'?s (not|probably not) (that|as) (serious|bad|severe)|"
+         r"you'?re (overreacting|being (overdramatic|too sensitive|dramatic|irrational))|"
+         r"(things|it) (will|are going to) (definitely|surely|certainly) (get|be) (better|fine|okay)|"
+         r"(everyone|a lot of people) (feel(s)?|goes? through) (this|the same)|"
+         r"(just|try to) (relax|calm down|cheer up|think positive|look on the bright side)))\b", _I)),
+
+    # ANY mode: professional credential claim (overlaps R5 but catches softer phrasing)
+    ("ANY", "Soft professional credential claim",
+     re.compile(
+         r"\b((as (an|a) AI (therapist|counsellor|mental health professional|clinician)|"
+         r"in my (expert|clinical|professional) (opinion|view|judgment)|"
+         r"from (my|a) (therapeutic|clinical|medical) (perspective|training|expertise)))\b", _I)),
+]
+
+# ── Hallucination indicators ───────────────────────────────────────────────
+# These fire regardless of mode. They catch unsupported statistics and
+# research claims that should only appear if backed by synthesised evidence.
+
+_HALLUCINATION_PATTERNS: list[tuple[str, re.Pattern]] = [
+    ("Specific statistic without evidence source",
+     re.compile(
+         r"\b((\d+\s*(%|percent|in \d+|million|billion) (of|people)|"
+         r"affect(s|ing)? (one in \d+|\d+ in \d+|\d+% of)|"
+         r"(\d+%-?\d*%? of (people|adults|individuals|the population))|"
+         r"studies? (show(s)?|found|report(s)?) (that )?\d+))\b", _I)),
+
+    ("Research/study claim without evidence context",
+     re.compile(
+         r"\b((research (shows?|proves?|demonstrates?|confirms?|finds?)|"
+         r"studies? (show|prove|demonstrate|confirm|have found|suggest)|"
+         r"(the )?evidence (shows?|suggests?|demonstrates?|confirms?)|"
+         r"(according to|based on) (research|studies|the literature|current evidence)|"
+         r"(scientifically|clinically|empirically) (proven|demonstrated|established|supported)))\b", _I)),
+
+    ("Named therapy citation without evidence context",
+     re.compile(
+         r"\b((CBT|cognitive.behavioural therapy|DBT|dialectical behaviour|EMDR|"
+         r"ACT|acceptance and commitment|mindfulness.based (cognitive|stress)|"
+         r"exposure therapy|behavioural activation) "
+         r"(has been (shown|proven|found)|is (effective|proven|supported|recommended)|"
+         r"works? by|is (clinically|evidence.based)))\b", _I)),
 ]
 
 # ---------------------------------------------------------------------------
@@ -387,6 +507,85 @@ class EvaluatorAgent:
     # Pass 2: LLM judge (tone + hallucination)
     # ------------------------------------------------------------------
 
+    def _rule_judge(
+        self,
+        draft: str,
+        mode: OperationalMode,
+        evidence_summary: Optional[str],
+    ) -> dict:
+        """
+        Deterministic rule-based replacement for the LLM judge (Pass 2).
+
+        Checks tone compliance and hallucination using the pattern tables above.
+        Returns the same dict shape as the LLM judge:
+          {tone_pass, tone_notes, hallucination_pass, hallucination_notes}
+
+        Tone check:
+          Runs _TONE_VIOLATION_PATTERNS whose scope matches the current mode
+          or "ANY". First match -> tone_pass=False.
+
+        Hallucination check:
+          Fires _HALLUCINATION_PATTERNS when no evidence context is provided,
+          or when a claim cannot be traced to the evidence summary.
+        """
+        mode_str = mode.value.upper()
+
+        # -- Tone check --
+        tone_pass  = True
+        tone_notes = "Tone compliant (rule engine)."
+
+        for scope, description, pattern in _TONE_VIOLATION_PATTERNS:
+            if scope not in (mode_str, "ANY"):
+                continue
+            match = pattern.search(draft)
+            if match:
+                tone_pass  = False
+                tone_notes = (
+                    f"[RULE-TONE] {description}: matched '{match.group(0)[:60]}' "
+                    f"in {mode_str} mode."
+                )
+                logger.warning("Tone violation (%s): %r", description, match.group(0)[:60])
+                break
+
+        # -- Hallucination check --
+        # [CONCEPT] Evidence-gated hallucination detection
+        # COMFORT/CRISIS: no evidence provided -> any statistic or research claim is unsupported.
+        # GUIDANCE: evidence provided -> only novel claims not traceable to the summary are flagged.
+        hallucination_pass  = True
+        hallucination_notes = "No hallucination indicators detected (rule engine)."
+
+        for description, pattern in _HALLUCINATION_PATTERNS:
+            match = pattern.search(draft)
+            if not match:
+                continue
+            matched_text = match.group(0)
+
+            if evidence_summary and matched_text.lower() in evidence_summary.lower():
+                continue   # grounded in provided evidence
+
+            if not evidence_summary:
+                hallucination_pass  = False
+                hallucination_notes = (
+                    f"[RULE-HALL] {description}: matched '{matched_text[:60]}' "
+                    f"-- no evidence context in {mode_str} mode."
+                )
+            else:
+                hallucination_pass  = False
+                hallucination_notes = (
+                    f"[RULE-HALL] {description}: matched '{matched_text[:60]}' "
+                    f"-- claim not traceable to provided evidence summary."
+                )
+
+            logger.warning("Hallucination indicator (%s): %r", description, matched_text[:60])
+            break
+
+        return {
+            "tone_pass":           tone_pass,
+            "tone_notes":          tone_notes,
+            "hallucination_pass":  hallucination_pass,
+            "hallucination_notes": hallucination_notes,
+        }
+
     def _llm_judge(
         self,
         draft: str,
@@ -396,16 +595,16 @@ class EvaluatorAgent:
         """
         Structured LLM evaluation of tone compliance and hallucination.
 
-        Returns a dict with keys: tone_pass, tone_notes,
-        hallucination_pass, hallucination_notes.
-        On any parse/generation failure, defaults to passing both checks
-        with a note — we do not fail responses on Evaluator malfunction
-        (fail-safe: a broken judge is worse than a lenient one; the
-        hard-fail check already covers the critical safety layer).
+        Returns {tone_pass, tone_notes, hallucination_pass, hallucination_notes}.
+        On any parse/generation failure, delegates to _rule_judge() instead of
+        silently returning tone_pass=True. REQ-200-171: single evaluation pass.
 
-        REQ-200-171: single evaluation pass, no recursion.
+        Rule-based path:
+            When NIKKO_LOCAL_LLM=false, delegates immediately to _rule_judge().
         """
-        # Build the user turn for the judge prompt.
+        if not _LOCAL_LLM:
+            return self._rule_judge(draft, mode, evidence_summary)
+
         evidence_context = (
             f"Evidence summary provided:\n{evidence_summary}"
             if evidence_summary
@@ -424,19 +623,9 @@ class EvaluatorAgent:
         ]
 
         try:
-            # [CONCEPT] _ensure_model() is called INSIDE the try so that a
-            # missing 'transformers' / 'torch' install (e.g. on Render free
-            # tier) raises ModuleNotFoundError here and is caught by the
-            # fail-safe below — returning tone_pass=True rather than propagating
-            # up to the pipeline as an unhandled exception that creates a
-            # synthetic FAIL payload and triggers SAFE_FALLBACK_RESPONSE.
+            # _ensure_model() inside try so ModuleNotFoundError falls to fallback.
             self._ensure_model()
 
-            # [CONCEPT] apply_chat_template()
-            # Converts the messages list into the model's native chat format
-            # (e.g., <|im_start|>system\n...<|im_end|>\n for Qwen).
-            # add_generation_prompt=True appends the assistant-turn token so
-            # the model knows it should produce a completion, not more context.
             text = self._tokenizer.apply_chat_template(
                 messages,
                 tokenize=False,
@@ -448,47 +637,33 @@ class EvaluatorAgent:
             outputs = self._model.generate(
                 **inputs,
                 max_new_tokens=200,
-                temperature=0.05,   # near-deterministic — judge should be consistent
+                temperature=0.05,
                 do_sample=True,
                 pad_token_id=self._tokenizer.eos_token_id,
             )
             latency_ms = (time.perf_counter() - t0) * 1000
             logger.debug("LLM judge latency: %.0f ms", latency_ms)
 
-            # Decode only the newly generated tokens.
             generated = self._tokenizer.decode(
                 outputs[0][inputs["input_ids"].shape[-1]:],
                 skip_special_tokens=True,
             ).strip()
 
-            # Extract JSON from the response (may be wrapped in markdown fences).
             json_match = re.search(r"\{.*\}", generated, re.DOTALL)
             if not json_match:
                 raise ValueError(f"No JSON found in judge output: {generated[:200]!r}")
 
             result = json.loads(json_match.group(0))
-            # Validate required keys exist.
             for key in ("tone_pass", "tone_notes", "hallucination_pass", "hallucination_notes"):
                 if key not in result:
                     raise ValueError(f"Missing key {key!r} in judge output")
             return result
 
         except Exception as exc:
-            # [CONCEPT] Fail-safe on evaluator malfunction
-            # If the judge LLM fails (timeout, parse error, model crash),
-            # we default to PASS on the soft checks. The hard-fail check
-            # (Pass 1) already ran and cleared. Blocking delivery because the
-            # judge is broken would be worse than the risk of a slightly
-            # suboptimal tone in a response that already passed the safety gate.
-            logger.error(
-                "LLM judge failed — defaulting to pass on soft checks. Error: %s", exc
-            )
-            return {
-                "tone_pass": True,
-                "tone_notes": f"Judge failed — defaulted to pass. ({type(exc).__name__})",
-                "hallucination_pass": True,
-                "hallucination_notes": "Judge failed — defaulted to pass.",
-            }
+            # [CONCEPT] Fail-safe: LLM judge malfunction -> fall back to rule engine.
+            # Rule judge is strictly better than unconditional tone_pass=True.
+            logger.error("LLM judge failed -- falling back to rule engine. Error: %s", exc)
+            return self._rule_judge(draft, mode, evidence_summary)
 
     # ------------------------------------------------------------------
     # Public interface
@@ -502,37 +677,25 @@ class EvaluatorAgent:
         """
         Full two-pass evaluation of a draft response.
 
-        Parameters
-        ----------
-        draft_response : str
-            The user-facing text produced by the Interaction Model.
-        context : ResponseContextPayload
-            The full pipeline context — mode, signals, strategy, evidence,
-            USM active flag.  Provides the ground truth for the judge.
+        Pass 1: deterministic R1-R15 hard-fail + USM audit.
+        Pass 2: tone + hallucination (rule engine or LLM judge).
 
-        Returns
-        -------
-        EvaluationPayload
-            verdict: PASS / FAIL / REGENERATE
-            safety_check, tone_check, hallucination_check: individual gate results
-            rejection_reasons: list of human-readable failure descriptions
-            usm_audit_passed: None if USM inactive, bool if USM active
+        Returns EvaluationPayload with verdict PASS / FAIL / REGENERATE.
 
-        Spec trace
-        ----------
+        Spec trace:
             REQ-200-100  safety audit, tone check, epistemic-humility enforcement
-            REQ-200-101  final content gate — runs before Verification Supervisor
+            REQ-200-101  final content gate before Verification Supervisor
             REQ-200-EV1  single pass, no recursion
             REQ-850-083  USM audit when usm_active=True
         """
         rejection_reasons: list[str] = []
 
-        # ── Pass 1: Hard-fail (deterministic) ─────────────────────────────
+        # -- Pass 1: Hard-fail (deterministic) --
         safety_passed, safety_violations = self._hard_fail_check(draft_response)
         if not safety_passed:
             rejection_reasons.extend(safety_violations)
 
-        # ── USM audit (deterministic, runs regardless of hard-fail result) ─
+        # -- USM audit --
         usm_audit_passed: Optional[bool] = None
         if context.usm_active:
             usm_ok, usm_violations = self._usm_audit(draft_response)
@@ -540,23 +703,19 @@ class EvaluatorAgent:
             if not usm_ok:
                 rejection_reasons.extend(usm_violations)
 
-        # ── Early exit on FAIL (skip LLM judge — save latency) ────────────
-        # REQ-200-171: single evaluation cycle. If we already have a hard
-        # failure, there's no value in running the LLM judge.
+        # -- Early exit on FAIL --
         if not safety_passed or (usm_audit_passed is False):
-            logger.info(
-                "Evaluator: FAIL (hard-fail). Reasons: %d", len(rejection_reasons)
-            )
+            logger.info("Evaluator: FAIL (hard-fail). Reasons: %d", len(rejection_reasons))
             return EvaluationPayload(
                 verdict=EvaluationVerdict.FAIL,
                 safety_check=False,
-                tone_check=True,            # undefined — default True to avoid noise
-                hallucination_check=True,   # undefined — default True to avoid noise
+                tone_check=True,
+                hallucination_check=True,
                 rejection_reasons=rejection_reasons,
                 usm_audit_passed=usm_audit_passed,
             )
 
-        # ── Pass 2: LLM judge (tone + hallucination) ──────────────────────
+        # -- Pass 2: judge (tone + hallucination) --
         evidence_summary = (
             context.synthesized_evidence.summary
             if context.synthesized_evidence
@@ -568,7 +727,7 @@ class EvaluatorAgent:
             evidence_summary=evidence_summary,
         )
 
-        tone_passed         = bool(judge_result.get("tone_pass", True))
+        tone_passed          = bool(judge_result.get("tone_pass", True))
         hallucination_passed = bool(judge_result.get("hallucination_pass", True))
 
         if not tone_passed:
@@ -580,11 +739,7 @@ class EvaluatorAgent:
                 f"[HALLUCINATION] {judge_result.get('hallucination_notes', 'Hallucination check failed.')}"
             )
 
-        # ── Determine final verdict ────────────────────────────────────────
-        # Verdict rules (see module docstring):
-        #   FAIL       — safety or USM (already handled above)
-        #   REGENERATE — tone or hallucination failure (recoverable)
-        #   PASS       — all checks clear
+        # -- Final verdict --
         if not tone_passed or not hallucination_passed:
             verdict = EvaluationVerdict.REGENERATE
         else:

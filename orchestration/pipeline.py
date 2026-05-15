@@ -94,7 +94,35 @@ from agents.router import Router, RouterDecision
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Agent stubs (used when FUSE-truncated agents cannot be imported cleanly)
+# Inference environment flag
+# ---------------------------------------------------------------------------
+
+# [CONCEPT] NIKKO_LOCAL_LLM controls whether the pipeline attempts to load
+# local LLM-backed agents (SignalAgent, SupportStrategyAgent, EvaluatorAgent).
+# These agents require torch + transformers and a GPU with ~6 GB VRAM.
+#
+# On Render (production orchestration layer), set:
+#   NIKKO_LOCAL_LLM=false
+# All LLM work is delegated to HF Spaces (ADP-A/B/C). Local agents run as
+# lightweight stubs — keyword-based signal detection, static strategy fallback,
+# regex-only evaluation. No model download attempts, no OOM errors.
+#
+# On a local GPU machine or Colab, set NIKKO_LOCAL_LLM=true (or leave unset)
+# to load the real agents.
+import os as _os
+_LOCAL_LLM: bool = _os.getenv("NIKKO_LOCAL_LLM", "true").lower() not in ("false", "0", "no")
+
+if not _LOCAL_LLM:
+    logger.info(
+        "NIKKO_LOCAL_LLM=false — all LLM-backed agents will use stubs. "
+        "Signal detection: keyword fallback. Strategy: static. "
+        "Evaluation: regex red-lines only (no LLM judge). "
+        "All LLM inference delegated to HF Spaces."
+    )
+
+# ---------------------------------------------------------------------------
+# Agent stubs (used when FUSE-truncated agents cannot be imported cleanly,
+# or when NIKKO_LOCAL_LLM=false disables local inference on Render)
 # ---------------------------------------------------------------------------
 
 # [CONCEPT] try/except at import time — we attempt to import the full agent
@@ -102,27 +130,33 @@ logger = logging.getLogger(__name__)
 # showing a truncated version of the file) we fall through to the stub.
 # This lets the pipeline run end-to-end in Phase 3 without requiring all
 # agents to be syntactically correct in the Linux sandbox.
+# When NIKKO_LOCAL_LLM=false the real agents are never imported regardless.
 
-try:
-    from agents.scope_classifier import ScopeClassifier as _ScopeClassifier
-    _HAVE_SCOPE_CLASSIFIER = True
-except (SyntaxError, ImportError):
+if _LOCAL_LLM:
+    try:
+        from agents.scope_classifier import ScopeClassifier as _ScopeClassifier
+        _HAVE_SCOPE_CLASSIFIER = True
+    except (SyntaxError, ImportError):
+        _HAVE_SCOPE_CLASSIFIER = False
+        logger.warning("ScopeClassifier unavailable (FUSE truncation) — using stub.")
+
+    try:
+        from agents.signal_agent import SignalAgent as _SignalAgent
+        _HAVE_SIGNAL_AGENT = True
+    except (SyntaxError, ImportError):
+        _HAVE_SIGNAL_AGENT = False
+        logger.warning("SignalAgent unavailable (FUSE truncation) — using stub.")
+
+    try:
+        from agents.support_strategy_agent import SupportStrategyAgent as _SupportStrategyAgent
+        _HAVE_STRATEGY_AGENT = True
+    except (SyntaxError, ImportError):
+        _HAVE_STRATEGY_AGENT = False
+        logger.warning("SupportStrategyAgent unavailable (FUSE truncation) — using stub.")
+else:
     _HAVE_SCOPE_CLASSIFIER = False
-    logger.warning("ScopeClassifier unavailable (FUSE truncation) — using stub.")
-
-try:
-    from agents.signal_agent import SignalAgent as _SignalAgent
-    _HAVE_SIGNAL_AGENT = True
-except (SyntaxError, ImportError):
-    _HAVE_SIGNAL_AGENT = False
-    logger.warning("SignalAgent unavailable (FUSE truncation) — using stub.")
-
-try:
-    from agents.support_strategy_agent import SupportStrategyAgent as _SupportStrategyAgent
-    _HAVE_STRATEGY_AGENT = True
-except (SyntaxError, ImportError):
-    _HAVE_STRATEGY_AGENT = False
-    logger.warning("SupportStrategyAgent unavailable (FUSE truncation) — using stub.")
+    _HAVE_SIGNAL_AGENT     = False
+    _HAVE_STRATEGY_AGENT   = False
 
 
 class _StubScopeClassifier:
