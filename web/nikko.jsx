@@ -99,12 +99,3 @@ function App() {
 
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(<App />);
-      <Decor />
-      {!entered && <Gate onEnter={() => setEntered(true)} />}
-      {entered && <Chat theme={theme} onToggleTheme={toggleTheme} />}
-    </>
-  );
-}
-
-const root = ReactDOM.createRoot(document.getElementById('root'));
-root.render(<App />);
