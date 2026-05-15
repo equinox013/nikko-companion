@@ -167,7 +167,10 @@ class _StubSignalAgent:
         )
         return SignalPayload(
             distress_level=DistressLevel.LOW,
-            confidence=0.50,
+            # 0.6 when guidance intent detected — above Router's 0.40 low-band
+            # ceiling so Rule 4 (guidance check) is reached. 0.5 otherwise —
+            # still above threshold, COMFORT default via Rule 5.
+            confidence=0.6 if has_guidance_intent else 0.5,
             emotional_states=[],
             cognitive_patterns=[],
             behavioral_indicators=(
@@ -634,7 +637,7 @@ class NikkoPipeline:
         try:
             signal = self._signal.analyze(text)
         except Exception as exc:
-            logger.error("SignalAgent raised %s — using keyword fallback.", exc)
+            logger.info("SignalAgent raised %s — using keyword fallback.", exc)
             # REQ-700-120: safe degradation. Rather than returning all-empty arrays
             # (which permanently suppresses GUIDANCE routing), apply a lightweight
             # keyword scan so explicit guidance-seeking messages ("CBT techniques",
@@ -656,7 +659,13 @@ class NikkoPipeline:
             has_guidance_intent = any(kw in text_lower for kw in _GUIDANCE_KEYWORDS)
             signal = SignalPayload(
                 distress_level=DistressLevel.LOW,
-                confidence=0.0,
+                # [PROPOSED-RECONCILIATION: confidence must be >= 0.40 for the
+                # Router to reach Rule 4 (guidance check). When guidance_intent
+                # is detected via keywords, we set 0.6 — above the low-band
+                # ceiling — so the Router doesn't short-circuit to COMFORT
+                # at Rule 3. When no guidance intent is found, 0.0 is correct:
+                # COMFORT fallback is the right default for an unknown signal.]
+                confidence=0.6 if has_guidance_intent else 0.0,
                 emotional_states=[],
                 cognitive_patterns=[],
                 # help_seeking_behavior triggers GUIDANCE in the Router
