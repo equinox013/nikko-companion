@@ -64,6 +64,7 @@ from docs.schemas.acp_schemas import (
     DistressLevel,
     EvaluationPayload,
     EvaluationVerdict,
+    EvidenceItem,
     EvidencePayload,
     EvidenceTier,
     OperationalMode,
@@ -411,6 +412,11 @@ class PipelineResult:
     The frontend / API layer consumes this object. Fields not relevant to
     the current turn are None (e.g., verification is None when out_of_scope
     is True because the pipeline terminated at STEP 0).
+
+    citations: the EvidenceItems used in GUIDANCE mode RAG retrieval.
+               Empty list in COMFORT/CRISIS mode or when retrieval found nothing.
+               Serialized to SourceItem dicts in backend/main.py and sent to
+               the frontend via SSEChunk.sources for the dynamic sources panel.
     """
     response_text:        str
     mode:                 Optional[OperationalMode] = None
@@ -420,6 +426,11 @@ class PipelineResult:
     verification:         Optional[VerificationResult] = None
     trace:                Optional[PipelineTrace] = None
     crisis_resources:     Optional[list[CrisisResource]] = None
+    citations:            list[EvidenceItem] = None  # type: ignore[assignment]
+
+    def __post_init__(self):
+        if self.citations is None:
+            self.citations = []
 
 
 # ---------------------------------------------------------------------------
@@ -484,30 +495,149 @@ _COGNITIVE_PATTERN_TERMS: dict[str, str] = {
 }
 
 
-def _build_evidence_query(signal: SignalPayload) -> str:
+# ---------------------------------------------------------------------------
+# Topic keyword patterns: scan raw user text for specific clinical topics.
+# These augment signal key lookups which only detect THAT a technique was
+# requested, not WHICH specific technique — so "calming techniques" would
+# only fire help_seeking_behavior → "psychoeducation", missing the
+# specificity of "calming/relaxation". Scanning the text directly captures
+# the clinical concept the user named.
+#
+# Each entry: (compiled regex, search term to inject into query)
+# Ordered from most specific to most general — first N matches win.
+# ---------------------------------------------------------------------------
+_TOPIC_KEYWORD_PATTERNS: list[tuple[re.Pattern, str]] = [
+    # ── Specific technique categories ────────────────────────────────────────
+    (re.compile(
+        r"\b(calm|calming|relax|relaxation|soothe|settle|ease|unwind|de-stress)\b", re.I),
+     "relaxation techniques anxiety management"),
+    (re.compile(
+        r"\b(breath|breathing|breathe|box breath|4-7-8|diaphragm|belly breath)\b", re.I),
+     "breathing exercises relaxation"),
+    (re.compile(
+        r"\b(ground|grounding|5-4-3-2-1|anchor|present moment|here and now)\b", re.I),
+     "grounding exercises anxiety"),
+    (re.compile(
+        r"\b(mindful|mindfulness|meditat|aware|awareness|body scan)\b", re.I),
+     "mindfulness meditation mental health"),
+    (re.compile(
+        r"\b(progressiv(e)? muscle|PMR|muscle relax|tension.releas)\b", re.I),
+     "progressive muscle relaxation"),
+    (re.compile(
+        r"\b(yoga|stretching|movement|exercise for (stress|anxiety|mood))\b", re.I),
+     "exercise movement mental health benefits"),
+    (re.compile(
+        r"\b(journal|writing|expressive writing|thought diary|mood diary)\b", re.I),
+     "expressive writing journaling mental health"),
+    (re.compile(
+        r"\b(CBT|cognitive behav|thought challeng|reframe|restructur|negative thought)\b", re.I),
+     "cognitive behavioural therapy techniques"),
+    (re.compile(
+        r"\b(DBT|dialectical|distress toleran|emotion regulat|interpersonal effectiv)\b", re.I),
+     "dialectical behaviour therapy skills"),
+    (re.compile(
+        r"\b(ACT|acceptance.commit|psychological flexib|defusion|values-based)\b", re.I),
+     "acceptance commitment therapy"),
+    (re.compile(
+        r"\b(EMDR|eye movement|trauma-focused|trauma processing)\b", re.I),
+     "EMDR trauma therapy"),
+
+    # ── Physical / somatic symptoms ───────────────────────────────────────────
+    (re.compile(
+        r"\b(shak|trembl|tremble|shiver|quiver|body shak)\b", re.I),
+     "anxiety physical symptoms shaking management"),
+    (re.compile(
+        r"\b(heart (racing|pound|beat fast)|palpitat|chest tight|chest pain)\b", re.I),
+     "panic attack physical symptoms management"),
+    (re.compile(
+        r"\b(sweat|sweat(ing)?|flush|hot flash|dizziness|lightheaded|nausea)\b", re.I),
+     "anxiety somatic symptoms management"),
+    (re.compile(
+        r"\b(panic attack|hyperventilat|freeze|frozen|fight.or.flight)\b", re.I),
+     "panic attack management acute anxiety"),
+    (re.compile(
+        r"\b(headache|tension headache|migraine|muscle tension|jaw clench)\b", re.I),
+     "stress physical symptoms management"),
+    (re.compile(
+        r"\b(sleep|insomni|can't sleep|wake up|night sweat|restless|fatigue|exhaust)\b", re.I),
+     "sleep hygiene mental health anxiety"),
+
+    # ── Emotional states (more specific than signal keys) ─────────────────────
+    (re.compile(
+        r"\b(anxi|worry|worr|dread|apprehens|on edge|nervous|fear)\b", re.I),
+     "anxiety management strategies"),
+    (re.compile(
+        r"\b(depress|low mood|down|unmotivat|no energy|empty|flat)\b", re.I),
+     "depression management wellbeing strategies"),
+    (re.compile(
+        r"\b(sad|sadness|grief|loss|bereavem|mourn|losing someone)\b", re.I),
+     "grief loss coping mental health"),
+    (re.compile(
+        r"\b(anger|angry|rage|furious|frustrat|irrita|snap|temper)\b", re.I),
+     "anger management strategies"),
+    (re.compile(
+        r"\b(stress|stressed|overwhelm|pressure|too much|burnout)\b", re.I),
+     "stress management wellbeing"),
+    (re.compile(
+        r"\b(shame|ashamed|embarrass|humiliat|self-conscious)\b", re.I),
+     "shame self-compassion mental health"),
+    (re.compile(
+        r"\b(guilt|guilty|blame myself|regret|remorse)\b", re.I),
+     "guilt self-forgiveness mental health"),
+    (re.compile(
+        r"\b(numb|empty|hollow|dissociat|feel nothing|disconnect)\b", re.I),
+     "emotional numbing dissociation wellbeing"),
+    (re.compile(
+        r"\b(lonely|alone|isolat|no one|disconnected|left out)\b", re.I),
+     "loneliness social connection mental health"),
+
+    # ── Life domains ──────────────────────────────────────────────────────────
+    (re.compile(
+        r"\b(work stress|workplace|job stress|overwork|work.life|career pressure)\b", re.I),
+     "workplace stress burnout management"),
+    (re.compile(
+        r"\b(relationship|partner|marriage|breakup|divorce|conflict)\b", re.I),
+     "relationship wellbeing mental health"),
+    (re.compile(
+        r"\b(social anxiet|social situation|meeting people|crowds|public)\b", re.I),
+     "social anxiety management strategies"),
+    (re.compile(
+        r"\b(trauma|PTSD|post-traumatic|flashback|nightmare|hypervigilant|triggered)\b", re.I),
+     "trauma recovery PTSD mental health"),
+    (re.compile(
+        r"\b(self.esteem|confidence|self-worth|self.image|believe in myself|imposter)\b", re.I),
+     "self-esteem confidence mental health"),
+    (re.compile(
+        r"\b(motivation|unmotivat|procrastinat|can't start|no drive)\b", re.I),
+     "motivation wellbeing mental health"),
+]
+
+
+def _build_evidence_query(signal: SignalPayload, user_text: str = "") -> str:
     """
-    Build a focused clinical search query from the SignalPayload fields.
+    Build a focused clinical search query from SignalPayload + raw user text.
 
-    Rather than passing the raw user message (conversational, noisy, and
-    search-engine-hostile — e.g. "Hi, I'm feeling sad, could you help me?"),
-    we extract the clinical concepts SignalAgent detected and construct a
-    structured query that returns relevant results from sanctioned domains.
+    Two-pass construction
+    ---------------------
+    Pass 1 — Signal keys: support_needs, emotional_states, cognitive_patterns
+             mapped to clinical search terms via lookup tables.
+    Pass 2 — Keyword extraction: scan user_text against _TOPIC_KEYWORD_PATTERNS
+             to catch specificity that signal keys cannot capture.
 
-    Priority: support_needs → emotional_states → cognitive_patterns.
-    Capped at 3 topic terms and 2 emotional context terms to avoid
-    over-specifying queries that return zero results.
+             Example: "is there any calming techniques to stop shaking?"
+               Signal produces: help_seeking_behavior → "psychoeducation"
+               Keyword scan finds: "calm" → "relaxation techniques anxiety management"
+                                   "shak" → "anxiety physical symptoms shaking management"
+               Final query: "relaxation techniques anxiety management for anxiety physical symptoms"
 
-    Examples:
-      support_needs=["coping_strategies"], emotional_states=["sadness_spectrum"]
-      → "coping strategies for low mood depression sadness mental health"
+    Keyword-extracted terms REPLACE generic signal-derived terms (like
+    "mental health education" from "psychoeducation") when they exist —
+    because the user's own words carry more specificity than the inferred category.
 
-      support_needs=["relaxation_techniques", "mindfulness"],
-      emotional_states=["anxiety_spectrum"]
-      → "relaxation techniques mindfulness for anxiety worry stress mental health"
-
-      (no signals detected)
-      → "mental health wellbeing support"
+    Query length is capped at ~100 chars. DuckDuckGo and PubMed both score
+    shorter, focused queries higher than long compound queries.
     """
+    # ── Pass 1: Signal-derived terms ─────────────────────────────────────────
     topic_terms: list[str] = []
     for key in (signal.support_needs or []):
         term = _SUPPORT_NEED_TERMS.get(key)
@@ -524,9 +654,26 @@ def _build_evidence_query(signal: SignalPayload) -> str:
         if term and term not in topic_terms and term not in emotional_terms:
             emotional_terms.append(term)
 
-    # Cap to avoid over-specifying (search engines score shorter queries higher).
-    topic_part    = " ".join(topic_terms[:3])
-    emotional_part = " ".join(emotional_terms[:2])
+    # ── Pass 2: Keyword extraction from user text ─────────────────────────────
+    extracted_topics: list[str] = []
+    if user_text:
+        for pattern, term in _TOPIC_KEYWORD_PATTERNS:
+            if pattern.search(user_text) and term not in extracted_topics:
+                extracted_topics.append(term)
+                if len(extracted_topics) >= 3:
+                    break  # cap to avoid over-specifying
+
+    # ── Merge: keyword-extracted terms override generic signal terms ──────────
+    # If Pass 2 found specific topics from the message text, use those instead
+    # of broad signal-derived terms. The user's own words are more specific.
+    if extracted_topics:
+        final_topic_terms = extracted_topics        # e.g. ["relaxation techniques ...", "anxiety physical symptoms ..."]
+        # Still include emotional terms from signals (they add useful context).
+    else:
+        final_topic_terms = topic_terms[:3]
+
+    topic_part     = " ".join(final_topic_terms[:2])   # max 2 topic phrases
+    emotional_part = " ".join(emotional_terms[:1])     # max 1 emotional context
 
     if topic_part and emotional_part:
         return f"{topic_part} for {emotional_part} mental health"
@@ -535,8 +682,6 @@ def _build_evidence_query(signal: SignalPayload) -> str:
     elif emotional_part:
         return f"{emotional_part} mental health support"
     else:
-        # Fallback: generic — happens when SignalAgent found behavioral signals
-        # only (e.g. help_seeking_behavior), which don't map to topic terms.
         return "mental health wellbeing coping strategies"
 
 
@@ -675,9 +820,9 @@ class NikkoPipeline:
 
         if mode == OperationalMode.GUIDANCE:
             # REQ-700-060: evidence first, tone second.
-            # Build a clinical topic query from SignalPayload rather than
-            # passing the raw user message — see _build_evidence_query().
-            evidence = self._steps4_7_guidance_evidence(signal, trace)
+            # Pass clean_input for two-pass query construction:
+            # signal keys give category, user_text gives specificity.
+            evidence = self._steps4_7_guidance_evidence(signal, clean_input, trace)
 
         elif mode == OperationalMode.CRISIS:
             # REQ-700-070: inject mandatory Australian crisis resources.
@@ -781,6 +926,9 @@ class NikkoPipeline:
             verification=verification,
             trace=trace,
             crisis_resources=crisis_resources,
+            # Carry retrieved EvidenceItems to the API layer for the sources panel.
+            # Empty for COMFORT/CRISIS modes (evidence retrieval is skipped).
+            citations=evidence.citations if evidence else [],
         )
 
     # ------------------------------------------------------------------
@@ -908,7 +1056,7 @@ class NikkoPipeline:
         return decision
 
     def _steps4_7_guidance_evidence(
-        self, signal: SignalPayload, trace: PipelineTrace
+        self, signal: SignalPayload, user_text: str, trace: PipelineTrace
     ) -> Optional[SynthesizedEvidence]:
         """
         STEPS 4–8 (Guidance Mode) — Evidence retrieval + synthesis.
@@ -919,16 +1067,19 @@ class NikkoPipeline:
         Runs ADAPTER_PRIORITY_ORDER sequentially: PubMed first, WebSearch
         fallback. Both results (if any) are passed to the Synthesizer.
 
-        Query construction: _build_evidence_query() converts the SignalPayload's
-        support_needs, emotional_states, and cognitive_patterns into a clinical
-        search query (e.g. "coping strategies for low mood sadness mental health")
-        rather than using the raw user message, which is conversational and
-        returns irrelevant or no results from sanctioned domains.
+        Query construction: _build_evidence_query() does two-pass extraction:
+        1. Signal keys (support_needs, emotional_states, cognitive_patterns)
+        2. Keyword scan of the raw sanitized user text via _TOPIC_KEYWORD_PATTERNS
+        This ensures "calming techniques to stop shaking" → a query like
+        "relaxation techniques anxiety management physical symptoms mental health"
+        rather than the raw conversational sentence or a generic "psychoeducation".
         """
-        # Build the search query from detected clinical signals, not the raw message.
-        query = _build_evidence_query(signal)
-        logger.info("Evidence query: %r  (from signal.support_needs=%s emotional_states=%s)",
-                    query, signal.support_needs, signal.emotional_states)
+        # Two-pass query: signal keys + keyword scan of user text.
+        query = _build_evidence_query(signal, user_text)
+        logger.info(
+            "Evidence query: %r  (support_needs=%s emotional_states=%s user_text=%r)",
+            query, signal.support_needs, signal.emotional_states, user_text[:60],
+        )
 
         retrieval_results: list[EvidencePayload] = []
         adapters_run = []

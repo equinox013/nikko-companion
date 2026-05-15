@@ -281,8 +281,12 @@ function Chat({ theme, onToggleTheme }) {
   const [currentEmotion, setCurrentEmotion] = useState('calm');
   const [safetyVisible, setSafetyVisible] = useState(false);
   const [activeCite, setActiveCite] = useState(null);
-  const [leftTab, setLeftTab] = useState(null);   // 'mood' | null
-  const [rightTab, setRightTab] = useState(null); // 'sources' | null
+  const [leftTab, setLeftTab] = useState(null);    // 'mood' | null
+  const [rightTab, setRightTab] = useState(null);  // 'sources' | null
+  // dynamicSources: the SourceItem list attached to whichever message's badge
+  // was last clicked. Passed to SourcesPanel so it renders real retrieved URLs
+  // instead of (or in addition to) the static NIKKO_SOURCES dict.
+  const [dynamicSources, setDynamicSources] = useState([]);
   const sourceOrderRef = useRef({});
   const [, forceRerender] = useState(0);
   const threadRef = useRef(null);
@@ -373,9 +377,18 @@ function Chat({ theme, onToggleTheme }) {
     });
   };
 
-  // Cite click → open sources panel
+  // Cite click → open sources panel (in-text [^s_key] citations — Phase 5+).
   const onCiteClick = useCallback((k) => {
     setActiveCite(k);
+    setDynamicSources([]);  // clear dynamic; show static NIKKO_SOURCES lookup
+    setRightTab('sources');
+  }, []);
+
+  // Sources badge click → open sources panel with DYNAMIC retrieved sources.
+  // Called from the "Sources used (N)" badge below GUIDANCE mode responses.
+  const onSourcesBadgeClick = useCallback((sources) => {
+    setDynamicSources(sources);
+    setActiveCite(null);
     setRightTab('sources');
   }, []);
 
@@ -388,7 +401,7 @@ function Chat({ theme, onToggleTheme }) {
     setStreaming(true);
     setIsColdStart(false);
     const id = 'm-' + Date.now();
-    setMessages(prev => [...prev, { id, role: 'assistant', text: '', emotion: 'listen', streaming: true, traceId: id }]);
+    setMessages(prev => [...prev, { id, role: 'assistant', text: '', emotion: 'listen', streaming: true, traceId: id, sources: [] }]);
     scrollToBottom();
     setCurrentEmotion('think');
 
@@ -466,6 +479,14 @@ function Chat({ theme, onToggleTheme }) {
                 // agent debug panel so the user can inspect adapter results.
                 if (data.trace) {
                   NikkoAgentLog.add({ id, userText, ...data.trace, liveData: true });
+                }
+                // Store retrieved evidence sources on the message for the badge.
+                // data.sources is populated only when the pipeline ran in GUIDANCE
+                // mode and returned real EvidenceItems (may be empty otherwise).
+                if (data.sources && data.sources.length > 0) {
+                  setMessages(prev => prev.map(m =>
+                    m.id === id ? { ...m, sources: data.sources } : m
+                  ));
                 }
               } else {
                 // Empty text chunk = emotion-state signal only (e.g. "think").
@@ -734,6 +755,23 @@ function Chat({ theme, onToggleTheme }) {
                           />
                         </div>
                       )}
+                      {/* Sources badge — shown when GUIDANCE mode returned evidence.
+                          Only visible after streaming completes (not during ThinkingBubble).
+                          Clicking opens the SourcesPanel with the real retrieved URLs. */}
+                      {m.sources && m.sources.length > 0 && !m.streaming && (
+                        <button
+                          className="sources-badge"
+                          onClick={() => onSourcesBadgeClick(m.sources)}
+                          title="View sources used in this response"
+                        >
+                          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                            <path d="M2 3h9a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V3z"/>
+                            <path d="M5 3V1h7a1 1 0 0 1 1 1v10"/>
+                            <path d="M5 7h5M5 10h3"/>
+                          </svg>
+                          {m.sources.length} source{m.sources.length !== 1 ? 's' : ''} used
+                        </button>
+                      )}
                       {idx === 0 && showSuggestions && (
                         <div className="suggest-row">
                           {NIKKO_SUGGESTIONS.map(s => (
@@ -764,6 +802,91 @@ function Chat({ theme, onToggleTheme }) {
             sourceOrder={sourceOrderRef.current}
             activeKey={activeCite}
             onClose={() => setRightTab(null)}
+            dynamicSources={dynamicSources}
+          />
+        )}
+      </main>
+
+      {/* Memory modals */}
+      {memOpen && (
+        <MemoryGenerateModal
+          open={memOpen}
+          onClose={() => setMemOpen(false)}
+          onCreated={() => setMemOpen(false)}
+        />
+      )}
+      {loadOpen && (
+        <MemoryLoadModal
+          open={loadOpen}
+          onClose={() => setLoadOpen(false)}
+          onLoaded={(name) => { setLoadOpen(false); onMemoryLoaded(name); }}
+        />
+      )}
+
+      {/* First-run tutorial */}
+      <Tutorial open={tutorialOpen} onSkip={closeTutorial} onDone={closeTutorial} />
+
+      {/* Agent debug overlay — gesture-gated: 2-click then 3s hold on avatar */}
+      <AgentDebugOverlay open={debugOpen} onClose={() => setDebugOpen(false)} />
+    </div>
+  );
+}
+
+Object.assign(window, { Chat });
+                            sourceOrder={sourceOrderRef.current}
+                            onCiteClick={onCiteClick}
+                            streaming={!!m.streaming}
+                          />
+                        </div>
+                      )}
+                      {/* Sources badge — shown when GUIDANCE mode returned evidence.
+                          Only visible after streaming completes (not during ThinkingBubble).
+                          Clicking opens the SourcesPanel with the real retrieved URLs. */}
+                      {m.sources && m.sources.length > 0 && !m.streaming && (
+                        <button
+                          className="sources-badge"
+                          onClick={() => onSourcesBadgeClick(m.sources)}
+                          title="View sources used in this response"
+                        >
+                          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                            <path d="M2 3h9a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V3z"/>
+                            <path d="M5 3V1h7a1 1 0 0 1 1 1v10"/>
+                            <path d="M5 7h5M5 10h3"/>
+                          </svg>
+                          {m.sources.length} source{m.sources.length !== 1 ? 's' : ''} used
+                        </button>
+                      )}
+                      {idx === 0 && showSuggestions && (
+                        <div className="suggest-row">
+                          {NIKKO_SUGGESTIONS.map(s => (
+                            <button key={s} className="suggest" onClick={() => onSend(s)}>{s}</button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="composer-wrap">
+            <div className="composer-inner">
+              {safetyVisible && <SafetyBanner onDismiss={() => setSafetyVisible(false)} />}
+              <Composer onSend={onSend} disabled={streaming} />
+              {/* G-UI-01: persistent AI disclaimer — always visible per REQ-300-164 */}
+              <AiDisclaimer />
+            </div>
+          </div>
+        </div>
+        {/* /thread-wrap */}
+
+        {rightTab === 'sources' && (
+          <SourcesPanel
+            sourceOrder={sourceOrderRef.current}
+            activeKey={activeCite}
+            onClose={() => setRightTab(null)}
+            dynamicSources={dynamicSources}
           />
         )}
       </main>

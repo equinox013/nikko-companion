@@ -128,12 +128,30 @@ class MessageRequest(BaseModel):
     userId:        str | None    = None
     moodSnapshot:  MoodSnapshot | None = None
 
+class SourceItem(BaseModel):
+    """
+    Serializable representation of one retrieved EvidenceItem for the frontend
+    sources panel. Carries only what the frontend needs to render an APA7 card.
+
+    APA7 web source format (best-effort with available metadata):
+      Organisation. (Year). Title. Retrieved from URL
+
+    APA7 journal format (PubMed items — author/volume not always available):
+      Source Name. (Year). Title. URL
+    """
+    title:         str
+    url:           str
+    source_name:   str                  # org / journal name
+    year:          str | None = None    # YYYY extracted from publication_date
+    evidence_tier: str = "grey_literature"   # "peer_reviewed" | "grey_literature"
+
 class SSEChunk(BaseModel):
-    text:        str        = ""
-    emotion:     str        = "calm"
-    sourcesUsed: list[str]  = Field(default_factory=list)
-    safetyFlags: list[str]  = Field(default_factory=list)
-    trace:       dict | None = None   # pipeline trace for debug panel
+    text:        str              = ""
+    emotion:     str              = "calm"
+    sourcesUsed: list[str]        = Field(default_factory=list)
+    sources:     list[SourceItem] = Field(default_factory=list)  # dynamic sources panel
+    safetyFlags: list[str]        = Field(default_factory=list)
+    trace:       dict | None      = None   # pipeline trace for debug panel
 
 # ── Emotion mapping ───────────────────────────────────────────────────────────
 
@@ -193,6 +211,49 @@ def _result_to_trace(result: PipelineResult) -> dict:
             "regen":   (trace_obj.regen_count > 0) if trace_obj else False,
         },
     }
+
+def _citations_to_sources(result: PipelineResult) -> list[SourceItem]:
+    """
+    Convert PipelineResult.citations (list[EvidenceItem]) into SourceItem dicts
+    for SSEChunk.sources. Extracts year from publication_date; falls back to
+    "n.d." (no date) per APA7 convention when the date is unavailable.
+
+    Deduplicates by URL so the same page from two adapters isn't shown twice.
+    Caps at 8 sources — the panel is readable up to ~6-8 entries.
+    """
+    seen_urls: set[str] = set()
+    items: list[SourceItem] = []
+
+    for ev in (result.citations or []):
+        url = ev.url or ""
+        if url in seen_urls:
+            continue
+        seen_urls.add(url)
+
+        # Extract 4-digit year from publication_date if available.
+        year: str | None = None
+        if ev.publication_date:
+            try:
+                year = str(ev.publication_date.year)
+            except AttributeError:
+                # publication_date may be a string in some adapter implementations.
+                import re as _re
+                m = _re.search(r"\b(19|20)\d{2}\b", str(ev.publication_date))
+                year = m.group(0) if m else None
+
+        items.append(SourceItem(
+            title=ev.title or "(Untitled)",
+            url=url,
+            source_name=ev.source_name or "Unknown source",
+            year=year,
+            evidence_tier=ev.evidence_tier.value if hasattr(ev.evidence_tier, "value") else str(ev.evidence_tier),
+        ))
+
+        if len(items) >= 8:
+            break
+
+    return items
+
 
 # ── Core pipeline async generator ─────────────────────────────────────────────
 
@@ -296,6 +357,7 @@ async def _pipeline(request: MessageRequest) -> AsyncGenerator[SSEChunk, None]:
         text=text,
         emotion=_mode_to_emotion(result.mode),
         sourcesUsed=sources_used,
+        sources=_citations_to_sources(result),
         trace=_result_to_trace(result),
     )
 
