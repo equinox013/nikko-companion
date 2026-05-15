@@ -326,12 +326,19 @@ _BEHAVIORAL_PATTERNS: list[tuple[str, re.Pattern, float]] = [
         r"(things that (help|have helped)|what (helps?|works?) for me))\b", _I), 0.5),
 
     # help_seeking_behavior
+    # [CONCEPT] Specificity requirement
+    # This pattern must only fire on INFORMATION-SEEKING intent, not on generic
+    # "help me" phrases ("could you help me?", "I need help" on their own).
+    # Generic help requests in emotional contexts are COMFORT not GUIDANCE.
+    # The pattern requires: named techniques/resources OR specific how-to questions
+    # OR explicit requests for advice/tips/strategies/resources — not bare "help".
     ("help_seeking_behavior", re.compile(
-        r"\b((looking for|need|want|seeking|asking for|could use) (help|advice|guidance|support|tips?|resources?|strategies?)|"
-        r"(how (do|can|should) I|what (can|should) I do (about|with|to))|"
-        r"(any (advice|suggestions?|tips?|resources?|ideas?))|"
-        r"(CBT|DBT|therapy|therapist|technique|skill|strategy|strategies|"
-        r"mindfulness|breathing exercise|grounding technique|what works?))\b", _I), 0.7),
+        r"\b((looking for|need|want|seeking|asking for|could use) (advice|tips?|resources?|strategies?|techniques?|information|guidance on)|"
+        r"(how (do|can|should) I (cope|manage|deal|handle|treat|reduce|stop|overcome|practice|use|try))|"
+        r"(what (can|should) I do (about|with|to (help|manage|cope|reduce)))|"
+        r"(any (advice|suggestions?|tips?|resources?|techniques?|exercises?))|"
+        r"(CBT|DBT|EMDR|ACT|therapy|therapist|technique|techniques|skill|skills|strategy|strategies|"
+        r"mindfulness|breathing exercise|grounding technique|grounding exercises?|what works?))\b", _I), 0.7),
 
     # self_reflection_capacity
     ("self_reflection_capacity", re.compile(
