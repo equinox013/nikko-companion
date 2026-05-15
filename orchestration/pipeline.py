@@ -258,11 +258,11 @@ BASELINE_CRISIS_RESOURCES: list[CrisisResource] = [
 # "More tailored support" expandable alongside the baseline set.
 # NOT inferred from conversation context (REQ-300-RS3).
 DEMOGRAPHIC_CRISIS_RESOURCES: list[CrisisResource] = [
-    CrisisResource(name="QLife (LGBTIQ+)",            number="1800 184 527", tier="demographic"),
-    CrisisResource(name="13YARN (First Nations)",     number="13 92 76",     tier="demographic"),
-    CrisisResource(name="Kids Helpline (under 25)",   number="1800 55 1800", tier="demographic"),
-    CrisisResource(name="1800RESPECT (family violence)", number="1800 737 732", tier="demographic"),
-    CrisisResource(name="MensLine Australia",         number="1300 78 99 78", tier="demographic"),
+    CrisisResource(name="QLife (LGBTIQ+)",            number="1800 184 527", tier="demographic_specific"),
+    CrisisResource(name="13YARN (First Nations)",     number="13 92 76",     tier="demographic_specific"),
+    CrisisResource(name="Kids Helpline (under 25)",   number="1800 55 1800", tier="demographic_specific"),
+    CrisisResource(name="1800RESPECT (family violence)", number="1800 737 732", tier="demographic_specific"),
+    CrisisResource(name="MensLine Australia",         number="1300 78 99 78", tier="demographic_specific"),
 ]
 
 
@@ -835,25 +835,4 @@ class NikkoPipeline:
         re-calling just the Evaluator.
         """
         if (
-            evaluation.verdict == EvaluationVerdict.REGENERATE
-            and regen_count < MAX_REGEN_ATTEMPTS
-        ):
-            logger.info(
-                "Evaluator REGENERATE — attempt %d/%d. Re-running pipeline.",
-                regen_count + 1, MAX_REGEN_ATTEMPTS,
-            )
-            return self.run(user_input, session_id=session_id, regen_count=regen_count + 1)
-
-        # FAIL verdict or regen limit exhausted → safe fallback.
-        trace.final_action = "evaluator_safe_fallback"
-        trace.latency_ms = (time.perf_counter() - t0) * 1000
-        logger.warning(
-            "Evaluator %s (regen=%d) — emitting safe fallback.",
-            evaluation.verdict.value, regen_count,
-        )
-        return PipelineResult(
-            response_text=SAFE_FALLBACK_RESPONSE,
-            safe_fallback_used=True,
-            evaluation=evaluation,
-            trace=trace,
-        )
+            evaluation.verdic
