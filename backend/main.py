@@ -73,7 +73,7 @@ INTERNAL_TOKEN = os.getenv("NIKKO_INTERNAL_TOKEN", "")
 # generate() time and NikkoPipeline will catch it → SAFE_FALLBACK_RESPONSE.
 
 _generator = HFSpaceFullGenerator(hf_space_url=HF_SPACE_URL, token=INTERNAL_TOKEN)
-_pipeline  = NikkoPipeline(draft_generator=_generator)
+_nikko     = NikkoPipeline(draft_generator=_generator)  # renamed: _pipeline collides with the async def below
 
 log.info(
     "NikkoPipeline initialised | draft_generator=%s hf_space_url=%s",
@@ -278,7 +278,7 @@ def _pipeline_run_sync(user_text: str) -> PipelineResult:
     Thin synchronous wrapper around NikkoPipeline.run() for use with
     asyncio.to_thread(). Separated so the async caller stays clean.
     """
-    return _pipeline.run(user_input=user_text)
+    return _nikko.run(user_input=user_text)
 
 
 # ── SSE helpers ───────────────────────────────────────────────────────────────
