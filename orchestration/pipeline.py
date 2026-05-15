@@ -141,20 +141,46 @@ class _StubScopeClassifier:
 
 class _StubSignalAgent:
     """
-    Stub Signal Agent — returns LOW distress with empty signal arrays.
+    Stub Signal Agent — returns LOW distress with keyword-based guidance detection.
     Used when the real SignalAgent cannot be imported (FUSE truncation).
+
+    Previously returned all-empty signal arrays, which permanently suppressed
+    GUIDANCE routing. Now applies the same lightweight keyword scan used in the
+    _step2_signal exception path so explicit guidance-seeking messages still
+    reach GUIDANCE mode even without the real LLM-backed agent.
     Replace with the real SignalAgent for production.
     """
+
+    _GUIDANCE_KEYWORDS: frozenset = frozenset({
+        "cbt", "dbt", "emdr", "therapy", "therapist",
+        "technique", "techniques", "exercise", "exercises",
+        "strategy", "strategies", "method", "methods",
+        "how do i", "how to", "what can i do", "what should i",
+        "help me", "advice", "tips", "resources", "skills",
+        "psychoeducation", "mindfulness", "breathing",
+    })
+
     def analyze(self, text: str, **kwargs) -> SignalPayload:
+        text_lower = text.lower()
+        has_guidance_intent = any(
+            kw in text_lower for kw in self._GUIDANCE_KEYWORDS
+        )
         return SignalPayload(
             distress_level=DistressLevel.LOW,
             confidence=0.50,
             emotional_states=[],
             cognitive_patterns=[],
-            behavioral_indicators=[],
+            behavioral_indicators=(
+                ["help_seeking_behavior"] if has_guidance_intent else []
+            ),
             risk_indicators=[],
-            support_needs=[],
-            uncertainty_notes="[STUB — real SignalAgent unavailable]",
+            support_needs=(
+                ["psychoeducation"] if has_guidance_intent else []
+            ),
+            uncertainty_notes=(
+                f"[STUB — real SignalAgent unavailable; "
+                f"guidance_intent={has_guidance_intent}]"
+            ),
         )
 
 
@@ -162,16 +188,20 @@ class _StubStrategyAgent:
     """
     Stub Support Strategy Agent — returns a minimal valid StrategyPayload.
     Used when the real SupportStrategyAgent cannot be imported (FUSE truncation).
+
+    strategize() now accepts a RouterDecision (same as the real agent) so the
+    pipeline can pass router_decision uniformly without branching on agent type.
     """
-    def strategize(self, mode: OperationalMode, signal: SignalPayload) -> StrategyPayload:
+    def strategize(self, router_decision: RouterDecision, signal: SignalPayload) -> StrategyPayload:
         return StrategyPayload(
-            mode=mode,
+            mode=router_decision.mode,
             distress_level=signal.distress_level,
             tone_guidance="warm, empathetic, non-directive",
             framing_strategy="validate the user's experience before offering perspective",
         )
 
-    def crisis_bypass(self, signal: SignalPayload) -> StrategyPayload:
+    def crisis_bypass(self) -> StrategyPayload:
+        # Signature matches the real SupportStrategyAgent.crisis_bypass() — no args.
         return StrategyPayload(
             mode=OperationalMode.CRISIS,
             distress_level=DistressLevel.CRISIS,
@@ -492,7 +522,7 @@ class NikkoPipeline:
             logger.info("Pipeline: Crisis Mode — skipping evidence retrieval (REQ-700-VS1).")
 
         # ── Support Strategy ──────────────────────────────────────────────
-        strategy = self._step_strategy(mode, signal, trace)
+        strategy = self._step_strategy(router_decision, signal, trace)
 
         # ── Build ResponseContextPayload ──────────────────────────────────
         # [CONCEPT] This is the single object the Interaction Model (LLM)
@@ -604,17 +634,49 @@ class NikkoPipeline:
         try:
             signal = self._signal.analyze(text)
         except Exception as exc:
-            logger.error("SignalAgent raised %s — defaulting to LOW distress.", exc)
-            # REQ-700-120: safe degradation; LOW distress routes to Comfort Mode.
+            logger.error("SignalAgent raised %s — using keyword fallback.", exc)
+            # REQ-700-120: safe degradation. Rather than returning all-empty arrays
+            # (which permanently suppresses GUIDANCE routing), apply a lightweight
+            # keyword scan so explicit guidance-seeking messages ("CBT techniques",
+            # "how do I", "therapy") still reach GUIDANCE mode.
+            # [PROPOSED-RECONCILIATION: This is a production safety net for Fly.io
+            # free-tier environments where Qwen2.5-3B-Instruct OOMs at load time.
+            # The keyword list is intentionally conservative — it only covers clear
+            # guidance-intent signals, not vague distress language. Director review
+            # recommended before GA. Logged as G-SIGNAL-FALLBACK-01.]
+            _GUIDANCE_KEYWORDS: frozenset[str] = frozenset({
+                "cbt", "dbt", "emdr", "therapy", "therapist",
+                "technique", "techniques", "exercise", "exercises",
+                "strategy", "strategies", "method", "methods",
+                "how do i", "how to", "what can i do", "what should i",
+                "help me", "advice", "tips", "resources", "skills",
+                "psychoeducation", "mindfulness", "breathing",
+            })
+            text_lower = text.lower()
+            has_guidance_intent = any(kw in text_lower for kw in _GUIDANCE_KEYWORDS)
             signal = SignalPayload(
                 distress_level=DistressLevel.LOW,
                 confidence=0.0,
                 emotional_states=[],
                 cognitive_patterns=[],
-                behavioral_indicators=[],
+                # help_seeking_behavior triggers GUIDANCE in the Router
+                # (REQ-700-040: _GUIDANCE_BEHAVIORAL_INDICATORS match).
+                behavioral_indicators=(
+                    ["help_seeking_behavior"] if has_guidance_intent else []
+                ),
                 risk_indicators=[],
-                support_needs=[],
-                uncertainty_notes="[SIGNAL AGENT FAILURE — defaulting to LOW]",
+                # psychoeducation also triggers GUIDANCE as a backup path.
+                support_needs=(
+                    ["psychoeducation"] if has_guidance_intent else []
+                ),
+                uncertainty_notes=(
+                    "[SIGNAL AGENT FAILURE — keyword fallback active; "
+                    f"guidance_intent={has_guidance_intent}]"
+                ),
+            )
+            logger.info(
+                "SignalAgent fallback: guidance_intent=%s text_lower_snippet=%r",
+                has_guidance_intent, text_lower[:80],
             )
         trace.step("signal_agent")
         trace.signal_output = {
@@ -691,8 +753,28 @@ class NikkoPipeline:
         trace.evidence_used = [ep.source_name for ep in retrieval_results]
 
         if not retrieval_results:
-            logger.warning("All retrievals returned 0 items — evidence will be None.")
-            return None
+            # [PROPOSED-RECONCILIATION: C5 checks that the evidence step RAN, not
+            # that it produced results. Returning an empty SynthesizedEvidence object
+            # (rather than None) correctly signals "step ran, found nothing" vs
+            # "step was skipped entirely". Returning None was causing C5 to fire and
+            # emit SAFE_FALLBACK_RESPONSE on Fly.io where PubMed/WebSearch are
+            # unreachable (network restrictions / free-tier timeouts). The ADP-A
+            # context_prompt_builder handles empty citations gracefully — it simply
+            # omits the evidence injection block. Director: review as G-RETRIEVAL-01.]
+            logger.warning(
+                "All retrievals returned 0 items — returning empty SynthesizedEvidence "
+                "so GUIDANCE mode can proceed without RAG injection. C5 preserved."
+            )
+            return SynthesizedEvidence(
+                summary=(
+                    "No peer-reviewed evidence was retrieved for this query. "
+                    "Retrieval adapters returned zero results — respond from "
+                    "general clinical knowledge with appropriate epistemic humility."
+                ),
+                citations=[],
+                confidence=0.0,
+                grey_literature_used=False,
+            )
 
         evidence = self._synthesizer.synthesize(retrieval_results, query=query)
         trace.step("evidence_synthesizer")
@@ -701,15 +783,26 @@ class NikkoPipeline:
         return evidence
 
     def _step_strategy(
-        self, mode: OperationalMode, signal: SignalPayload, trace: PipelineTrace
+        self, router_decision: RouterDecision, signal: SignalPayload, trace: PipelineTrace
     ) -> StrategyPayload:
-        """Support Strategy Agent step (REQ-200-060/061)."""
+        """Support Strategy Agent step (REQ-200-060/061).
+
+        Receives the full RouterDecision so the real SupportStrategyAgent
+        (which expects a RouterDecision, not a bare OperationalMode) gets the
+        correct type. Previously this method received only `mode: OperationalMode`,
+        causing an AttributeError on every request when the real agent tried to
+        call `router_decision.mode` on an OperationalMode enum value.
+        """
+        mode = router_decision.mode
         try:
             if mode == OperationalMode.CRISIS:
                 # CRISIS: strategy agent is bypassed; use static crisis strategy.
-                strategy = self._strategy.crisis_bypass(signal)
+                # crisis_bypass() takes NO arguments in the real SupportStrategyAgent
+                # (it returns a hardcoded StrategyPayload constant). Passing signal
+                # previously caused a TypeError on the real agent — fixed here.
+                strategy = self._strategy.crisis_bypass()
             else:
-                strategy = self._strategy.strategize(mode, signal)
+                strategy = self._strategy.strategize(router_decision, signal)
         except Exception as exc:
             logger.error("StrategyAgent raised %s — using minimal fallback strategy.", exc)
             strategy = StrategyPayload(

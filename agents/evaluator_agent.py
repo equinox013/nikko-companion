@@ -405,8 +405,6 @@ class EvaluatorAgent:
 
         REQ-200-171: single evaluation pass, no recursion.
         """
-        self._ensure_model()
-
         # Build the user turn for the judge prompt.
         evidence_context = (
             f"Evidence summary provided:\n{evidence_summary}"
@@ -426,6 +424,14 @@ class EvaluatorAgent:
         ]
 
         try:
+            # [CONCEPT] _ensure_model() is called INSIDE the try so that a
+            # missing 'transformers' / 'torch' install (e.g. on Render free
+            # tier) raises ModuleNotFoundError here and is caught by the
+            # fail-safe below — returning tone_pass=True rather than propagating
+            # up to the pipeline as an unhandled exception that creates a
+            # synthetic FAIL payload and triggers SAFE_FALLBACK_RESPONSE.
+            self._ensure_model()
+
             # [CONCEPT] apply_chat_template()
             # Converts the messages list into the model's native chat format
             # (e.g., <|im_start|>system\n...<|im_end|>\n for Qwen).

@@ -208,11 +208,15 @@ class SupportStrategyAgent:
                 "Use crisis_bypass() instead. (agent_prompts.md §4.1)"
             )
 
-        self._ensure_model_loaded()
-
-        prompt = self._build_prompt(router_decision, signal, conversation_history or [])
-
+        # [CONCEPT] _ensure_model_loaded() is called here rather than before the
+        # try block so that a missing 'torch' / 'transformers' install on Render
+        # (free tier — no GPU, ~512 MB RAM) raises ModuleNotFoundError inside
+        # the try/except and routes cleanly to _safe_fallback(). Previously this
+        # call was before the try, causing the exception to leak up to the pipeline's
+        # _step_strategy except block and log a misleading error on every request.
         try:
+            self._ensure_model_loaded()
+            prompt = self._build_prompt(router_decision, signal, conversation_history or [])
             raw_output = self._generate(prompt)
         except Exception as exc:
             return self._safe_fallback(router_decision, signal, reason=f"Generation failed: {exc}")
