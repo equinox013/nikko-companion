@@ -287,6 +287,9 @@ function Chat({ theme, onToggleTheme }) {
   // was last clicked. Passed to SourcesPanel so it renders real retrieved URLs
   // instead of (or in addition to) the static NIKKO_SOURCES dict.
   const [dynamicSources, setDynamicSources] = useState([]);
+  // Tracks the sources from the most recent GUIDANCE response so the Sources
+  // tab button can surface them even without clicking a per-message badge.
+  const lastResponseSourcesRef = useRef([]);
   const sourceOrderRef = useRef({});
   const [, forceRerender] = useState(0);
   const threadRef = useRef(null);
@@ -487,6 +490,9 @@ function Chat({ theme, onToggleTheme }) {
                   setMessages(prev => prev.map(m =>
                     m.id === id ? { ...m, sources: data.sources } : m
                   ));
+                  // Also cache them so the Sources tab button can show them
+                  // even if the user hasn't clicked the per-message badge.
+                  lastResponseSourcesRef.current = data.sources;
                 }
               } else {
                 // Empty text chunk = emotion-state signal only (e.g. "think").
@@ -711,7 +717,14 @@ function Chat({ theme, onToggleTheme }) {
           </button>
         )}
         {!rightTab && (
-          <button className="tab-float right" onClick={() => setRightTab('sources')} title="Sources">
+          <button className="tab-float right" onClick={() => {
+            // If the last GUIDANCE response returned sources, surface them in
+            // the panel automatically — user doesn't need to find the badge.
+            if (lastResponseSourcesRef.current.length > 0) {
+              setDynamicSources(lastResponseSourcesRef.current);
+            }
+            setRightTab('sources');
+          }} title="Sources">
             Sources
             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
               <path d="M3 2.5h7l2.5 2.5v8.5H3z" />

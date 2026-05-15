@@ -62,7 +62,7 @@ function AgentRibbon({ traceId }) {
           <path d="M3 3 9 3M3 3 6 9M9 3 6 9" opacity="0.5"/>
         </svg>
       </span>
-      <span className="agent-ribbon-count">3 adapters · ensuring best response, because you matter</span>
+      <span className="agent-ribbon-count">3 adapters</span>
     </div>
   );
 }

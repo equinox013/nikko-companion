@@ -192,6 +192,7 @@ var NikkoChat = (() => {
     const [leftTab, setLeftTab] = useState(null);
     const [rightTab, setRightTab] = useState(null);
     const [dynamicSources, setDynamicSources] = useState([]);
+    const lastResponseSourcesRef = useRef([]);
     const sourceOrderRef = useRef({});
     const [, forceRerender] = useState(0);
     const threadRef = useRef(null);
@@ -348,6 +349,7 @@ var NikkoChat = (() => {
                     setMessages((prev) => prev.map(
                       (m) => m.id === id ? { ...m, sources: data.sources } : m
                     ));
+                    lastResponseSourcesRef.current = data.sources;
                   }
                 } else {
                   setCurrentEmotion(data.emotion || "think");
@@ -466,7 +468,12 @@ var NikkoChat = (() => {
       },
       /* @__PURE__ */ React.createElement("svg", { viewBox: "0 0 14 14", fill: "none", stroke: "currentColor", strokeWidth: "1.6", strokeLinecap: "round", strokeLinejoin: "round", style: { width: 13, height: 13, marginRight: 5, verticalAlign: "-2px" } }, /* @__PURE__ */ React.createElement("path", { d: "M8.5 2.5h-5v9h5" }), /* @__PURE__ */ React.createElement("path", { d: "M6 7h6" }), /* @__PURE__ */ React.createElement("path", { d: "m9.5 4.5 2.5 2.5-2.5 2.5" })),
       "Quick exit"
-    ))), /* @__PURE__ */ React.createElement("main", { className: "chat floating", "data-left": leftTab ? "open" : "closed", "data-right": rightTab ? "open" : "closed" }, !leftTab && /* @__PURE__ */ React.createElement("button", { className: "tab-float left", onClick: () => setLeftTab("mood"), title: "Mood diary" }, /* @__PURE__ */ React.createElement("svg", { viewBox: "0 0 16 16", fill: "none", stroke: "currentColor", strokeWidth: "1.5", strokeLinecap: "round", strokeLinejoin: "round" }, /* @__PURE__ */ React.createElement("rect", { x: "2.5", y: "3.5", width: "11", height: "10", rx: "1.5" }), /* @__PURE__ */ React.createElement("path", { d: "M2.5 6h11M5 2.5v3M11 2.5v3" })), "Mood diary"), !rightTab && /* @__PURE__ */ React.createElement("button", { className: "tab-float right", onClick: () => setRightTab("sources"), title: "Sources" }, "Sources", /* @__PURE__ */ React.createElement("svg", { viewBox: "0 0 16 16", fill: "none", stroke: "currentColor", strokeWidth: "1.5", strokeLinecap: "round", strokeLinejoin: "round" }, /* @__PURE__ */ React.createElement("path", { d: "M3 2.5h7l2.5 2.5v8.5H3z" }), /* @__PURE__ */ React.createElement("path", { d: "M3 5.5h6M3 8h7M3 10.5h5" }))), leftTab === "mood" && /* @__PURE__ */ React.createElement(MoodDiaryPanel, { entries: moodEntries, onSet: setMoodEntry, onClose: () => setLeftTab(null) }), /* @__PURE__ */ React.createElement("div", { className: "thread-wrap" }, /* @__PURE__ */ React.createElement("div", { className: "thread", ref: threadRef }, /* @__PURE__ */ React.createElement("div", { className: "thread-inner" }, /* @__PURE__ */ React.createElement("div", { className: "session-stamp" }, "Today \xB7 session begins"), messages.map((m, idx) => {
+    ))), /* @__PURE__ */ React.createElement("main", { className: "chat floating", "data-left": leftTab ? "open" : "closed", "data-right": rightTab ? "open" : "closed" }, !leftTab && /* @__PURE__ */ React.createElement("button", { className: "tab-float left", onClick: () => setLeftTab("mood"), title: "Mood diary" }, /* @__PURE__ */ React.createElement("svg", { viewBox: "0 0 16 16", fill: "none", stroke: "currentColor", strokeWidth: "1.5", strokeLinecap: "round", strokeLinejoin: "round" }, /* @__PURE__ */ React.createElement("rect", { x: "2.5", y: "3.5", width: "11", height: "10", rx: "1.5" }), /* @__PURE__ */ React.createElement("path", { d: "M2.5 6h11M5 2.5v3M11 2.5v3" })), "Mood diary"), !rightTab && /* @__PURE__ */ React.createElement("button", { className: "tab-float right", onClick: () => {
+      if (lastResponseSourcesRef.current.length > 0) {
+        setDynamicSources(lastResponseSourcesRef.current);
+      }
+      setRightTab("sources");
+    }, title: "Sources" }, "Sources", /* @__PURE__ */ React.createElement("svg", { viewBox: "0 0 16 16", fill: "none", stroke: "currentColor", strokeWidth: "1.5", strokeLinecap: "round", strokeLinejoin: "round" }, /* @__PURE__ */ React.createElement("path", { d: "M3 2.5h7l2.5 2.5v8.5H3z" }), /* @__PURE__ */ React.createElement("path", { d: "M3 5.5h6M3 8h7M3 10.5h5" }))), leftTab === "mood" && /* @__PURE__ */ React.createElement(MoodDiaryPanel, { entries: moodEntries, onSet: setMoodEntry, onClose: () => setLeftTab(null) }), /* @__PURE__ */ React.createElement("div", { className: "thread-wrap" }, /* @__PURE__ */ React.createElement("div", { className: "thread", ref: threadRef }, /* @__PURE__ */ React.createElement("div", { className: "thread-inner" }, /* @__PURE__ */ React.createElement("div", { className: "session-stamp" }, "Today \xB7 session begins"), messages.map((m, idx) => {
       if (m.role === "user") {
         return /* @__PURE__ */ React.createElement("div", { className: "msg user", key: m.id }, /* @__PURE__ */ React.createElement("div", { className: "body" }, /* @__PURE__ */ React.createElement("div", { className: "bubble" }, m.text)));
       }
