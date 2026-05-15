@@ -45,9 +45,11 @@ from orchestration.pipeline import ADPB_CRISIS_SENTINEL
 
 logger = logging.getLogger(__name__)
 
-# Generous timeout: cold start (~120s model load) + 3 adapter passes + regen pass.
-# Matches PIPELINE_TIMEOUT_S in the original backend/main.py.
-_PIPELINE_TIMEOUT_S = 360
+# Timeout budget: ZeroGPU cold start can reach 300–600s when the Space has been
+# idle (GPU must be re-allocated, both Phi-3.5-mini and Gemma-2-2b-it loaded into
+# VRAM). Observed worst case: 591s. Set ceiling at 720s (12 min) to give ~2 min
+# of headroom beyond that worst case while still failing fast on genuine hangs.
+_PIPELINE_TIMEOUT_S = 720
 
 
 class HFSpaceFullGenerator:
@@ -123,7 +125,12 @@ class HFSpaceFullGenerator:
             len(context.synthesized_evidence.citations) if context.synthesized_evidence else 0,
         )
 
-        with httpx.Client(timeout=_PIPELINE_TIMEOUT_S) as client:
+        # httpx.Timeout(read=..., connect=10) — separates the long read wait
+        # (ZeroGPU cold start) from the connect phase (should be fast on Render→HF).
+        # A single scalar timeout=N applies to *every* phase including connect,
+        # which is wasteful; explicit read timeout avoids masking genuine connect failures.
+        _timeout = httpx.Timeout(read=_PIPELINE_TIMEOUT_S, connect=10.0, write=30.0, pool=5.0)
+        with httpx.Client(timeout=_timeout) as client:
             resp = client.post(f"{self._url}/pipeline", json=payload)
             resp.raise_for_status()
 
