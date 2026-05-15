@@ -1,0 +1,63 @@
+# .dockerignore — repo-root Docker build context for Nikko backend.
+# Excludes everything not needed at runtime, keeping the build context fast
+# and the final image lean. Only backend/, orchestration/, agents/, retrieval/,
+# and docs/schemas/ are copied (see Dockerfile COPY directives).
+
+# ── Version control ───────────────────────────────────────────────────────────
+.git/
+.gitignore
+
+# ── Frontend (served via GitHub Pages, not from this container) ───────────────
+web/
+
+# ── HF Space (runs on ZeroGPU, not here) ─────────────────────────────────────
+hf_space/
+
+# ── Training / notebooks (not needed at inference time) ──────────────────────
+notebooks/
+finetuning/
+data/
+*.ipynb
+
+# ── Evaluation harness (Phase 6, not part of the served API) ─────────────────
+evaluation/
+
+# ── Classifier (training artifact, not imported at runtime) ──────────────────
+classifier/
+
+# ── Docs (spec files, not Python modules — only docs/schemas/ is needed) ─────
+docs/specs/
+docs/derived/
+docs/integration/
+docs/contracts/
+docs/*.md
+
+# ── Root-level non-runtime files ──────────────────────────────────────────────
+README.md
+CLAUDE.md
+NIKKO-spec.docx
+environment.yml
+*.md
+
+# ── Python cache ─────────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# ── Virtual environments / local tooling ──────────────────────────────────────
+.venv/
+venv/
+env/
+.conda/
+*.egg-info/
+dist/
+build/
+
+# ── Secrets and local config (never in image) ────────────────────────────────
+.env
+.env.*
+*.key
+*.pem
+secrets/

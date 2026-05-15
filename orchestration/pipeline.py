@@ -190,7 +190,8 @@ class DraftGeneratorProtocol(Protocol):
     Protocol for the Interaction Model (LLM draft generator).
 
     Phase 3 stub returns a canned empathetic response.
-    Phase 4 implements this with the fine-tuned Mistral-7B adapter.
+    Phase 4/MVP implements this via Qwen3-4B base (no LoRA; see hf_space/app.py).
+    Director-approved 2026-05-14. See hf_space/app.py for production dispatch logic.
 
     The pipeline calls generate() after building the ResponseContextPayload.
     The generator receives the full context so it can apply tone guidance,
@@ -503,6 +504,7 @@ class NikkoPipeline:
             strategy=strategy,
             synthesized_evidence=evidence,
             crisis_resources=crisis_resources,
+            raw_user_message=clean_input,  # [MVP-INFRA] consumed by HFSpaceFullGenerator
         )
 
         # ── STEP 10: Draft generation (Interaction Model) ─────────────────

@@ -343,6 +343,18 @@ class ResponseContextPayload(BaseModel):
             "(REQ-850-073/074)"
         ),
     )
+    # [MVP-INFRA] Raw sanitized user message — set by NikkoPipeline before
+    # handing context to DraftGeneratorProtocol. Not in original SPEC-200
+    # (added for HFSpaceFullGenerator RAG prompt injection). Optional so all
+    # existing stubs and Phase 3 tests remain valid without modification.
+    raw_user_message:   Optional[str] = Field(
+        default=None,
+        description=(
+            "Sanitized user message text. Set by NikkoPipeline prior to "
+            "draft generation; consumed by HFSpaceFullGenerator to build "
+            "the messages list sent to HF Space /pipeline."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------

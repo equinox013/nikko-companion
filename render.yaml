@@ -16,9 +16,12 @@ services:
     runtime: python
     plan: free
     region: singapore        # closest free-tier region to Australia (SYD not available)
-    rootDir: backend
-    buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT --workers 1 --loop uvloop
+    # rootDir intentionally omitted -- build context must be repo root so Render
+    # can reach orchestration/, agents/, retrieval/, docs/schemas/ (all imported
+    # by NikkoPipeline at runtime). rootDir: backend would cause ImportError on
+    # startup as of Phase 7 agent-wiring.
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT --workers 1 --loop uvloop
 
     healthCheckPath: /health
 

@@ -1,15 +1,28 @@
 # Nikko backend -- Python dependencies.
 # Pin minor versions; patch versions float for security fixes.
 # Sync with environment.yml if adding any package that overlaps with training deps.
+#
+# Phase 7 MVP runtime stack (all active):
+#   - fastapi + uvicorn: ASGI server
+#   - pydantic: ACP schema validation (docs/schemas/acp_schemas.py)
+#   - httpx: HFSpaceFullGenerator blocking POST to HF Space /pipeline
+#   - requests: PubMedAdapter (E-utilities) + WebSearchAdapter (page scraping)
+#   - ddgs: DuckDuckGo search backend for WebSearchAdapter (G-RETRIEVAL-01)
+#   - beautifulsoup4 + lxml: HTML parsing for WebSearchAdapter sanctioned-domain scrape
+#
+# NOT needed in this container -- inference runs on HF Spaces ZeroGPU, not here.
+# transformers, peft, torch, bitsandbytes are all omitted intentionally.
 
+# API layer
 fastapi==0.115.*
 uvicorn[standard]==0.32.*
 pydantic==2.9.*
+
+# HF Space bridge
 httpx==0.27.*
 
-# Phase 5: uncomment when wiring agent pipeline
-# langgraph==0.2.*
-# langchain-core==0.3.*
-# transformers==4.46.3
-# peft==0.13.2
-#
+# RAG / retrieval (NikkoPipeline steps 4-7)
+requests==2.32.*
+ddgs>=6.0
+beautifulsoup4>=4.12
+lxml>=5.0

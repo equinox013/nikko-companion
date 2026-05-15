@@ -1,17 +1,20 @@
-# DEPRECATED — do not deploy from this file.
+# fly.toml — Nikko backend, Fly.io app configuration.
+# Phase 7 MVP infra (2026-05-14).
 #
-# As of Phase 7 agent-wiring, the active fly.toml lives at the repo root:
-#   D:\Git Repos\nikko-companion\fly.toml
+# IMPORTANT: Deploy from the repo root, NOT from backend/:
+#   cd "D:\Git Repos\nikko-companion"
+#   fly deploy
 #
-# Deploy command: `fly deploy` from D:\Git Repos\nikko-companion\
-# See repo-root Dockerfile for the full build spec.
-#
-# Original file generated for nikko-backend on 2026-05-14T09:28:16+10:00
+# Build context is the repo root so Docker can reach orchestration/, agents/,
+# retrieval/, and docs/schemas/ (all required by NikkoPipeline at runtime).
+# See Dockerfile at repo root for the full build spec.
 
 app = 'nikko-backend'
 primary_region = 'syd'
 
 [build]
+  # Dockerfile is at repo root (moved from backend/ in Phase 7 agent-wiring).
+  # No dockerfile key needed — Fly uses ./Dockerfile by default.
 
 [env]
   NIKKO_ENV = 'production'

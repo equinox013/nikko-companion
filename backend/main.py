@@ -1,13 +1,29 @@
 """
-backend/main.py -- Nikko orchestration API (Phase 7).
+backend/main.py -- Nikko orchestration API (Phase 7 / MVP infra).
 
 Sits between the React frontend and the HF Spaces inference layer.
-Implements the three-stage pipeline per SPEC-200 and SPEC-300:
+Implements the full SPEC-700 pipeline per SPEC-200 and SPEC-300:
 
-  1. ADP-B  (safety/crisis check)  -- always runs first
-  2. ADP-A  (empathy response)     -- runs if ADP-B clears the message
-  3. ADP-C  (evaluator)            -- quality-gates the ADP-A draft;
-                                      triggers one regen if it fails
+  STEP 0   ScopeClassifier       — out-of-scope early exit
+  STEP 1   Input sanitization
+  STEP 2   SignalAgent            — psychological signal detection
+  STEP 3   Router                 — COMFORT / GUIDANCE / CRISIS
+  STEP 4-8 Evidence retrieval + synthesis  (Guidance Mode only — RAG)
+           PubMedAdapter → WebSearchAdapter → EvidenceSynthesizerAgent
+  STEP 9   SupportStrategyAgent   — tone + framing guidance
+  STEP 10  HFSpaceFullGenerator   — calls HF Space /pipeline with evidence-
+                                    enriched prompts (ADP-B → ADP-A → ADP-C)
+  STEP 11  EvaluatorAgent         — local rule-based quality gate
+  STEP 12  VerificationSupervisor — structural final gate
+
+The connection between local agents and the LLM models is:
+  NikkoPipeline (local) → HFSpaceFullGenerator → HF Space ZeroGPU (remote)
+
+RAG path (Guidance Mode):
+  SignalAgent detects distress → Router routes to GUIDANCE →
+  PubMed/WebSearch retrieves evidence → EvidenceSynthesizer summarizes →
+  HFSpaceFullGenerator injects evidence into ADP-A system prompt →
+  Qwen3-4B generates evidence-grounded response.
 
 Endpoints contracted in FRONTEND_INTEGRATION_SPEC.md:
   GET  /health           -- loading screen polls this (REQ-FIS-LS2)
@@ -17,6 +33,7 @@ Endpoints contracted in FRONTEND_INTEGRATION_SPEC.md:
 
 import asyncio
 import json
+import logging
 import os
 import time
 import uuid
@@ -28,6 +45,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from backend.draft_generator import HFSpaceFullGenerator
+from docs.schemas.acp_schemas import OperationalMode
+from orchestration.pipeline import NikkoPipeline, PipelineResult
+
+log = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+
 # ── Config ────────────────────────────────────────────────────────────────────
 
 # HF Space URL -- set via: fly secrets set HF_SPACE_URL=https://...
@@ -36,43 +60,32 @@ HF_SPACE_URL = os.getenv("HF_SPACE_URL", "").rstrip("/")
 # Shared secret with the HF Space -- set via: fly secrets set NIKKO_INTERNAL_TOKEN=...
 INTERNAL_TOKEN = os.getenv("NIKKO_INTERNAL_TOKEN", "")
 
-# Timeout for the /pipeline call to HF Space.
-# Cold start (first call after Space rebuild): ~120s model load + inference.
-# Warm (subsequent calls, GPU context warm): ~30-60s for 3 adapter passes.
-# Regen pass adds another ~20-30s. 360s gives comfortable headroom.
-PIPELINE_TIMEOUT_S = 360
+# ── Pipeline initialisation ───────────────────────────────────────────────────
 
-# Nikko system prompt -- sets the persona and safety framing for ADP-A.
-# Kept short so it fits within the 2048-token context window after conversation history.
-NIKKO_SYSTEM = (
-    "You are Nikko, a safety-aligned wellbeing companion. "
-    "You are warm, empathetic, and non-diagnostic. "
-    "You support users with evidence-based wellbeing strategies. "
-    "You are not a therapist. If a user is in crisis, always direct them to real human support. "
-    "Respond in plain, clear English. Be concise."
+# [CONCEPT] NikkoPipeline is instantiated once at module load time (FastAPI startup).
+# It is stateless per-turn — all state lives in PipelineTrace which is created and
+# destroyed within a single NikkoPipeline.run() call (REQ-700-LOG1).
+#
+# HFSpaceFullGenerator bridges local agents to the remote LLM:
+#   - In Guidance Mode, it injects PubMed/web evidence into Qwen3-4B's system prompt
+#   - In Comfort Mode, it sends a persona + strategy prompt only
+# If HF_SPACE_URL is not set (local dev), HFSpaceFullGenerator will raise at
+# generate() time and NikkoPipeline will catch it → SAFE_FALLBACK_RESPONSE.
+
+_generator = HFSpaceFullGenerator(hf_space_url=HF_SPACE_URL, token=INTERNAL_TOKEN)
+_pipeline  = NikkoPipeline(draft_generator=_generator)
+
+log.info(
+    "NikkoPipeline initialised | draft_generator=%s hf_space_url=%s",
+    type(_generator).__name__,
+    HF_SPACE_URL or "(not set — pipeline calls will fail until HF_SPACE_URL is configured)",
 )
 
-# ADP-B system prompt -- instructs the safety classifier to output a structured verdict.
-SAFETY_SYSTEM = (
-    "You are a safety classifier for a mental health support app. "
-    "Analyse the user message and output a JSON object with two keys: "
-    "\"crisis\": true if the message indicates immediate risk of harm to self or others, false otherwise. "
-    "\"flags\": a list of triggered safety signals (e.g. [\"suicidal_ideation\", \"self_harm\"]) or empty list. "
-    "Output ONLY the JSON object. No explanation."
-)
-
-# ADP-C system prompt -- evaluates an (input, response) pair.
-EVAL_SYSTEM = (
-    "You are a response quality evaluator for a mental health support app. "
-    "Given a user message and a proposed assistant response, output a JSON object: "
-    "\"verdict\": \"APPROVE\" if the response is empathetic, safe, and appropriate, "
-    "or \"REGENERATE\" if it is harmful, dismissive, or clinically inappropriate. "
-    "\"reason\": one sentence explanation. "
-    "Output ONLY the JSON object."
-)
-
-# Australian crisis resources -- injected when ADP-B detects a crisis signal.
-CRISIS_RESPONSE = (
+# Australian crisis resources — injected when Router routes to CRISIS mode.
+# These are the same resources that NikkoPipeline.BASELINE_CRISIS_RESOURCES
+# produces; duplicated here for the SSE response builder so we don't need to
+# import the full list from orchestration.pipeline.
+_CRISIS_TEXT = (
     "I'm really glad you reached out, and I want to make sure you're safe right now. "
     "Please contact one of these services immediately:\n\n"
     "- **Lifeline:** 13 11 14 (24/7)\n"
@@ -86,7 +99,7 @@ CRISIS_RESPONSE = (
 
 app = FastAPI(
     title="Nikko Backend API",
-    version="0.1.0",
+    version="0.2.0",
     docs_url="/docs" if os.getenv("NIKKO_ENV") == "development" else None,
     redoc_url=None,
 )
@@ -122,62 +135,94 @@ class SSEChunk(BaseModel):
     safetyFlags: list[str]  = Field(default_factory=list)
     trace:       dict | None = None   # pipeline trace for debug panel
 
-# ── HF Space client ───────────────────────────────────────────────────────────
+# ── Emotion mapping ───────────────────────────────────────────────────────────
 
-async def _call_pipeline(messages: list[dict]) -> dict:
+def _mode_to_emotion(mode: OperationalMode | None, is_crisis: bool = False) -> str:
     """
-    Calls POST /pipeline on the HF Space -- runs ADP-B → ADP-A → ADP-C in
-    a single ZeroGPU GPU session, returning the full pipeline result.
+    Map pipeline operational mode to frontend avatar state.
 
-    [CONCEPT] httpx.AsyncClient doesn't block the FastAPI event loop while
-    waiting for the GPU. /health probes and other requests are served normally
-    during the (potentially long) pipeline wait.
+    [CONCEPT] The avatar state machine (GLOSSARY.md) has six states:
+    calm / listen / think / speak / care / search. 'speak' is the default
+    for normal responses; 'care' signals heightened warmth for crisis/high-distress.
     """
-    if not HF_SPACE_URL:
-        raise RuntimeError("HF_SPACE_URL env var not set. Run: fly secrets set HF_SPACE_URL=...")
+    if is_crisis:
+        return "care"
+    if mode == OperationalMode.CRISIS:
+        return "care"
+    if mode == OperationalMode.GUIDANCE:
+        return "speak"
+    return "speak"  # Comfort Mode default
 
-    payload = {
-        "messages":      messages,
-        "system":        NIKKO_SYSTEM,
-        "safety_system": SAFETY_SYSTEM,
-        "eval_system":   EVAL_SYSTEM,
-        "token":         INTERNAL_TOKEN,
+# ── Pipeline to SSE bridge ────────────────────────────────────────────────────
+
+def _result_to_trace(result: PipelineResult) -> dict:
+    """
+    Build the debug panel trace dict from a PipelineResult.
+    Mirrors the trace structure used in the old _call_pipeline() path so the
+    frontend agent-debug panel displays correctly without UI changes.
+    """
+    trace_obj = result.trace
+    mode_val  = result.mode.value if result.mode else "unknown"
+
+    adp_b_flags = []
+    adp_b_verdict = "CLEAR"
+    if result.mode == OperationalMode.CRISIS:
+        adp_b_verdict = "CRISIS"
+
+    return {
+        "mode":             mode_val,
+        "out_of_scope":     result.out_of_scope,
+        "safe_fallback":    result.safe_fallback_used,
+        "verdict":          result.evaluation.verdict.value if result.evaluation else "UNKNOWN",
+        "regen":            (trace_obj.regen_count > 0) if trace_obj else False,
+        "elapsed":          trace_obj.latency_ms / 1000 if trace_obj and trace_obj.latency_ms else 0,
+        "execution_path":   trace_obj.execution_path if trace_obj else [],
+        "evidence_sources": trace_obj.evidence_used if trace_obj else [],
+        "adp_b": {
+            "label":   "Safety / crisis check",
+            "verdict": adp_b_verdict,
+            "flags":   adp_b_flags,
+        },
+        "adp_a": {
+            "label": "Empathy response draft (Qwen3-4B)",
+            "chars": len(result.response_text),
+        },
+        "adp_c": {
+            "label":   "Quality gate (ADP-C evaluator)",
+            "verdict": result.evaluation.verdict.value if result.evaluation else "UNKNOWN",
+            "regen":   (trace_obj.regen_count > 0) if trace_obj else False,
+        },
     }
 
-    async with httpx.AsyncClient(timeout=PIPELINE_TIMEOUT_S) as client:
-        resp = await client.post(f"{HF_SPACE_URL}/pipeline", json=payload)
-        resp.raise_for_status()
-        return resp.json()
-
-# ── Pipeline ──────────────────────────────────────────────────────────────────
+# ── Core pipeline async generator ─────────────────────────────────────────────
 
 async def _pipeline(request: MessageRequest) -> AsyncGenerator[SSEChunk, None]:
     """
-    Single-call pipeline per SPEC-200 and SPEC-300.
+    Runs the full NikkoPipeline for one user turn and yields SSEChunks.
 
-    Sends one POST /pipeline to the HF Space which runs ADP-B → ADP-A → ADP-C
-    (+ optional regen) inside a single @spaces.GPU context. This eliminates
-    the 80-110s CPU→VRAM overhead that was incurred per adapter when using
-    three separate /infer calls.
+    [CONCEPT] asyncio.to_thread() runs NikkoPipeline.run() in a background
+    thread from FastAPI's thread pool. This is necessary because:
+    1. NikkoPipeline is synchronous (all agent calls are sync).
+    2. HFSpaceFullGenerator.generate() makes a blocking HTTP call (30-120s).
+    Wrapping in to_thread() keeps the FastAPI event loop free to serve
+    /health probes and other concurrent requests during the long GPU wait.
 
-    Graceful degradation: if the HF Space call fails entirely, a warm holding
-    response is emitted so the frontend always receives text.
+    Graceful degradation: any unhandled exception from the pipeline produces
+    a warm holding response so the frontend always receives text.
     """
-    user_msg = request.text.strip()
-    messages = [{"role": "user", "content": user_msg}]
-
-    # Signal "thinking" while the pipeline runs (~30-120s depending on warm/cold).
+    # Signal 'thinking' to the frontend immediately — the pipeline takes time.
     yield SSEChunk(emotion="think", text="")
 
     try:
-        result    = await _call_pipeline(messages)
-        is_crisis = result.get("is_crisis", False)
-        flags     = result.get("flags", [])
-        text      = result.get("text", "")
+        # [CONCEPT] Run the full SPEC-700 pipeline in a thread:
+        # STEP 0  Scope → STEP 2  Signal → STEP 3 Route →
+        # STEP 4-8 RAG (Guidance only) → STEP 10 LLM draft via HF Space →
+        # STEP 11 EvaluatorAgent → STEP 12 VerificationSupervisor
+        result: PipelineResult = await asyncio.to_thread(
+            _pipeline_run_sync, request.text.strip()
+        )
     except Exception as exc:
-        import logging
-        logging.getLogger("nikko").warning(f"Pipeline failed: {exc}")
-        # Full pipeline down -- emit a warm holding response.
+        log.warning("Pipeline raised unhandled exception: %s", exc, exc_info=True)
         yield SSEChunk(
             text=(
                 "I'm here with you. It sounds like there's a lot on your mind — "
@@ -187,46 +232,54 @@ async def _pipeline(request: MessageRequest) -> AsyncGenerator[SSEChunk, None]:
         )
         return
 
-    # [REQ-300-161] Crisis path -- pipeline sets is_crisis=True, text is empty.
-    if is_crisis:
+    # ── Out-of-scope early exit ────────────────────────────────────────────────
+    if result.out_of_scope:
         yield SSEChunk(
-            text=CRISIS_RESPONSE,
-            emotion="care",
-            safetyFlags=flags or ["crisis_detected"],
+            text=result.response_text,
+            emotion="calm",
+            trace=_result_to_trace(result),
         )
         return
 
-    if not text:
-        text = (
-            "I want to make sure I'm being as helpful as possible. "
-            "Could you tell me a little more about what's on your mind?"
+    # ── Crisis Mode ────────────────────────────────────────────────────────────
+    # Pipeline routed to CRISIS — use the canonical crisis text rather than
+    # whatever the pipeline's response_text contains, to ensure the hotlines
+    # are always formatted correctly per SPEC-300.
+    if result.mode == OperationalMode.CRISIS:
+        yield SSEChunk(
+            text=_CRISIS_TEXT,
+            emotion="care",
+            safetyFlags=["crisis_detected"],
+            trace=_result_to_trace(result),
         )
+        return
 
-    # Build a trace payload for the debug panel so the user can see
-    # adapter activity without checking HF/Render logs.
-    trace = {
-        "is_crisis": is_crisis,
-        "flags":     flags,
-        "verdict":   result.get("verdict", "APPROVE"),
-        "regen":     result.get("regen", False),
-        "elapsed":   result.get("elapsed", 0),
-        "adp_b": {
-            "label":   "Safety / crisis check",
-            "verdict": "CRISIS" if is_crisis else "CLEAR",
-            "flags":   flags,
-        },
-        "adp_a": {
-            "label": "Empathy response draft",
-            "chars": len(text),
-        },
-        "adp_c": {
-            "label":   "Quality gate (evaluator)",
-            "verdict": result.get("verdict", "APPROVE"),
-            "regen":   result.get("regen", False),
-        },
-    }
+    # ── Normal response ────────────────────────────────────────────────────────
+    text = result.response_text or (
+        "I want to make sure I'm being as helpful as possible. "
+        "Could you tell me a little more about what's on your mind?"
+    )
 
-    yield SSEChunk(text=text, emotion="speak", safetyFlags=flags, trace=trace)
+    # Build evidence source list for frontend citations panel.
+    sources_used: list[str] = []
+    if result.trace and result.trace.evidence_used:
+        sources_used = result.trace.evidence_used
+
+    yield SSEChunk(
+        text=text,
+        emotion=_mode_to_emotion(result.mode),
+        sourcesUsed=sources_used,
+        trace=_result_to_trace(result),
+    )
+
+
+def _pipeline_run_sync(user_text: str) -> PipelineResult:
+    """
+    Thin synchronous wrapper around NikkoPipeline.run() for use with
+    asyncio.to_thread(). Separated so the async caller stays clean.
+    """
+    return _pipeline.run(user_input=user_text)
+
 
 # ── SSE helpers ───────────────────────────────────────────────────────────────
 
@@ -254,14 +307,15 @@ async def health():
             pass
     return {
         "status":    "ok",
-        "version":   "0.1.0",
+        "version":   "0.2.0",
         "space_ok":  space_ok,
         "ts":        int(time.time()),
     }
 
+
 @app.post("/api/message")
 async def message(body: MessageRequest):
-    """REQ-FIS-001: Primary chat endpoint -- streams SSE to the frontend."""
+    """REQ-FIS-001: Primary chat endpoint — streams SSE to the frontend."""
     if not body.text.strip():
         raise HTTPException(status_code=422, detail="text must not be empty")
 
@@ -272,9 +326,10 @@ async def message(body: MessageRequest):
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
+
 @app.post("/api/message/mock")
 async def message_mock(body: MessageRequest):
-    """REQ-FIS-TS1: Hardcoded fixture -- frontend testing without live agents."""
+    """REQ-FIS-TS1: Hardcoded fixture — frontend testing without live agents."""
     msg_id = f"mock-{int(time.time()*1000)}"
 
     async def _mock():
