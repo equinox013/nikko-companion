@@ -132,7 +132,7 @@ const AFFIRMATIONS = [
   "Reading between the lines\u2026",
   "You deserve a thoughtful reply."
 ];
-function ThinkingBubble() {
+function ThinkingBubble({ coldStart = false }) {
   const [elapsed, setElapsed] = React.useState(0);
   const [affIdx, setAffIdx] = React.useState(0);
   useEffect(() => {
@@ -152,13 +152,38 @@ function ThinkingBubble() {
   } else {
     label = AFFIRMATIONS[affIdx];
   }
-  return /* @__PURE__ */ React.createElement("div", { className: "bubble thinking-bubble", "aria-label": "Nikko is thinking", role: "status" }, /* @__PURE__ */ React.createElement("div", { className: "t-dots-row" }, /* @__PURE__ */ React.createElement("span", { className: "t-dot" }), /* @__PURE__ */ React.createElement("span", { className: "t-dot" }), /* @__PURE__ */ React.createElement("span", { className: "t-dot" })), /* @__PURE__ */ React.createElement("p", { className: "t-label" }, label));
+  return /* @__PURE__ */ React.createElement(
+    "div",
+    {
+      className: "bubble thinking-bubble" + (coldStart ? " cold-start-active" : ""),
+      "aria-label": "Nikko is thinking",
+      role: "status"
+    },
+    /* @__PURE__ */ React.createElement("div", { className: "t-dots-row" }, /* @__PURE__ */ React.createElement("span", { className: "t-dot" }), /* @__PURE__ */ React.createElement("span", { className: "t-dot" }), /* @__PURE__ */ React.createElement("span", { className: "t-dot" })),
+    /* @__PURE__ */ React.createElement("p", { className: "t-label" }, label),
+    coldStart && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { className: "cold-start-notice", "aria-live": "polite" }, /* @__PURE__ */ React.createElement(
+      "svg",
+      {
+        viewBox: "0 0 12 12",
+        fill: "none",
+        stroke: "currentColor",
+        strokeWidth: "1.5",
+        strokeLinecap: "round",
+        strokeLinejoin: "round",
+        "aria-hidden": "true"
+      },
+      /* @__PURE__ */ React.createElement("circle", { cx: "6", cy: "6", r: "5" }),
+      /* @__PURE__ */ React.createElement("path", { d: "M6 3.5V6l1.5 1.5" })
+    ), /* @__PURE__ */ React.createElement("span", { className: "cold-start-text" }, "Server is waking up \u2014 first load takes ~60\u201390 s"), /* @__PURE__ */ React.createElement("span", { className: "cold-start-elapsed", "aria-label": elapsed + " seconds elapsed" }, elapsed, "s")), /* @__PURE__ */ React.createElement("div", { className: "cold-start-bar", "aria-hidden": "true" }, /* @__PURE__ */ React.createElement("div", { className: "cold-start-bar-fill" })))
+  );
 }
 function Chat({ theme, onToggleTheme }) {
   const [messages, setMessages] = useState([
     { id: "open", role: "assistant", text: NIKKO_OPENING.text, emotion: NIKKO_OPENING.emotion, streaming: false }
   ]);
   const [streaming, setStreaming] = useState(false);
+  const [isColdStart, setIsColdStart] = useState(false);
+  const coldStartTimerRef = useRef(null);
   const [currentEmotion, setCurrentEmotion] = useState("calm");
   const [safetyVisible, setSafetyVisible] = useState(false);
   const [activeCite, setActiveCite] = useState(null);
@@ -248,10 +273,12 @@ function Chat({ theme, onToggleTheme }) {
   }, []);
   const streamReply = useCallback(async (userText) => {
     setStreaming(true);
+    setIsColdStart(false);
     const id = "m-" + Date.now();
     setMessages((prev) => [...prev, { id, role: "assistant", text: "", emotion: "listen", streaming: true, traceId: id }]);
     scrollToBottom();
     setCurrentEmotion("think");
+    coldStartTimerRef.current = setTimeout(() => setIsColdStart(true), 12e3);
     try {
       const response = await fetch(BACKEND_URL + "/api/message", {
         method: "POST",
@@ -281,6 +308,8 @@ function Chat({ theme, onToggleTheme }) {
               continue;
             }
             if (currentEvent === "message_start") {
+              clearTimeout(coldStartTimerRef.current);
+              setIsColdStart(false);
               setCurrentEmotion(data.emotion || "listen");
             } else if (currentEvent === "chunk") {
               if (data.safetyFlags && data.safetyFlags.includes("crisis_detected")) setSafetyVisible(true);
@@ -314,6 +343,8 @@ function Chat({ theme, onToggleTheme }) {
       }
       if (!accText) throw new Error("Empty stream \u2014 backend produced no text");
     } catch (err) {
+      clearTimeout(coldStartTimerRef.current);
+      setIsColdStart(false);
       console.warn("[Nikko] Backend unavailable \u2014 using local fallback:", err.message);
       const pattern = matchNikkoPattern(userText);
       if (pattern.safety) setSafetyVisible(true);
@@ -415,7 +446,7 @@ function Chat({ theme, onToggleTheme }) {
     if (m.role === "user") {
       return /* @__PURE__ */ React.createElement("div", { className: "msg user", key: m.id }, /* @__PURE__ */ React.createElement("div", { className: "body" }, /* @__PURE__ */ React.createElement("div", { className: "bubble" }, m.text)));
     }
-    return /* @__PURE__ */ React.createElement("div", { className: "msg assistant", key: m.id }, /* @__PURE__ */ React.createElement("div", { className: "avatar-slot" }, /* @__PURE__ */ React.createElement(NikkoAvatar, { emotion: m.emotion || "calm", size: 42 })), /* @__PURE__ */ React.createElement("div", { className: "body" }, m.traceId && !m.streaming && /* @__PURE__ */ React.createElement(AgentRibbon, { traceId: m.traceId }), m.text === "" && m.streaming ? /* @__PURE__ */ React.createElement(ThinkingBubble, null) : /* @__PURE__ */ React.createElement("div", { className: "bubble" }, /* @__PURE__ */ React.createElement(
+    return /* @__PURE__ */ React.createElement("div", { className: "msg assistant", key: m.id }, /* @__PURE__ */ React.createElement("div", { className: "avatar-slot" }, /* @__PURE__ */ React.createElement(NikkoAvatar, { emotion: m.emotion || "calm", size: 42 })), /* @__PURE__ */ React.createElement("div", { className: "body" }, m.traceId && !m.streaming && /* @__PURE__ */ React.createElement(AgentRibbon, { traceId: m.traceId }), m.text === "" && m.streaming ? /* @__PURE__ */ React.createElement(ThinkingBubble, { coldStart: isColdStart }) : /* @__PURE__ */ React.createElement("div", { className: "bubble" }, /* @__PURE__ */ React.createElement(
       MessageBody,
       {
         text: m.text,

@@ -182,6 +182,11 @@ const BACKEND_URL = 'https://nikko-companion.onrender.com';
 //   6–14s  — "Checking in on what you shared…"
 //   14–24s — "Putting together a response for you…"
 //   24s+   — Cycles through affirmations every 5s
+//
+// coldStart prop: set to true when 12s have elapsed since the fetch fired
+// but no message_start SSE event has been received yet, indicating the Render
+// backend and/or HF Space is cold-starting (~60–90s on first load).
+// The notice clears automatically once the stream begins.
 const THINK_STAGES = [
   { at: 0,  label: 'Reading your message…' },
   { at: 6,  label: 'Checking in on what you shared…' },
@@ -196,7 +201,7 @@ const AFFIRMATIONS = [
   'You deserve a thoughtful reply.',
 ];
 
-function ThinkingBubble() {
+function ThinkingBubble({ coldStart = false }) {
   const [elapsed, setElapsed] = React.useState(0);
   const [affIdx, setAffIdx]   = React.useState(0);
 
@@ -222,13 +227,41 @@ function ThinkingBubble() {
   }
 
   return (
-    <div className="bubble thinking-bubble" aria-label="Nikko is thinking" role="status">
+    <div className={'bubble thinking-bubble' + (coldStart ? ' cold-start-active' : '')}
+         aria-label="Nikko is thinking" role="status">
       <div className="t-dots-row">
         <span className="t-dot" />
         <span className="t-dot" />
         <span className="t-dot" />
       </div>
       <p className="t-label">{label}</p>
+
+      {/* Cold-start notice: only visible when the backend hasn't responded
+          within 12s — signals server is waking up from sleep (Render/HF Space
+          cold-start). Disappears the moment the SSE stream begins. */}
+      {coldStart && (
+        <>
+          <div className="cold-start-notice" aria-live="polite">
+            {/* Clock icon */}
+            <svg viewBox="0 0 12 12" fill="none" stroke="currentColor"
+                 strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"
+                 aria-hidden="true">
+              <circle cx="6" cy="6" r="5" />
+              <path d="M6 3.5V6l1.5 1.5" />
+            </svg>
+            <span className="cold-start-text">
+              Server is waking up — first load takes ~60–90 s
+            </span>
+            <span className="cold-start-elapsed" aria-label={elapsed + ' seconds elapsed'}>
+              {elapsed}s
+            </span>
+          </div>
+          {/* Indeterminate shimmer bar — visual cue that something is happening */}
+          <div className="cold-start-bar" aria-hidden="true">
+            <div className="cold-start-bar-fill" />
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -239,6 +272,12 @@ function Chat({ theme, onToggleTheme }) {
     { id: 'open', role: 'assistant', text: NIKKO_OPENING.text, emotion: NIKKO_OPENING.emotion, streaming: false }
   ]);
   const [streaming, setStreaming] = useState(false);
+  // isColdStart: true when 12s pass after a fetch fires with no SSE response
+  // yet (backend/HF Space is cold-starting). Cleared once message_start arrives.
+  const [isColdStart, setIsColdStart] = useState(false);
+  // Ref holds the cold-start detection timer so it can be cancelled from any
+  // branch of streamReply (success, empty-stream error, or catch fallback).
+  const coldStartTimerRef = useRef(null);
   const [currentEmotion, setCurrentEmotion] = useState('calm');
   const [safetyVisible, setSafetyVisible] = useState(false);
   const [activeCite, setActiveCite] = useState(null);
@@ -339,10 +378,18 @@ function Chat({ theme, onToggleTheme }) {
   // frontend never goes blank during Render cold-start or network errors.
   const streamReply = useCallback(async (userText) => {
     setStreaming(true);
+    setIsColdStart(false);
     const id = 'm-' + Date.now();
     setMessages(prev => [...prev, { id, role: 'assistant', text: '', emotion: 'listen', streaming: true, traceId: id }]);
     scrollToBottom();
     setCurrentEmotion('think');
+
+    // Start the cold-start detection timer. If no message_start SSE event
+    // arrives within 12 seconds, the backend (Render) or HF Space is still
+    // waking up — flip the flag so the user sees a specific cold-start notice.
+    // 12s is chosen because warm responses land in <5s; anything beyond that
+    // is reliably a cold-start scenario.
+    coldStartTimerRef.current = setTimeout(() => setIsColdStart(true), 12000);
 
     // [CONCEPT] SSE (Server-Sent Events): a unidirectional HTTP stream where
     // the server pushes events as "event: <name>\ndata: <json>\n\n" blocks.
@@ -380,6 +427,10 @@ function Chat({ theme, onToggleTheme }) {
             try { data = JSON.parse(line.slice(6)); } catch { continue; }
 
             if (currentEvent === 'message_start') {
+              // Server responded — cancel the cold-start timer and clear the
+              // notice. The pipeline is now processing (not stuck on startup).
+              clearTimeout(coldStartTimerRef.current);
+              setIsColdStart(false);
               setCurrentEmotion(data.emotion || 'listen');
 
             } else if (currentEvent === 'chunk') {
@@ -429,6 +480,8 @@ function Chat({ theme, onToggleTheme }) {
       // ── Fallback: backend unreachable (Render cold-start, network error) ──
       // Gracefully degrade to the hardcoded pattern matcher so the user always
       // gets a response. Logged to console for debugging; not surfaced to user.
+      clearTimeout(coldStartTimerRef.current);
+      setIsColdStart(false);
       console.warn('[Nikko] Backend unavailable — using local fallback:', err.message);
       const pattern = matchNikkoPattern(userText);
       if (pattern.safety) setSafetyVisible(true);
@@ -650,7 +703,85 @@ function Chat({ theme, onToggleTheme }) {
                     <div className="body">
                       {m.traceId && !m.streaming && <AgentRibbon traceId={m.traceId} />}
                       {m.text === '' && m.streaming ? (
-                        <ThinkingBubble />
+                        <ThinkingBubble coldStart={isColdStart} />
+                      ) : (
+                        <div className="bubble">
+                          <MessageBody
+                            text={m.text}
+                            sourceOrder={sourceOrderRef.current}
+                            onCiteClick={onCiteClick}
+                            streaming={!!m.streaming}
+                          />
+                        </div>
+                      )}
+                      {idx === 0 && showSuggestions && (
+                        <div className="suggest-row">
+                          {NIKKO_SUGGESTIONS.map(s => (
+                            <button key={s} className="suggest" onClick={() => onSend(s)}>{s}</button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="composer-wrap">
+            <div className="composer-inner">
+              {safetyVisible && <SafetyBanner onDismiss={() => setSafetyVisible(false)} />}
+              <Composer onSend={onSend} disabled={streaming} />
+              {/* G-UI-01: persistent AI disclaimer — always visible per REQ-300-164 */}
+              <AiDisclaimer />
+            </div>
+          </div>
+        </div>
+        {/* /thread-wrap */}
+
+        {rightTab === 'sources' && (
+          <SourcesPanel
+            sourceOrder={sourceOrderRef.current}
+            activeKey={activeCite}
+            onClose={() => setRightTab(null)}
+          />
+        )}
+      </main>
+
+      {/* Memory modals */}
+      {memOpen && (
+        <MemoryGenerateModal
+          open={memOpen}
+          onClose={() => setMemOpen(false)}
+          onCreated={() => setMemOpen(false)}
+        />
+      )}
+      {loadOpen && (
+        <MemoryLoadModal
+          open={loadOpen}
+          onClose={() => setLoadOpen(false)}
+          onLoaded={(name) => { setLoadOpen(false); onMemoryLoaded(name); }}
+        />
+      )}
+
+      {/* First-run tutorial */}
+      <Tutorial open={tutorialOpen} onSkip={closeTutorial} onDone={closeTutorial} />
+
+      {/* Agent debug overlay — gesture-gated: 2-click then 3s hold on avatar */}
+      <AgentDebugOverlay open={debugOpen} onClose={() => setDebugOpen(false)} />
+    </div>
+  );
+}
+
+Object.assign(window, { Chat });
+sistant" key={m.id}>
+                    <div className="avatar-slot">
+                      <NikkoAvatar emotion={m.emotion || 'calm'} size={42} />
+                    </div>
+                    <div className="body">
+                      {m.traceId && !m.streaming && <AgentRibbon traceId={m.traceId} />}
+                      {m.text === '' && m.streaming ? (
+                        <ThinkingBubble coldStart={isColdStart} />
                       ) : (
                         <div className="bubble">
                           <MessageBody
