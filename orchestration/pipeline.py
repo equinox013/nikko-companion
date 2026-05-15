@@ -94,6 +94,37 @@ from agents.router import Router, RouterDecision
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
+# ADP-B late-crisis sentinel
+# ---------------------------------------------------------------------------
+
+# [CONCEPT] ADPB_CRISIS_SENTINEL is a string token returned by
+# HFSpaceFullGenerator.generate() when ADP-B fires crisis=True AFTER the local
+# pipeline already routed to COMFORT mode (the stub SignalAgent doesn't detect
+# crisis — it only does keyword-based guidance detection).
+#
+# Instead of returning "" (which cascades into SAFE_FALLBACK with no crisis
+# resources shown), draft_generator.py returns this sentinel. NikkoPipeline.run()
+# intercepts it immediately after _step10_draft() and re-routes to a full CRISIS
+# PipelineResult, ensuring hotlines and the safety banner are always delivered.
+#
+# This constant must live here (not in backend/) to preserve the
+# DraftGeneratorProtocol abstraction: draft_generator.py imports from
+# orchestration.pipeline — the dependency direction never reverses.
+ADPB_CRISIS_SENTINEL = "__NIKKO_ADPB_CRISIS_DETECTED__"
+
+# Crisis text used for the ADP-B late-override path. Mirrors _CRISIS_TEXT in
+# backend/main.py — keep in sync if the hotlines or framing ever change.
+_ADPB_CRISIS_RESPONSE = (
+    "I'm really glad you reached out, and I want to make sure you're safe right now. "
+    "Please contact one of these services immediately:\n\n"
+    "- **Lifeline:** 13 11 14 (24/7)\n"
+    "- **Beyond Blue:** 1300 22 4636\n"
+    "- **13YARN** (Aboriginal & Torres Strait Islander): 13 92 76\n"
+    "- **Emergency:** 000\n\n"
+    "I'm here with you. Would you like to talk about what's going on?"
+)
+
+# ---------------------------------------------------------------------------
 # Inference environment flag
 # ---------------------------------------------------------------------------
 
@@ -579,6 +610,28 @@ class NikkoPipeline:
         #              + verified evidence + safety framing.
         draft = self._step10_draft(context, trace)
 
+        # ── ADP-B late-crisis override ────────────────────────────────────
+        # If the stub SignalAgent missed a crisis signal (it only does keyword
+        # guidance detection) and ADP-B caught it in the HF Space, the draft
+        # generator returns ADPB_CRISIS_SENTINEL instead of "" to avoid the
+        # silent SAFE_FALLBACK path. Intercept here and immediately deliver a
+        # proper CRISIS PipelineResult with hotlines and the safety flag set.
+        if draft == ADPB_CRISIS_SENTINEL:
+            crisis_resources = BASELINE_CRISIS_RESOURCES
+            trace.step("adpb_crisis_override")
+            trace.final_action = "adpb_crisis_override"
+            trace.latency_ms = (time.perf_counter() - t0) * 1000
+            logger.warning(
+                "Pipeline: ADP-B late-crisis override triggered. "
+                "Switching to CRISIS mode (local router was COMFORT)."
+            )
+            return PipelineResult(
+                response_text=_ADPB_CRISIS_RESPONSE,
+                mode=OperationalMode.CRISIS,
+                crisis_resources=crisis_resources,
+                trace=trace,
+            )
+
         # ── STEP 11: Evaluator ─────────────────────────────────────────────
         # REQ-700-080: every non-crisis response MUST pass Evaluator audit.
         # REQ-700-082: on failure → regenerate OR safe fallback.
@@ -927,26 +980,19 @@ class NikkoPipeline:
         """
         STEP 13 — Final response assembly (REQ-700-100/101).
 
-        Applies non-clinical framing and autonomy reinforcement.
-        In Phase 3 this is a lightweight string wrapper; the full
-        safety-framing layer is a Phase 5 deliverable (SPEC-600 §8).
+        Non-clinical framing is ensured by the Evaluator in STEP 11.
+        Autonomy reinforcement (REQ-700-101) is now satisfied at the UI
+        layer by the persistent AiDisclaimer component in chat.jsx
+        (G-UI-01 / REQ-300-164), which renders below the composer on every
+        turn. Appending a per-message suffix was redundant, produced formulaic
+        responses, and has been removed.
 
-        REQ-700-101:
-          - non-clinical framing (ensured by Evaluator in STEP 11)
-          - autonomy reinforcement — appended below when not already present
+        [PROPOSED-RECONCILIATION: Director-approved 2026-05-15. REQ-700-101
+        is fulfilled by AiDisclaimer in frontend rather than server-side string
+        appending. Logged as G-AUTONOMY-SUFFIX-01.]
         """
-        autonomy_suffix = (
-            "\n\nRemember: this is information to consider, not professional advice. "
-            "You're the expert on your own experience."
-        )
-        # Avoid double-appending in regen loops.
-        if "expert on your own experience" not in draft:
-            assembled = draft + autonomy_suffix
-        else:
-            assembled = draft
-
         trace.step("response_assembly")
-        return assembled
+        return draft
 
     # ------------------------------------------------------------------
     # Failure handlers

@@ -233,6 +233,9 @@ function Chat({ theme, onToggleTheme }) {
       el.scrollTop = el.scrollHeight;
     });
   }, []);
+  useEffect(() => {
+    setTimeout(scrollToBottom, 50);
+  }, [messages.length, scrollToBottom]);
   const onMemoryLoaded = useCallback((name) => {
     setMemLoaded(true);
     setMemName(name);
@@ -391,6 +394,13 @@ function Chat({ theme, onToggleTheme }) {
   }, [scrollToBottom, streamReply]);
   const liveEmotion = streaming ? currentEmotion : "calm";
   const showSuggestions = messages.length === 1 && !streaming;
+  const lastCompletedAssistantId = React.useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m.role === "assistant" && !m.streaming && m.traceId) return m.id;
+    }
+    return null;
+  }, [messages]);
   return /* @__PURE__ */ React.createElement("div", { className: "app" }, /* @__PURE__ */ React.createElement("header", { className: "topbar floating" }, /* @__PURE__ */ React.createElement("div", { className: "pillbar" }, /* @__PURE__ */ React.createElement("div", { className: "brand-mini" }, /* @__PURE__ */ React.createElement(
     "span",
     {
@@ -446,7 +456,7 @@ function Chat({ theme, onToggleTheme }) {
     if (m.role === "user") {
       return /* @__PURE__ */ React.createElement("div", { className: "msg user", key: m.id }, /* @__PURE__ */ React.createElement("div", { className: "body" }, /* @__PURE__ */ React.createElement("div", { className: "bubble" }, m.text)));
     }
-    return /* @__PURE__ */ React.createElement("div", { className: "msg assistant", key: m.id }, /* @__PURE__ */ React.createElement("div", { className: "avatar-slot" }, /* @__PURE__ */ React.createElement(NikkoAvatar, { emotion: m.emotion || "calm", size: 42 })), /* @__PURE__ */ React.createElement("div", { className: "body" }, m.traceId && !m.streaming && /* @__PURE__ */ React.createElement(AgentRibbon, { traceId: m.traceId }), m.text === "" && m.streaming ? /* @__PURE__ */ React.createElement(ThinkingBubble, { coldStart: isColdStart }) : /* @__PURE__ */ React.createElement("div", { className: "bubble" }, /* @__PURE__ */ React.createElement(
+    return /* @__PURE__ */ React.createElement("div", { className: "msg assistant", key: m.id }, /* @__PURE__ */ React.createElement("div", { className: "avatar-slot" }, /* @__PURE__ */ React.createElement(NikkoAvatar, { emotion: m.emotion || "calm", size: 42 })), /* @__PURE__ */ React.createElement("div", { className: "body" }, m.id === lastCompletedAssistantId && /* @__PURE__ */ React.createElement(AgentRibbon, { traceId: m.traceId }), m.text === "" && m.streaming ? /* @__PURE__ */ React.createElement(ThinkingBubble, { coldStart: isColdStart }) : /* @__PURE__ */ React.createElement("div", { className: "bubble" }, /* @__PURE__ */ React.createElement(
       MessageBody,
       {
         text: m.text,

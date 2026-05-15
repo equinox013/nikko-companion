@@ -41,6 +41,7 @@ from backend.context_prompt_builder import (
     build_adp_c_system,
 )
 from docs.schemas.acp_schemas import ResponseContextPayload
+from orchestration.pipeline import ADPB_CRISIS_SENTINEL
 
 logger = logging.getLogger(__name__)
 
@@ -128,16 +129,18 @@ class HFSpaceFullGenerator:
 
         result = resp.json()
 
-        # ADP-B fired crisis — defensive path. NikkoPipeline should have
-        # routed CRISIS messages before calling generate(), but if a signal
-        # slipped through, return "" and let the pipeline's fallback handle it.
+        # ADP-B fired crisis — the local stub SignalAgent missed the signal
+        # (it only handles keyword-based guidance detection). Return the sentinel
+        # so NikkoPipeline.run() intercepts it and issues a proper CRISIS
+        # PipelineResult with hotlines and safetyFlags. Previously returned ""
+        # here, which cascaded to SAFE_FALLBACK with no crisis resources shown.
         if result.get("is_crisis"):
             logger.warning(
-                "HFSpaceFullGenerator: ADP-B fired crisis=%s flags=%s after local "
-                "routing. Returning empty string — pipeline will use SAFE_FALLBACK.",
-                result.get("is_crisis"), result.get("flags"),
+                "HFSpaceFullGenerator: ADP-B late-crisis override — flags=%s. "
+                "Returning ADPB_CRISIS_SENTINEL for pipeline re-route.",
+                result.get("flags"),
             )
-            return ""
+            return ADPB_CRISIS_SENTINEL
 
         text = result.get("text", "")
         logger.info(

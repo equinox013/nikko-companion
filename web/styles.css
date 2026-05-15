@@ -1422,7 +1422,9 @@ body::before {
 .chat.floating .composer { box-shadow: none; border-color: var(--line-soft); }
 .chat.floating .thread {
   padding-top: 96px;
-  padding-bottom: 140px;
+  /* Increased from 140px: accounts for composer + composer-foot + AiDisclaimer
+     (~28px) to ensure the last bubble is never hidden behind the fixed bar. */
+  padding-bottom: 200px;
 }
 
 /* mood diary — progressive-disclosure layout */

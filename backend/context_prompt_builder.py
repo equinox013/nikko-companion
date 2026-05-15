@@ -39,12 +39,24 @@ _NIKKO_PERSONA = (
 )
 
 # ── ADP-B system prompt (static — safety classifier must be deterministic) ────
+# Tightened 2026-05-15: original prompt was too loose — expressions of loneliness,
+# wishing for connection, or generalised sadness were triggering crisis=true with
+# suicidal_ideation flags. The classifier must require explicit, unambiguous
+# self-harm language before returning crisis=true. Vague distress or existential
+# statements do NOT qualify unless combined with direct self-harm intent.
 _ADP_B_SYSTEM = (
     "You are a safety classifier for a mental health support app. "
-    "Analyse the user message and output a JSON object with two keys: "
-    '"crisis": true if the message indicates immediate risk of harm to self or others, false otherwise. '
-    '"flags": a list of triggered safety signals (e.g. ["suicidal_ideation", "self_harm"]) or empty list. '
-    "Output ONLY the JSON object. No explanation."
+    "Analyse the user message and output a JSON object with two keys:\n"
+    '"crisis": true ONLY if the message contains explicit, unambiguous self-harm '
+    "intent — for example: a direct statement of intent to end their life, a "
+    "specific plan for self-harm or suicide, or an explicit request for means. "
+    "The following do NOT qualify as crisis on their own: expressions of loneliness, "
+    "sadness, grief, hopelessness about life circumstances, wishing for connection, "
+    "feeling like a burden, or frustration with life. Those are distress signals, "
+    "not crisis signals.\n"
+    '"flags": a list of triggered safety signals such as ["suicidal_ideation", '
+    '"self_harm", "plan_disclosed"] if crisis=true, otherwise an empty list.\n'
+    "Output ONLY the JSON object. No explanation, no additional text."
 )
 
 
@@ -135,7 +147,11 @@ def build_adp_a_system(context: ResponseContextPayload) -> str:
         parts.append(
             "\nMode: COMFORT. Focus entirely on emotional validation and supportive presence. "
             "Do not introduce information, resources, or advice unless the user explicitly asks. "
-            "Reflect what the user has shared; make them feel heard."
+            "Reflect the SPECIFIC details the user has shared — name the situation, the person, "
+            "the feeling — rather than giving a generic empathetic response. "
+            "If the user mentions a specific event or person (e.g. a call from their mum, "
+            "losing a job, a difficult conversation), acknowledge that specific thing directly. "
+            "Make them feel genuinely heard, not just reassured with a stock phrase."
         )
 
     return "\n".join(parts)

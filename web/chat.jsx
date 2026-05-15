@@ -332,6 +332,14 @@ function Chat({ theme, onToggleTheme }) {
     requestAnimationFrame(() => { el.scrollTop = el.scrollHeight; });
   }, []);
 
+  // Auto-scroll whenever the message list grows (new user or assistant message).
+  // scrollToBottom() uses requestAnimationFrame, which fires before React commits
+  // new DOM nodes in concurrent mode — so we add a small timeout here to let
+  // React flush the render first. 50ms is imperceptible but reliable.
+  useEffect(() => {
+    setTimeout(scrollToBottom, 50);
+  }, [messages.length, scrollToBottom]);
+
   // Welcome-back assistant message when memory loads
   const onMemoryLoaded = useCallback((name) => {
     setMemLoaded(true);
@@ -535,6 +543,18 @@ function Chat({ theme, onToggleTheme }) {
   const liveEmotion = streaming ? currentEmotion : 'calm';
   const showSuggestions = messages.length === 1 && !streaming;
 
+  // Only show AgentRibbon on the most recent completed assistant message.
+  // Showing it on every message is repetitive — the ribbon's purpose is to
+  // confirm the current response ran through the adapter stack, not to
+  // annotate the entire conversation history.
+  const lastCompletedAssistantId = React.useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m.role === 'assistant' && !m.streaming && m.traceId) return m.id;
+    }
+    return null;
+  }, [messages]);
+
   return (
     <div className="app">
       <header className="topbar floating">
@@ -701,7 +721,7 @@ function Chat({ theme, onToggleTheme }) {
                       <NikkoAvatar emotion={m.emotion || 'calm'} size={42} />
                     </div>
                     <div className="body">
-                      {m.traceId && !m.streaming && <AgentRibbon traceId={m.traceId} />}
+                      {m.id === lastCompletedAssistantId && <AgentRibbon traceId={m.traceId} />}
                       {m.text === '' && m.streaming ? (
                         <ThinkingBubble coldStart={isColdStart} />
                       ) : (
