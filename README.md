@@ -1,8 +1,43 @@
 # Nikko — Evidence-Grounded Wellbeing Assistant
 
+![Research Preview](https://img.shields.io/badge/status-research%20preview-orange)
+![Phase](https://img.shields.io/badge/phase-4%20%E2%80%94%20model%20training-blue)
+![Models](https://img.shields.io/badge/models-Phi--3.5--mini%20%2B%20Gemma--2--2b-informational)
+![Python](https://img.shields.io/badge/python-3.11-green)
+![License](https://img.shields.io/badge/license-research%20use-lightgrey)
+![Infra](https://img.shields.io/badge/infra-HF%20Spaces%20%2B%20Fly.io%20%2B%20GitHub%20Pages-purple)
+
 Nikko is a safety-aligned, evidence-grounded LLM ecosystem designed to function as a compassionate digital confidant. It listens, validates, and surfaces reliable information — but it never diagnoses, never prescribes, and always defers to human care when it matters most.
 
 > *Nikko illuminates possible paths. The user must always walk toward human support themselves.*
+
+---
+
+## Project Status
+
+> **Near-MVP.** The full stack is deployed end-to-end on free-tier infrastructure. The React frontend communicates with a Fly.io orchestration backend, which routes to a Hugging Face ZeroGPU Space running the dual-model pipeline. Fine-tuned adapter training is in progress (Phase 4, Steps 11–19). Phase 5 (backend API integration replacing hardcoded frontend fallbacks) is the next gate.
+
+| Layer | Status |
+|-------|--------|
+| Specifications (8 + 3 supplementary) | ✅ Complete |
+| Agent pipeline (7 specialist agents) | ✅ Complete |
+| Frontend SPA | ✅ Complete |
+| Deployment infra (HF + Fly.io + GH Pages) | ✅ Live |
+| ADP-C fine-tuning (Gemma-2-2b-it) | ✅ v1 trained |
+| ADP-A fine-tuning (Phi-3.5-mini) | 🔨 v1 in progress |
+| ADP-B fine-tuning (Gemma-2-2b-it) | 🔨 In progress |
+| Backend API integration (Phase 5) | ⏳ Pending Phase 4 completion |
+| End-to-end evaluation (Phase 6) | ⏳ Pending Phase 5 + infra |
+
+---
+
+## Proof of Concept
+
+> Full pipeline running end-to-end: user message → ADP-B crisis check → ADP-A empathy response → ADP-C evaluation → frontend with live source citations.
+
+![Nikko proof-of-concept screenshot — chat interface showing a user asking for calming tips, Nikko responding with evidence-grounded guidance, and 5 PubMed sources cited in the sources panel](docs/assets/nikko-poc-screenshot.png)
+
+*The "3 ADAPTERS" badge confirms ADP-B → ADP-A → ADP-C all ran in a single ZeroGPU session. Sources panel shows APA7-formatted PubMed citations pulled live by the retrieval layer.*
 
 ---
 
@@ -265,6 +300,21 @@ Every design decision in Nikko traces to a named requirement in the spec. The ke
 | Adapter weights | HF Hub private repo | Pulled at Space startup; not bundled in image |
 
 Cold start (first request after Space rebuild): ~90–120s. Warm turns: ~20–40s. The ThinkingBubble and loading screen manage user expectation during both cases.
+
+---
+
+## Key Documents
+
+| Document | What it is |
+|----------|-----------|
+| [`CLAUDE.md`](CLAUDE.md) | Operating manual — phase gates, conventions, binding constraints. Read every session. |
+| [`docs/INDEX.md`](docs/INDEX.md) | Map of every spec and derived document. |
+| [`docs/GLOSSARY.md`](docs/GLOSSARY.md) | Canonical terms — modes, distress levels, agents, adapters. |
+| [`docs/GAPS.md`](docs/GAPS.md) | All open questions and Director rulings. |
+| [`docs/DEVLOG.md`](docs/DEVLOG.md) | Daily development log — decisions, justifications, learnings. |
+| [`docs/specs/SPEC-000-charter.md`](docs/specs/SPEC-000-charter.md) | System charter. Supersedes all other specs on conflict. |
+| [`docs/integration/FRONTEND_INTEGRATION_SPEC.md`](docs/integration/FRONTEND_INTEGRATION_SPEC.md) | Frontend ↔ backend API contract. |
+| [`notebooks/`](notebooks/) | Step-by-step training notebooks (Steps 11–19 active). |
 
 ---
 

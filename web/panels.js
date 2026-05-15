@@ -1,16 +1,23 @@
-var NikkoPanels = (() => {
-  // web/panels.jsx
-  var { useState: ps, useEffect: pe, useRef: pr } = React;
+(() => {
+  const { useState: ps, useEffect: pe, useRef: pr } = React;
+  function formatAuthors(authors) {
+    if (!authors || authors.length === 0) return null;
+    if (authors.length === 1) return authors[0];
+    if (authors.length <= 20) {
+      return authors.slice(0, -1).join(", ") + ", & " + authors[authors.length - 1];
+    }
+    return authors.slice(0, 19).join(", ") + ", ..." + authors[authors.length - 1];
+  }
   function formatAPA7(source) {
-    const org = (source.source_name || "Unknown organisation").trim();
+    const authorStr = formatAuthors(source.authors) || (source.source_name || "Unknown organisation").trim();
     const year = source.year ? source.year : "n.d.";
     const title = (source.title || "(Untitled)").trim();
     const url = (source.url || "").trim();
     if (source.evidence_tier === "peer_reviewed") {
-      return url ? `${org}. (${year}). ${title}. ${url}` : `${org}. (${year}). ${title}.`;
+      return url ? `${authorStr} (${year}). ${title}. ${url}` : `${authorStr} (${year}). ${title}.`;
     }
     const location = url ? source.year ? url : `Retrieved from ${url}` : "";
-    return location ? `${org}. (${year}). ${title}. ${location}` : `${org}. (${year}). ${title}.`;
+    return location ? `${authorStr} (${year}). ${title}. ${location}` : `${authorStr} (${year}). ${title}.`;
   }
   function SourcesPanel({ sourceOrder, activeKey, onClose, dynamicSources }) {
     const hasDynamic = dynamicSources && dynamicSources.length > 0;
@@ -29,7 +36,7 @@ var NikkoPanels = (() => {
         borderRadius: 4,
         padding: "1px 5px",
         marginLeft: 6
-      } }, "Peer-reviewed")), /* @__PURE__ */ React.createElement("div", { className: "title" }, s.title), s.url && /* @__PURE__ */ React.createElement("a", { className: "linkrow", href: s.url, target: "_blank", rel: "noopener noreferrer" }, s.url.replace(/^https?:\/\//, "").slice(0, 60), s.url.length > 67 ? "\u2026" : ""), /* @__PURE__ */ React.createElement("div", { className: "apa" }, formatAPA7(s)))), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "var(--muted)", padding: "10px 4px 0" } }, "References formatted to APA 7th edition (best-effort \u2014 full author/volume metadata requires Phase 5 PubMed enrichment).")));
+      } }, "Peer-reviewed")), /* @__PURE__ */ React.createElement("div", { className: "title" }, s.title), s.url && /* @__PURE__ */ React.createElement("a", { className: "linkrow", href: s.url, target: "_blank", rel: "noopener noreferrer" }, s.url.replace(/^https?:\/\//, "").slice(0, 60), s.url.length > 67 ? "…" : ""), /* @__PURE__ */ React.createElement("div", { className: "apa" }, formatAPA7(s)))), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "var(--muted)", padding: "10px 4px 0" } }, "References formatted to APA 7th edition (best-effort — full author/volume metadata requires Phase 5 PubMed enrichment).")));
     }
     const ordered = Object.entries(sourceOrder).sort((a, b) => a[1] - b[1]).map(([k, n]) => ({ key: k, num: n, ...NIKKO_SOURCES[k] || {} }));
     pe(() => {
@@ -46,7 +53,7 @@ var NikkoPanels = (() => {
       },
       /* @__PURE__ */ React.createElement("div", { className: "row" }, /* @__PURE__ */ React.createElement("span", { className: "num" }, s.num), /* @__PURE__ */ React.createElement("span", null, s.org)),
       /* @__PURE__ */ React.createElement("div", { className: "title" }, s.title),
-      s.href && s.href !== "#" && /* @__PURE__ */ React.createElement("a", { className: "linkrow", href: s.href, target: "_blank", rel: "noopener noreferrer" }, s.href.replace(/^https?:\/\//, "").slice(0, 60), s.href.length > 67 ? "\u2026" : ""),
+      s.href && s.href !== "#" && /* @__PURE__ */ React.createElement("a", { className: "linkrow", href: s.href, target: "_blank", rel: "noopener noreferrer" }, s.href.replace(/^https?:\/\//, "").slice(0, 60), s.href.length > 67 ? "…" : ""),
       /* @__PURE__ */ React.createElement("div", { className: "blurb" }, s.blurb),
       s.apa && /* @__PURE__ */ React.createElement("div", { className: "apa" }, s.apa)
     ))));
@@ -59,7 +66,7 @@ var NikkoPanels = (() => {
     const d = /* @__PURE__ */ new Date(iso + "T00:00:00");
     return d.toLocaleDateString(void 0, { weekday: "short", month: "short", day: "numeric" });
   }
-  var EMOTION_OPTIONS = [
+  const EMOTION_OPTIONS = [
     "calm",
     "tired",
     "anxious",
@@ -75,8 +82,8 @@ var NikkoPanels = (() => {
     "restless",
     "focused"
   ];
-  var EMOTION_PRIMARY = 8;
-  var TRIGGER_OPTIONS = [
+  const EMOTION_PRIMARY = 8;
+  const TRIGGER_OPTIONS = [
     "work",
     "sleep",
     "family",
@@ -88,10 +95,10 @@ var NikkoPanels = (() => {
     "news",
     "nothing specific"
   ];
-  var TRIGGER_PRIMARY = 6;
-  var MOOD_COLORS = ["#c95a5a", "#d77452", "#db8f4e", "#d4a352", "#c9b260", "#a9b76a", "#88b378", "#6aab83", "#4f9c8c", "#3d8a8e"];
-  var JOURNAL_LIMIT = 4e3;
-  var POMODORO_SECS = 10 * 60;
+  const TRIGGER_PRIMARY = 6;
+  const MOOD_COLORS = ["#c95a5a", "#d77452", "#db8f4e", "#d4a352", "#c9b260", "#a9b76a", "#88b378", "#6aab83", "#4f9c8c", "#3d8a8e"];
+  const JOURNAL_LIMIT = 4e3;
+  const POMODORO_SECS = 10 * 60;
   function MoodDiaryPanel({ entries, onSet, onClose }) {
     const [selectedDay, setSelectedDay] = ps(todayISO());
     const e0 = entries[selectedDay] || { mood: 0, emotions: [], triggers: [], note: "", journal: "" };
@@ -167,7 +174,7 @@ var NikkoPanels = (() => {
       "textarea",
       {
         className: "mood-text",
-        placeholder: "Just a sentence or two \u2014 optional.",
+        placeholder: "Just a sentence or two — optional.",
         value: draftNote,
         onChange: (e) => setDraftNote(e.target.value),
         rows: 2
@@ -205,7 +212,7 @@ var NikkoPanels = (() => {
     )))), !showReflection ? /* @__PURE__ */ React.createElement("button", { className: "mood-add-reflection", onClick: () => setShowReflection(true) }, /* @__PURE__ */ React.createElement("span", { className: "plus" }, "+"), /* @__PURE__ */ React.createElement("span", null, "Add a 10-minute reflection")) : /* @__PURE__ */ React.createElement("div", { className: "mood-section reflection-block" }, /* @__PURE__ */ React.createElement("div", { className: "reflection-head" }, /* @__PURE__ */ React.createElement("label", null, "Reflection"), /* @__PURE__ */ React.createElement("button", { className: "mood-link", onClick: () => {
       setShowReflection(false);
       setRunning(false);
-    } }, "hide")), /* @__PURE__ */ React.createElement("div", { className: "pomodoro" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: `clock ${running && secsLeft < 60 ? "warn" : ""}` }, mm, ":", ss), /* @__PURE__ */ React.createElement("div", { className: "meta" }, running ? "writing\u2026" : secsLeft === 0 ? "time up" : "paused")), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 6 } }, !running && secsLeft > 0 && /* @__PURE__ */ React.createElement("button", { onClick: () => setRunning(true) }, secsLeft === POMODORO_SECS ? "Start" : "Resume"), running && /* @__PURE__ */ React.createElement("button", { onClick: () => setRunning(false) }, "Pause"), /* @__PURE__ */ React.createElement("button", { onClick: () => {
+    } }, "hide")), /* @__PURE__ */ React.createElement("div", { className: "pomodoro" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: `clock ${running && secsLeft < 60 ? "warn" : ""}` }, mm, ":", ss), /* @__PURE__ */ React.createElement("div", { className: "meta" }, running ? "writing…" : secsLeft === 0 ? "time up" : "paused")), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 6 } }, !running && secsLeft > 0 && /* @__PURE__ */ React.createElement("button", { onClick: () => setRunning(true) }, secsLeft === POMODORO_SECS ? "Start" : "Resume"), running && /* @__PURE__ */ React.createElement("button", { onClick: () => setRunning(false) }, "Pause"), /* @__PURE__ */ React.createElement("button", { onClick: () => {
       setRunning(false);
       setSecsLeft(POMODORO_SECS);
     } }, "Reset"))), /* @__PURE__ */ React.createElement(
@@ -234,13 +241,13 @@ var NikkoPanels = (() => {
         }
       ),
       /* @__PURE__ */ React.createElement("span", { className: "mood-row-date" }, formatDay(iso)),
-      /* @__PURE__ */ React.createElement("span", { className: "mood-row-summary" }, e.note ? e.note : e.emotions && e.emotions.length ? e.emotions.slice(0, 3).join(" \xB7 ") : e.journal ? "reflection saved" : "\u2014"),
-      /* @__PURE__ */ React.createElement("span", { className: "mood-row-score" }, e.mood ? e.mood : "\u2014")
+      /* @__PURE__ */ React.createElement("span", { className: "mood-row-summary" }, e.note ? e.note : e.emotions && e.emotions.length ? e.emotions.slice(0, 3).join(" \xB7 ") : e.journal ? "reflection saved" : "—"),
+      /* @__PURE__ */ React.createElement("span", { className: "mood-row-score" }, e.mood ? e.mood : "—")
     )))));
   }
-  var TUTORIAL_STEPS = [
+  const TUTORIAL_STEPS = [
     {
-      title: "Welcome \u2014 is this your first time?",
+      title: "Welcome — is this your first time?",
       body: "Nikko is a quiet place to think out loud. Take 30 seconds to see what's here, or skip ahead any time.",
       features: null
     },
@@ -250,7 +257,7 @@ var NikkoPanels = (() => {
       features: [
         { ico: "mem", title: "Personal Memory", body: "Optional encrypted memory file you keep on your device. Top-right." },
         { ico: "src", title: "Sources tab", body: "Right side. Anything Nikko cites links to a source with a summary and APA 7 reference." },
-        { ico: "mood", title: "Mood diary", body: "Left side. A 1\u20135 scale and an optional note per day. Stored locally." },
+        { ico: "mood", title: "Mood diary", body: "Left side. A 1–5 scale and an optional note per day. Stored locally." },
         { ico: "exit", title: "Quick exit", body: "Top-right. One tap clears this session and navigates away." }
       ]
     },

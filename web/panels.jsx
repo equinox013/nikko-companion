@@ -6,28 +6,38 @@ const { useState: ps, useEffect: pe, useRef: pr } = React;
 // Produces a best-effort APA 7th edition reference string from a SourceItem
 // (the serialised EvidenceItem returned by the backend pipeline).
 //
-// APA 7 web page / org report format:
-//   Author/Org. (Year). Title of page. Site Name. URL
+// APA 7 journal article format (PubMed peer-reviewed, authors present):
+//   Last, F. M., & Last, F. M. (Year). Title. URL
 //
-// APA 7 journal article format (used when evidence_tier === "peer_reviewed"):
-//   Author/Org. (Year). Title. Journal Name. DOI/URL
-//
-// Because EvidenceItem does not carry individual author names or journal
-// volume/issue details, source_name fills the Author/Org position and
-// the URL fills the DOI/location position. This is the closest conformant
-// representation without richer metadata — flagged as a Phase 5 enhancement
-// (fuller PubMed metadata parsing in the retrieval layer).
+// APA 7 web page / org report format (grey-literature, no authors):
+//   Organisation. (Year). Title of page. URL
+
+// formatAuthors: apply APA 7 §9.8 author-list rules.
+//   ≤1 author  → "Last, F. M."
+//   2–20       → "Last, F. M., Last, B. C., ..., & Last, Z. Z."
+//   21+        → first 19 authors + " ..." + last author (§9.8 ellipsis rule)
+function formatAuthors(authors) {
+  if (!authors || authors.length === 0) return null;
+  if (authors.length === 1) return authors[0];
+  if (authors.length <= 20) {
+    return authors.slice(0, -1).join(', ') + ', & ' + authors[authors.length - 1];
+  }
+  // 21+ authors: first 19, then ellipsis, then final author (APA7 §9.8).
+  return authors.slice(0, 19).join(', ') + ', ...' + authors[authors.length - 1];
+}
+
 function formatAPA7(source) {
-  const org   = (source.source_name || 'Unknown organisation').trim();
+  // Use real author names when available (PubMed items); fall back to org name.
+  const authorStr = formatAuthors(source.authors) || (source.source_name || 'Unknown organisation').trim();
   const year  = source.year ? source.year : 'n.d.';
   const title = (source.title || '(Untitled)').trim();
   const url   = (source.url || '').trim();
 
   if (source.evidence_tier === 'peer_reviewed') {
-    // Journal / peer-reviewed format
+    // Journal / peer-reviewed format — no "Retrieved from", URL is the DOI/link.
     return url
-      ? `${org}. (${year}). ${title}. ${url}`
-      : `${org}. (${year}). ${title}.`;
+      ? `${authorStr} (${year}). ${title}. ${url}`
+      : `${authorStr} (${year}). ${title}.`;
   }
   // Web page / grey-literature format — APA 7 requires "Retrieved from" for
   // undated web pages; for dated pages the URL alone is sufficient.
@@ -35,8 +45,8 @@ function formatAPA7(source) {
     ? (source.year ? url : `Retrieved from ${url}`)
     : '';
   return location
-    ? `${org}. (${year}). ${title}. ${location}`
-    : `${org}. (${year}). ${title}.`;
+    ? `${authorStr} (${year}). ${title}. ${location}`
+    : `${authorStr} (${year}). ${title}.`;
 }
 
 // ── Sources panel (right) ───────────────────────────────────────────

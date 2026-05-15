@@ -203,6 +203,11 @@ class EvidenceItem(BaseModel):
     source_tier:      SourceTier
     cache_hit:        bool           = False
     retrieved_at:     datetime
+    # APA7 author list — formatted as ["Last, F. M.", "Last, B. C."] strings.
+    # Populated by PubMedAdapter from the PubMed XML AuthorList element.
+    # Empty for grey-literature adapters that do not carry structured authorship.
+    # Used by the frontend formatAPA7() function in panels.jsx.
+    authors:          list[str]      = Field(default_factory=list)
 
 
 class EvidencePayload(BaseModel):

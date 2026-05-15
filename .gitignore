@@ -73,11 +73,16 @@ credentials.json
 # --- NIKKO internal / operational files (not for public repo) ---
 CLAUDE.md
 NIKKO-spec.docx
+fly.toml
 docs/GLOSSARY.md
 docs/GAPS.md
 docs/INDEX.md
 docs/REQUIREMENTS_INDEX.md
+docs/DEPLOY-HYBRID-MVP.md
 docs/derived/
+
+# --- Backend deployment config (active fly.toml lives at repo root) ---
+backend/fly.toml
 
 # --- Training pipeline (private — kept local only) ---
 notebooks/

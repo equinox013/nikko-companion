@@ -85,6 +85,24 @@ _DISAGREEMENT_OVERLAP_THRESHOLD: float = 0.25
 # Short snippets (scraped descriptions, truncated fields) produce false positives.
 _MIN_ABSTRACT_TOKENS: int = 15
 
+# Relevance filtering: minimum fraction of query tokens that must appear in
+# an item's combined title + abstract text for it to pass the relevance gate.
+#
+# Rationale: a broad PubMed query like "relaxation techniques anxiety management
+# mental health" may return papers about CBT for menopausal symptoms. Those papers
+# discuss CBT and stress management but don't contain "relaxation", "calm", etc.
+# A 0.20 threshold means at least 1-in-5 non-trivial query terms must appear.
+# Too high (>0.40) risks filtering genuinely relevant papers with sparse abstracts.
+_MIN_RELEVANCE_SCORE: float = 0.20
+
+# Stop words excluded from relevance scoring — too generic to be discriminating.
+_RELEVANCE_STOP: frozenset[str] = frozenset({
+    "a", "an", "the", "of", "in", "on", "and", "or", "for", "to",
+    "with", "by", "from", "at", "is", "are", "was", "were",
+    # Domain-level stop words: every mental health paper contains these.
+    "mental", "health", "management", "support", "strategies", "wellbeing",
+})
+
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -253,6 +271,36 @@ def _detect_disagreement(items: list[EvidenceItem]) -> tuple[bool, Optional[str]
     return False, None
 
 
+def _relevance_score(item: EvidenceItem, query: str) -> float:
+    """
+    Compute a relevance score: fraction of meaningful query tokens that appear
+    anywhere in the item's title + abstract text.
+
+    Metric: matched_tokens / total_query_tokens (coverage ratio).
+    Domain stop words and tokens shorter than 3 characters are excluded so that
+    "mental health management" doesn't inflate scores via near-universal terms.
+
+    Returns 1.0 when the query has no meaningful tokens — i.e. nothing to filter on.
+    Examples (query="relaxation techniques anxiety calm"):
+      "CBT for anxiety and depression" → matched {"anxiety"} / 3 unique terms = 0.33 ✓
+      "CBT for (peri)menopausal symptoms" → matched {} / 3 unique terms = 0.0  ✗
+    """
+    query_tokens = set(
+        t for t in re.sub(r"[^a-z0-9\s]", "", query.lower()).split()
+        if t not in _RELEVANCE_STOP and len(t) > 2
+    )
+    if not query_tokens:
+        # No discriminating terms in the query — accept everything.
+        return 1.0
+
+    item_text = (item.title + " " + item.abstract).lower()
+    item_text_clean = re.sub(r"[^a-z0-9\s]", "", item_text)
+    item_word_set = set(item_text_clean.split())
+
+    matched = len(query_tokens & item_word_set)
+    return matched / len(query_tokens)
+
+
 def _compute_confidence(
     citations: list[EvidenceItem],
     grey_literature_used: bool,
@@ -374,6 +422,24 @@ class EvidenceSynthesizerAgent:
         # 2. Sort by G-EVIDENCE-01 tiebreak BEFORE dedup so that when two
         #    near-duplicates exist, the higher-quality item is retained.
         all_items.sort(key=_sort_key)
+
+        # 2b. Relevance filter — discard items whose title + abstract share too
+        # few tokens with the query. This prevents broad PubMed queries from
+        # surfacing topically off-target papers (e.g. a CBT/menopausal-symptoms
+        # paper returned for a "relaxation anxiety calm" query). Only applied
+        # when a non-empty query is provided; skipped in Crisis Mode (no query).
+        if query:
+            pre_count = len(all_items)
+            all_items = [
+                item for item in all_items
+                if _relevance_score(item, query) >= _MIN_RELEVANCE_SCORE
+            ]
+            filtered_count = pre_count - len(all_items)
+            if filtered_count:
+                logger.info(
+                    "Relevance filter removed %d item(s) below threshold=%.2f "
+                    "(query=%r).", filtered_count, _MIN_RELEVANCE_SCORE, query[:60],
+                )
 
         # 3. Deduplicate.
         deduped = _deduplicate(all_items)

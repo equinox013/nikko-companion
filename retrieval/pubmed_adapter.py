@@ -411,6 +411,7 @@ class PubMedAdapter(CachedBaseAdapter):
             title     = self._extract_title(article_el)
             abstract  = self._extract_abstract(article_el, pmid)
             pub_date  = self._extract_pubdate(article_el)
+            authors   = self._extract_authors(article_el)
             url       = f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/" if pmid else ""
 
             items.append(EvidenceItem(
@@ -423,6 +424,7 @@ class PubMedAdapter(CachedBaseAdapter):
                 source_tier      = self.SOURCE_TIER,
                 cache_hit        = False,
                 retrieved_at     = retrieved_at,
+                authors          = authors,
             ))
 
         return items
@@ -496,3 +498,59 @@ class PubMedAdapter(CachedBaseAdapter):
         if day:
             parts.append(day.zfill(2))
         return "-".join(parts)
+
+    @staticmethod
+    def _extract_authors(article_el: ET.Element) -> list[str]:
+        """
+        Extract and APA7-format author names from the PubMed AuthorList element.
+
+        PubMed XML AuthorList structure:
+          <AuthorList CompleteYN="Y">
+            <Author ValidYN="Y">
+              <LastName>Smith</LastName>
+              <ForeName>John A</ForeName>
+              <Initials>JA</Initials>
+            </Author>
+            <!-- collective author example: -->
+            <Author ValidYN="Y">
+              <CollectiveName>The RECOVERY Collaborative Group</CollectiveName>
+            </Author>
+          </AuthorList>
+
+        Output format: ["Smith, J. A.", "Jones, B. C."] — suitable for
+        direct use in APA7 reference strings.
+
+        Capped at 20 authors: APA7 §9.8 lists up to 20 authors before
+        ellipsis; the frontend handles the truncation display logic.
+        """
+        formatted: list[str] = []
+        for author in article_el.findall(".//AuthorList/Author"):
+            last = author.findtext("LastName")
+            if not last:
+                # Corporate / collective author — use CollectiveName as-is.
+                collective = author.findtext("CollectiveName")
+                if collective:
+                    formatted.append(collective.strip())
+                continue
+
+            initials = (author.findtext("Initials") or "").strip()
+            if initials:
+                # Convert raw initials string (e.g. "JA", "JA Jr") to APA7
+                # dotted form: "J. A." Strips periods already present and
+                # re-inserts them uniformly. Non-alpha suffix tokens (Jr, Sr,
+                # III) are dropped — they are not used in APA7 initials.
+                raw_letters = [
+                    ch for ch in initials.replace(".", "").split()
+                    if ch.isalpha() and len(ch) == 1
+                ]
+                dotted = " ".join(f"{ch.upper()}." for ch in raw_letters)
+                formatted.append(f"{last.strip()}, {dotted}" if dotted else last.strip())
+            else:
+                formatted.append(last.strip())
+
+            if len(formatted) >= 20:
+                # APA7 §9.8: list up to 20 authors; beyond 20 use ellipsis
+                # (handled by the frontend formatAuthors helper in panels.jsx).
+                break
+
+        return formatted

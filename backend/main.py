@@ -133,17 +133,20 @@ class SourceItem(BaseModel):
     Serializable representation of one retrieved EvidenceItem for the frontend
     sources panel. Carries only what the frontend needs to render an APA7 card.
 
-    APA7 web source format (best-effort with available metadata):
+    APA7 journal format (PubMed):
+      Last, F. M., & Last, F. M. (Year). Title. URL
+    APA7 web / org report format:
       Organisation. (Year). Title. Retrieved from URL
-
-    APA7 journal format (PubMed items — author/volume not always available):
-      Source Name. (Year). Title. URL
     """
     title:         str
     url:           str
-    source_name:   str                  # org / journal name
+    source_name:   str                  # org / journal name (fallback author)
     year:          str | None = None    # YYYY extracted from publication_date
     evidence_tier: str = "grey_literature"   # "peer_reviewed" | "grey_literature"
+    # APA7-formatted author list from PubMed AuthorList. Empty for grey-lit
+    # sources that do not carry structured authorship metadata.
+    # Format: ["Last, F. M.", "Last, B. C."] — consumed by panels.jsx formatAPA7().
+    authors:       list[str] = Field(default_factory=list)
 
 class SSEChunk(BaseModel):
     text:        str              = ""
@@ -247,6 +250,7 @@ def _citations_to_sources(result: PipelineResult) -> list[SourceItem]:
             source_name=ev.source_name or "Unknown source",
             year=year,
             evidence_tier=ev.evidence_tier.value if hasattr(ev.evidence_tier, "value") else str(ev.evidence_tier),
+            authors=getattr(ev, "authors", []) or [],
         ))
 
         if len(items) >= 8:
