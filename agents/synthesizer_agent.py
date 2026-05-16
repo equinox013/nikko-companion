@@ -44,6 +44,7 @@ from __future__ import annotations
 import re
 import logging
 from datetime import datetime, timezone, timedelta
+from functools import partial
 from typing import Optional
 
 # [CONCEPT] We import the shared Pydantic schemas from acp_schemas.py. These
@@ -164,31 +165,62 @@ def _is_recent_peer_reviewed(item: EvidenceItem) -> bool:
     return pub_date >= cutoff
 
 
-def _sort_key(item: EvidenceItem):
+def _sort_key(
+    item: EvidenceItem,
+    preferred_sources: frozenset = frozenset(),
+) -> tuple:
     """
     Sort key implementing the G-EVIDENCE-01 tiebreak rule.
     Lower tuple = higher priority (ascending sort).
 
     Bucket order:
-      0 — PEER_REVIEWED, published within last 5 years     (best)
+      0 — PEER_REVIEWED, published within last 5 years           (best)
       1 — PEER_REVIEWED, older than 5 years or no date
-      2 — GREY_LITERATURE, PRIMARY source tier (sanctioned)
-      3 — GREY_LITERATURE, SECONDARY source tier (fallback) (worst)
+      2a — GREY_LITERATURE, PRIMARY, source is topically preferred
+      2b — GREY_LITERATURE, PRIMARY, generic source              (G-RETRIEVAL-02)
+      3 — GREY_LITERATURE, SECONDARY source tier (fallback)      (worst)
 
-    Within each bucket, most recent publication date wins (negated epoch).
+    The 2a/2b split is the G-RETRIEVAL-02 addition: when the pipeline has
+    detected a specific topic (e.g. GRIEF), grey-lit results from topically
+    specialised sources (e.g. GriefLine, Lifeline) are ranked before results
+    from general-coverage sources (e.g. Healthdirect).  This does not change
+    the overall tier order — peer-reviewed always wins.
+
+    Within each sub-bucket, most recent publication date wins (negated epoch).
+
+    [CONCEPT] functools.partial: this function is called as a sort key via
+    partial(_sort_key, preferred_sources=ps), which pre-binds the
+    preferred_sources argument.  The result is a one-argument callable
+    suitable for list.sort(key=...) — Python's sort protocol.
+
+    Parameters
+    ----------
+    item : EvidenceItem
+        The evidence item being ranked.
+    preferred_sources : frozenset[str]
+        Human-readable source labels (DomainProfile.label) for domains that
+        cover the current query's detected topics.  Empty frozenset → no
+        sub-bucket split (identical to pre-G-RETRIEVAL-02 behaviour).
     """
     if _is_recent_peer_reviewed(item):
         bucket = 0
+        sub    = 0
     elif item.evidence_tier == EvidenceTier.PEER_REVIEWED:
         bucket = 1
+        sub    = 0
     elif item.source_tier == SourceTier.PRIMARY:
         bucket = 2
+        # Sub-bucket: 0 if source is topically preferred, 1 otherwise.
+        # An empty preferred_sources set means all PRIMARY items tie at sub=1
+        # — identical ranking to the pre-G-RETRIEVAL-02 behaviour.
+        sub = 0 if (preferred_sources and item.source_name in preferred_sources) else 1
     else:
         bucket = 3
+        sub    = 0
 
     pub_date = _parse_publication_date(item.publication_date)
-    recency = -(pub_date.timestamp() if pub_date else 0)
-    return (bucket, recency)
+    recency  = -(pub_date.timestamp() if pub_date else 0)
+    return (bucket, sub, recency)
 
 
 def _deduplicate(items: list[EvidenceItem]) -> list[EvidenceItem]:
@@ -383,6 +415,7 @@ class EvidenceSynthesizerAgent:
         self,
         evidence_payloads: list[EvidencePayload],
         query: str = "",
+        preferred_sources: frozenset = frozenset(),
     ) -> SynthesizedEvidence:
         """
         Consolidate EvidencePayload objects into a SynthesizedEvidence.
@@ -393,19 +426,30 @@ class EvidenceSynthesizerAgent:
             Raw retrieval outputs — one per adapter. May be empty (e.g.,
             Crisis Mode where retrieval is skipped per REQ-200-124).
         query : str
-            Original search query; used for logging only.
+            Original search query; used for relevance filtering and logging.
+        preferred_sources : frozenset[str]
+            Human-readable source labels for topically relevant domains,
+            computed by get_preferred_source_labels() in web_search_adapter.py
+            from the pipeline's Signal→Topic hints (G-RETRIEVAL-02).
+            When non-empty, grey-literature PRIMARY items from preferred sources
+            are ranked before generic PRIMARY items (sub-bucket split in
+            _sort_key).  An empty frozenset means no sub-bucket boost is applied
+            — identical to pre-G-RETRIEVAL-02 behaviour.
 
         Spec trace
         ----------
             REQ-200-080  consolidate, dedupe, normalise, score confidence
             REQ-200-081  MUST NOT generate advice / interpret emotion
             G-EVIDENCE-01 tiebreak: PEER_REVIEWED(<=5y) > PEER_REVIEWED(older)
-                          > GREY_LIT PRIMARY > GREY_LIT SECONDARY
+                          > GREY_LIT PRIMARY (preferred) > GREY_LIT PRIMARY
+                          > GREY_LIT SECONDARY
         """
         logger.info(
-            "EvidenceSynthesizerAgent.synthesize() — payloads: %d, query: %r",
+            "EvidenceSynthesizerAgent.synthesize() — payloads: %d, query: %r, "
+            "preferred_sources: %s",
             len(evidence_payloads),
             query[:80] if query else "",
+            sorted(preferred_sources) if preferred_sources else "(none)",
         )
 
         # 1. Collect all EvidenceItems across payloads.
@@ -421,7 +465,17 @@ class EvidenceSynthesizerAgent:
 
         # 2. Sort by G-EVIDENCE-01 tiebreak BEFORE dedup so that when two
         #    near-duplicates exist, the higher-quality item is retained.
-        all_items.sort(key=_sort_key)
+        #
+        # [CONCEPT] functools.partial: we pre-bind the preferred_sources
+        # argument so the resulting one-argument callable satisfies
+        # list.sort(key=...).  When preferred_sources is empty we use the
+        # bare _sort_key function (no partial overhead, same behaviour).
+        sort_fn = (
+            partial(_sort_key, preferred_sources=preferred_sources)
+            if preferred_sources
+            else _sort_key
+        )
+        all_items.sort(key=sort_fn)
 
         # 2b. Relevance filter — discard items whose title + abstract share too
         # few tokens with the query. This prevents broad PubMed queries from

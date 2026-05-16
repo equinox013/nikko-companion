@@ -84,6 +84,10 @@ from docs.schemas.retrieval_schemas import (
     StaticCacheQueryParams,
 )
 from retrieval import ADAPTER_PRIORITY_ORDER, PubMedAdapter, WebSearchAdapter
+from retrieval.web_search_adapter import (
+    TopicTag as _TopicTag,
+    get_preferred_source_labels as _get_preferred_source_labels,
+)
 from agents.synthesizer_agent import EvidenceSynthesizerAgent
 from agents.evaluator_agent import EvaluatorAgent
 from agents.verification_supervisor import (
@@ -687,6 +691,136 @@ def _build_evidence_query(signal: SignalPayload, user_text: str = "") -> str:
 
 
 # ---------------------------------------------------------------------------
+# Signal → Topic bridge (G-RETRIEVAL-02)
+# ---------------------------------------------------------------------------
+
+def _signal_to_topic_hints(signal: SignalPayload) -> frozenset:
+    """
+    Translate a SignalPayload into a frozenset of TopicTag string values.
+
+    Why do this instead of letting the adapter run its own keyword classifier?
+    The Signal Agent has already performed a semantically richer analysis of
+    the message than simple substring matching.  Its output fields (risk
+    indicators, support needs, emotional states) encode the *clinical meaning*
+    of the message — not just the vocabulary.  Passing these forward means the
+    retrieval layer gets the correct topic set for free, without re-scanning
+    the raw text a second time.
+
+    Mapping rationale
+    -----------------
+    risk_indicators "risk.active.*" / "risk.acute.*"  → CRISIS
+    distress_level == CRISIS                           → CRISIS
+    support_needs "crisis_escalation"                  → CRISIS
+    support_needs "psychoeducation"                    → CLINICAL
+    support_needs "encouragement_external_support"     → SERVICES
+    support_needs "grounding_stabilization"            → ANXIETY
+    emotional_states "*.grief_expression"              → GRIEF
+    emotional_states "*.loss_oriented_statements"      → GRIEF
+    emotional_states "anxiety_spectrum.*"              → ANXIETY
+    emotional_states "sadness_spectrum.*"              → DEPRESSION
+    cognitive_patterns "hopeless_future_projection"    → DEPRESSION
+    cognitive_patterns "meaninglessness_expression"    → DEPRESSION
+    cognitive_patterns "rumination_loop"               → ANXIETY
+    cognitive_patterns "catastrophizing"               → ANXIETY
+
+    Returns an empty frozenset if no mapping fires (e.g. stub agent with
+    all-empty arrays) — the adapters then fall back to their own keyword
+    classifiers, preserving existing behaviour on Render (NIKKO_LOCAL_LLM=false).
+
+    Parameters
+    ----------
+    signal : SignalPayload
+        Output of the Signal Agent (real or stub) for the current turn.
+
+    Returns
+    -------
+    frozenset
+        Zero or more _TopicTag string values.
+    """
+    topics: set = set()
+
+    # ── Risk indicators → CRISIS ─────────────────────────────────────────
+    # risk.active.* and risk.acute.* are the two highest-risk subcategories.
+    # risk.passive.* (wishing_to_disappear etc.) does not necessarily indicate
+    # an active crisis requiring crisis-domain sources.
+    for indicator in (signal.risk_indicators or []):
+        if "risk.active" in indicator or "risk.acute" in indicator:
+            topics.add(_TopicTag.CRISIS)
+            break
+
+    # Distress level CRISIS is an unconditional CRISIS signal.
+    if signal.distress_level == DistressLevel.CRISIS:
+        topics.add(_TopicTag.CRISIS)
+
+    # ── Support needs → topics ────────────────────────────────────────────
+    _NEED_MAP: dict[str, _TopicTag] = {
+        "crisis_escalation":              _TopicTag.CRISIS,
+        "psychoeducation":                _TopicTag.CLINICAL,
+        "encouragement_external_support": _TopicTag.SERVICES,
+        "grounding_stabilization":        _TopicTag.ANXIETY,
+    }
+    for need in (signal.support_needs or []):
+        tag = _NEED_MAP.get(need)
+        if tag:
+            topics.add(tag)
+
+    # ── Emotional states → topics ─────────────────────────────────────────
+    # Signal Agent keys use dot notation: "sadness_spectrum.grief_expression".
+    # We check both the full key and the root prefix so either form matches.
+    _STATE_MAP: dict[str, _TopicTag] = {
+        "grief_expression":        _TopicTag.GRIEF,
+        "loss_oriented_statements":_TopicTag.GRIEF,
+        "anxiety_spectrum":        _TopicTag.ANXIETY,
+        "sadness_spectrum":        _TopicTag.DEPRESSION,
+        "emotional_dysregulation": _TopicTag.TRAUMA,
+    }
+    for state in (signal.emotional_states or []):
+        # Try full key first, then root prefix, then leaf suffix.
+        # Signal Agent keys use dot notation ("sadness_spectrum.grief_expression")
+        # so we check all three forms to ensure neither the root category NOR
+        # the specific leaf concept is missed (both may carry distinct topics).
+        parts = state.split(".")
+        tag = (
+            _STATE_MAP.get(state)
+            or _STATE_MAP.get(parts[0])
+            or (len(parts) > 1 and _STATE_MAP.get(parts[-1]))
+            or None
+        )
+        if tag:
+            topics.add(tag)
+        # If the key has a meaningful leaf, also check leaf independently so
+        # compound keys like "sadness_spectrum.grief_expression" add BOTH
+        # DEPRESSION (from root) AND GRIEF (from leaf).
+        if len(parts) > 1:
+            leaf_tag = _STATE_MAP.get(parts[-1])
+            if leaf_tag:
+                topics.add(leaf_tag)
+
+    # ── Cognitive patterns → topics ───────────────────────────────────────
+    _COG_MAP: dict[str, _TopicTag] = {
+        "hopeless_future_projection": _TopicTag.DEPRESSION,
+        "meaninglessness_expression": _TopicTag.DEPRESSION,
+        "helplessness_framing":       _TopicTag.DEPRESSION,
+        "rumination_loop":            _TopicTag.ANXIETY,
+        "catastrophizing":            _TopicTag.ANXIETY,
+        "black_white_thinking":       _TopicTag.ANXIETY,
+    }
+    for pattern in (signal.cognitive_patterns or []):
+        tag = _COG_MAP.get(pattern)
+        if tag:
+            topics.add(tag)
+
+    logger.debug(
+        "_signal_to_topic_hints: distress=%s needs=%s states=%s → topics=%s",
+        signal.distress_level.value,
+        signal.support_needs,
+        signal.emotional_states,
+        sorted(topics),
+    )
+    return frozenset(topics)
+
+
+# ---------------------------------------------------------------------------
 # Main pipeline
 # ---------------------------------------------------------------------------
 
@@ -1082,6 +1216,19 @@ class NikkoPipeline:
             query, signal.support_needs, signal.emotional_states, user_text[:60],
         )
 
+        # ── Signal → Topic bridge (G-RETRIEVAL-02) ────────────────────────
+        # Translate Signal Agent output into TopicTag hints before retrieval.
+        # Both adapters receive the same hint set so they select consistent
+        # domain/MeSH coverage.  An empty frozenset means the adapters fall
+        # back to their own keyword classifiers — identical to pre-G-RETRIEVAL-02
+        # behaviour (safe on Render where stub signal agent fires empty arrays).
+        topic_hints     = _signal_to_topic_hints(signal)
+        preferred_sources = _get_preferred_source_labels(topic_hints)
+        logger.info(
+            "Topic hints: %s → preferred sources: %s",
+            sorted(topic_hints), sorted(preferred_sources),
+        )
+
         retrieval_results: list[EvidencePayload] = []
         adapters_run = []
 
@@ -1090,9 +1237,17 @@ class NikkoPipeline:
             try:
                 adapter = AdapterClass()
                 if AdapterClass is PubMedAdapter:
-                    params = PubMedQueryParams(query=query, max_results=5)
+                    params = PubMedQueryParams(
+                        query=query,
+                        max_results=5,
+                        topic_hints=topic_hints,
+                    )
                 else:
-                    params = StaticCacheQueryParams(query=query, max_results=3)
+                    params = StaticCacheQueryParams(
+                        query=query,
+                        max_results=3,
+                        topic_hints=topic_hints,
+                    )
                 result: RetrievalResult = adapter.search(params)
                 if result.items:
                     retrieval_results.append(_retrieval_result_to_evidence_payload(result))
@@ -1132,7 +1287,14 @@ class NikkoPipeline:
                 grey_literature_used=False,
             )
 
-        evidence = self._synthesizer.synthesize(retrieval_results, query=query)
+        # Pass preferred_sources so the Synthesizer can give a sub-bucket boost
+        # to topically relevant grey-literature items (e.g. GriefLine results
+        # rank ahead of generic Healthdirect results on a grief query).
+        evidence = self._synthesizer.synthesize(
+            retrieval_results,
+            query=query,
+            preferred_sources=preferred_sources,
+        )
         trace.step("evidence_synthesizer")
         logger.info("Synthesizer: confidence=%.4f grey_lit=%s",
                     evidence.confidence, evidence.grey_literature_used)
@@ -1286,7 +1448,7 @@ class NikkoPipeline:
             )
             return self.run(user_input, session_id=session_id, regen_count=regen_count + 1)
 
-        # FAIL verdict or regen limit exhausted → safe fallback.
+        # FAIL verdict or regen limit exhausted — safe fallback.
         trace.final_action = "evaluator_safe_fallback"
         trace.latency_ms = (time.perf_counter() - t0) * 1000
         logger.warning(

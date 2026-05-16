@@ -83,6 +83,21 @@ _OUT_OF_SCOPE_THRESHOLD: float = 0.55
 # pattern object is reused across every call to classify(). Compiling inside
 # the hot path would re-parse the regex string on every request — wasteful.
 
+# [CONCEPT] Vocabulary alignment with TopicTag taxonomy (G-RETRIEVAL-02)
+# The keyword lists below serve a different purpose to the retrieval layer's
+# _TOPIC_KEYWORDS in retrieval/web_search_adapter.py, but both operate on the
+# same mental-health vocabulary. If you add a new clinical concept to the
+# TopicTag taxonomy or update topic keyword lists in web_search_adapter.py,
+# review the in-scope patterns here to ensure the scope gate still passes
+# those messages through to the Signal Agent. The two files are intentionally
+# independent (scope gate fires before retrieval; they must never share state)
+# but should stay conceptually consistent. Key overlaps to watch:
+#   CRISIS keywords   ↔  crisis/suicid/self-harm patterns (weight 1.00 below)
+#   GRIEF keywords    ↔  "grief", "loss", "bereavem" in _IN_SCOPE_PATTERNS
+#   YOUTH keywords    ↔  "young", "teen", "school" in _IN_SCOPE_PATTERNS (via mental health)
+#   INDIGENOUS kws    ↔  not currently in scope patterns — add if AU context warrants
+#   TRAUMA keywords   ↔  "trauma" in _IN_SCOPE_PATTERNS (relational/mental health)
+
 _OUT_OF_SCOPE_PATTERNS: list[tuple[re.Pattern, float]] = [
     # --- Code / programming ---
     (re.compile(r"\b(write|debug|fix|implement|refactor)\s+(a\s+)?(function|class|script|program|code|module|api|algorithm|query|sql|loop)\b", re.I), 0.90),

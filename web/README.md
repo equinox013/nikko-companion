@@ -78,7 +78,7 @@ The Nikko avatar is a simple sun: warm `--sun` disc, soft `--sun-soft` halo. Dra
 
 ## Agent transparency
 
-Nikko is a multi-agent pipeline (see `uploads/README.md` for the agent map). Two surfaces show this to the user:
+Nikko is a multi-agent pipeline (see `agents/README.md` for the full agent map). Two surfaces show this to the user:
 
 ### Public ribbon — under every assistant message
 A small caption appears under each assistant reply:

@@ -75,6 +75,63 @@ _ARTICLE_TYPE_FILTERS: dict[PubMedArticleType, str] = {
 # Open-access filter clause for PMC Full Text.
 _OA_FILTER = "free full text[filter]"
 
+# ---------------------------------------------------------------------------
+# Topic → MeSH qualifier map (G-RETRIEVAL-02)
+# ---------------------------------------------------------------------------
+# Maps TopicTag string values to PubMed MeSH heading clauses. When the
+# pipeline passes topic_hints (frozenset of strings), _build_query prepends
+# a MeSH AND-block that narrows results to papers explicitly indexed under
+# those subject headings — improving precision for focused clinical topics.
+#
+# Design constraints:
+#   - Only applied when topic_hints has ≤ 3 entries. A broad topic set means
+#     the query is already general; adding many MeSH constraints would over-
+#     restrict and reduce recall.
+#   - Each clause uses OR internally so related headings are combined (e.g.
+#     "Grief[MeSH] OR Bereavement[MeSH]") — any one heading qualifies the paper.
+#   - GENERAL and RELATIONSHIPS are omitted intentionally: they map to concepts
+#     too broad for useful MeSH filtering (most mental health papers would match).
+#
+# Heading strings are validated against NCBI MeSH tree as of 2026-05.
+# Phase 6 evaluation should audit recall impact and adjust if precision
+# comes at the cost of missing clinically relevant papers.
+_TOPIC_MESH_TERMS: dict[str, str] = {
+    "crisis":     (
+        "Suicide[MeSH] OR Suicide, Attempted[MeSH] "
+        "OR Crisis Intervention[MeSH] "
+        "OR Self-Injurious Behavior[MeSH]"
+    ),
+    "grief":      "Grief[MeSH] OR Bereavement[MeSH]",
+    "trauma":     (
+        "Stress Disorders, Post-Traumatic[MeSH] "
+        "OR Psychological Trauma[MeSH] "
+        "OR Child Abuse[MeSH]"
+    ),
+    "youth":      "Adolescent[MeSH] OR Young Adult[MeSH]",
+    "indigenous": (
+        "Australian Aboriginal and Torres Strait Islander Peoples[MeSH] "
+        "OR Indigenous Peoples[MeSH]"
+    ),
+    "anxiety":    (
+        "Anxiety Disorders[MeSH] OR Anxiety[MeSH] "
+        "OR Panic Disorder[MeSH] "
+        "OR Obsessive-Compulsive Disorder[MeSH]"
+    ),
+    "depression": (
+        "Depressive Disorder[MeSH] OR Depression[MeSH] "
+        "OR Bipolar Disorder[MeSH]"
+    ),
+    "clinical":   (
+        "Psychotherapy[MeSH] OR Evidence-Based Practice[MeSH] "
+        "OR Practice Guidelines as Topic[MeSH]"
+    ),
+    "services":   "Mental Health Services[MeSH]",
+    "men":        "Men's Health[MeSH]",
+    "women":      "Women's Health[MeSH] OR Maternal Health[MeSH]",
+    # "trauma" covers PTSD; "clinical" covers CBT/DBT etc.
+    # GENERAL, RELATIONSHIPS omitted — too broad for useful MeSH filtering.
+}
+
 
 class PubMedAdapter(CachedBaseAdapter):
     """
@@ -220,12 +277,43 @@ class PubMedAdapter(CachedBaseAdapter):
         Construct the full PubMed query string from PubMedQueryParams.
 
         Anatomy of the query:
-          ({user_terms}) AND ({ptyp filters OR'd together}) [AND date range] [AND OA filter]
+          ({user_terms} [AND ({MeSH block})]) AND ({ptyp filters}) [AND date] [AND OA]
+
+        MeSH enrichment (G-RETRIEVAL-02):
+          When params.topic_hints is a non-empty frozenset of ≤ 3 TopicTag
+          string values, a MeSH AND-block is appended to the base query term.
+          This intersects the free-text results with papers formally indexed
+          under the relevant subject headings, sharpening precision for focused
+          clinical topics (e.g. grief, crisis, indigenous mental health).
+
+          The ≤ 3 guard prevents over-restriction when the query covers a broad
+          or multi-topic area — in that case, MeSH filtering would likely reduce
+          recall without meaningful precision gain.
 
         Publication types are OR'd so results include any of the requested
         high-evidence types (e.g., meta-analysis OR systematic review).
         """
-        parts: list[str] = [f"({params.query})"]
+        # ── Base query term — optionally enriched with MeSH headings ─────
+        base_query = params.query
+
+        if params.topic_hints and len(params.topic_hints) <= 3:
+            mesh_clauses = [
+                _TOPIC_MESH_TERMS[tag]
+                for tag in params.topic_hints
+                if tag in _TOPIC_MESH_TERMS
+            ]
+            if mesh_clauses:
+                # Combine multiple MeSH clauses with OR so the paper need only
+                # match ONE of the detected topics' headings.
+                mesh_block = " OR ".join(f"({c})" for c in mesh_clauses)
+                base_query = f"({params.query}) AND ({mesh_block})"
+                logger.debug(
+                    "[PubMed] MeSH enrichment applied — topics=%s mesh_block=%r",
+                    sorted(params.topic_hints),
+                    mesh_block[:120],
+                )
+
+        parts: list[str] = [base_query]
 
         # Publication type filter — OR all requested types.
         if params.article_types:
@@ -240,7 +328,10 @@ class PubMedAdapter(CachedBaseAdapter):
         # Date range filter. REQ-200-ER1: prefer sources within the last 5 years.
         # Represented as PubMed's PDAT (publication date) field.
         if params.date_from:
-            parts.append(f"{params.date_from.strftime('%Y/%m/%d')}:{params.date_to.strftime('%Y/%m/%d') if params.date_to else '3000'}[PDAT]")
+            parts.append(
+                f"{params.date_from.strftime('%Y/%m/%d')}:"
+                f"{params.date_to.strftime('%Y/%m/%d') if params.date_to else '3000'}[PDAT]"
+            )
 
         # Open-access filter restricts to PMC Open Access subset.
         if params.open_access_only:

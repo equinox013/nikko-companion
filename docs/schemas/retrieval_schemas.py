@@ -176,6 +176,17 @@ class PubMedQueryParams(BaseModel):
             "Required for full-text access without institutional subscription."
         ),
     )
+    topic_hints:    Optional[frozenset] = Field(
+        default=None,
+        description=(
+            "Pre-detected topic tags supplied by the pipeline's Signal→Topic bridge "
+            "(G-RETRIEVAL-02, 2026-05-16). When provided, PubMedAdapter prepends "
+            "topic-specific MeSH qualifiers to the query string, improving recall "
+            "precision for focused clinical topics. Contents are TopicTag string "
+            "values from retrieval.web_search_adapter.TopicTag (e.g. "
+            "frozenset({'crisis', 'grief'})). None → no MeSH enrichment applied."
+        ),
+    )
 
 
 class HealthdirectQueryParams(BaseModel):
@@ -205,9 +216,8 @@ class HealthdirectQueryParams(BaseModel):
 
 class StaticCacheQueryParams(BaseModel):
     """
-    Input parameters for static-cache adapters (Better Health Channel, WHO).
-    These sources do not expose a live search API in v0 — the adapter searches
-    against a curated pre-loaded article index. (REQ-200-ER4)
+    Input parameters for static-cache and live web-search adapters.
+    Used by WebSearchAdapter (active) and legacy static-cache stubs (superseded).
 
     The curated article index must be assembled manually before Phase 3
     and stored in the format defined by StaticCacheIndex below.
@@ -219,6 +229,18 @@ class StaticCacheQueryParams(BaseModel):
         ),
     )
     max_results: int = Field(default=5, ge=1, le=10)
+    topic_hints: Optional[frozenset] = Field(
+        default=None,
+        description=(
+            "Pre-detected topic tags supplied by the pipeline's Signal→Topic bridge "
+            "(G-RETRIEVAL-02, 2026-05-16). When provided, WebSearchAdapter skips its "
+            "own keyword classification pass and uses these hints directly to select "
+            "the relevant sanctioned domain subset — avoiding duplicate classification "
+            "work. Contents are TopicTag string values from "
+            "retrieval.web_search_adapter.TopicTag (e.g. frozenset({'grief', 'youth'})). "
+            "None → adapter runs its own keyword classifier as before."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------

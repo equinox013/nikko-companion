@@ -1,11 +1,11 @@
 # Nikko — Evidence-Grounded Wellbeing Assistant
 
 ![Research Preview](https://img.shields.io/badge/status-research%20preview-orange)
-![Phase](https://img.shields.io/badge/phase-4%20%E2%80%94%20model%20training-blue)
+![Phase](https://img.shields.io/badge/phase-6%20%E2%80%94%20evaluation-blue)
 ![Models](https://img.shields.io/badge/models-Phi--3.5--mini%20%2B%20Gemma--2--2b-informational)
 ![Python](https://img.shields.io/badge/python-3.11-green)
 ![License](https://img.shields.io/badge/license-research%20use-lightgrey)
-![Infra](https://img.shields.io/badge/infra-HF%20Spaces%20%2B%20Fly.io%20%2B%20GitHub%20Pages-purple)
+![Infra](https://img.shields.io/badge/infra-HF%20Spaces%20%2B%20Render%20%2B%20GitHub%20Pages-purple)
 
 Nikko is a safety-aligned, evidence-grounded LLM ecosystem designed to function as a compassionate digital confidant. It listens, validates, and surfaces reliable information — but it never diagnoses, never prescribes, and always defers to human care when it matters most.
 
@@ -15,19 +15,21 @@ Nikko is a safety-aligned, evidence-grounded LLM ecosystem designed to function 
 
 ## Project Status
 
-> **Near-MVP.** The full stack is deployed end-to-end on free-tier infrastructure. The React frontend communicates with a Fly.io orchestration backend, which routes to a Hugging Face ZeroGPU Space running the dual-model pipeline. Fine-tuned adapter training is in progress (Phase 4, Steps 11–19). Phase 5 (backend API integration replacing hardcoded frontend fallbacks) is the next gate.
+> **Active evaluation.** The full stack is deployed end-to-end. Phase 5 (backend API integration) is complete — the frontend is wired to live agents with no hardcoded fallbacks. Phase 6 (end-to-end evaluation) is now active, running alongside ongoing UX refinement and backend latency work.
 
 | Layer | Status |
 |-------|--------|
-| Specifications (8 + 3 supplementary) | ✅ Complete |
-| Agent pipeline (7 specialist agents) | ✅ Complete |
+| Phase 1–2 — Specifications (8 + 3 supplementary) | ✅ Complete |
+| Phase 3 — Agent pipeline (7 specialist agents) | ✅ Complete |
+| Phase 4 — ADP-C fine-tuning (Gemma-2-2b-it) | ✅ Complete |
+| Phase 4 — ADP-B fine-tuning (Gemma-2-2b-it) | ✅ Complete |
+| Phase 4 — ADP-A fine-tuning (Phi-3.5-mini) | ⛔ Discontinued — using Phi-3.5-mini base model directly |
+| Phase 7 — Deployment infra (HF + Render + GH Pages) | ✅ Live (pulled forward of Phase 6) |
 | Frontend SPA | ✅ Complete |
-| Deployment infra (HF + Fly.io + GH Pages) | ✅ Live |
-| ADP-C fine-tuning (Gemma-2-2b-it) | ✅ v1 trained |
-| ADP-A fine-tuning (Phi-3.5-mini) | 🔨 v1 in progress |
-| ADP-B fine-tuning (Gemma-2-2b-it) | 🔨 In progress |
-| Backend API integration (Phase 5) | ⏳ Pending Phase 4 completion |
-| End-to-end evaluation (Phase 6) | ⏳ Pending Phase 5 + infra |
+| Phase 5 — Backend API integration | ✅ Complete |
+| Phase 6 — End-to-end evaluation | 🔨 Active — running alongside UX + backend speed refinement |
+
+> *Note on phase ordering: the original plan ran Phase 6 (Evaluation) before Phase 7 (Infra). Phase 6 needs a live deployed stack to evaluate against, so the order was revised to **Phase 5 → Phase 7 infra → Phase 6 → Phase 7 sign-off**. The infra portion of Phase 7 is therefore active now, ahead of the formal phase number.*
 
 ---
 
@@ -51,17 +53,17 @@ This architecture exists because mental-health-adjacent AI carries real risk. A 
 
 ## Model Stack
 
-Nikko uses a **dual-model architecture** built around two fine-tuned base models and three specialised LoRA adapters. The previous candidate — Mistral-7B-Instruct-v0.3 — was retired after proving infeasible on an RTX 3070 8 GB (14 GB fp16 requirement, 14+ hours training with no convergence). All Mistral artefacts are preserved under `*/mistral-7b/`.
+Nikko uses a **dual-model architecture** built around two base models and three specialised LoRA adapters (ADP = Adapter). The previous candidate — Mistral-7B-Instruct-v0.3 — was retired after proving infeasible on an RTX 3070 8 GB (14 GB fp16 requirement, 14+ hours training with no convergence). All Mistral artefacts are preserved under `*/mistral-7b/`.
 
 | Adapter | Base model | Role | Temperature |
 |---------|-----------|------|-------------|
-| **ADP-A** | Phi-3.5-mini-instruct (3.8B, Microsoft Apache-2.0) | Empathy — generates the user-facing response | 0.75 (warm, varied) |
+| **ADP-A** | Phi-3.5-mini-instruct (3.8B, Microsoft, MIT licence) | Empathy — generates the user-facing response | 0.75 (warm, varied) |
 | **ADP-B** | Gemma-2-2b-it (2.0B, Google Gemma licence) | Safety / crisis classifier | 0.2 (near-deterministic JSON) |
 | **ADP-C** | Gemma-2-2b-it (same base as ADP-B) | Response quality evaluator | 0.2 (near-deterministic JSON) |
 
 ### Why two base models?
 
-Phi-3.5-mini converges empathy fine-tuning in ~2 hours and produces fluent, contextually warm responses — tasks that reward generative diversity. Gemma-2-2b-it is ideal for structured classification tasks (binary crisis flags, APPROVE/REGENERATE verdicts) where compact JSON output and near-greedy decoding matter more than creativity. ADP-B and ADP-C **share the Gemma-2 base**: they are loaded once as a single `PeftModel`, and `set_adapter()` hot-swaps their LoRA delta tensors at O(1) cost — no weight duplication, no second model load.
+Phi-3.5-mini converges empathy fine-tuning in ~2 hours and produces fluent, contextually warm responses — tasks that reward generative diversity. Gemma-2-2b-it is better suited to structured classification tasks (binary crisis flags, APPROVE/REGENERATE verdicts) where compact JSON output and near-greedy decoding matter more than creativity. ADP-B and ADP-C **share the Gemma-2 base**: they are loaded once as a single `PeftModel`, and `set_adapter()` hot-swaps their LoRA delta tensors at O(1) cost — no weight duplication, no second model load.
 
 ### What a LoRA adapter is
 
@@ -84,7 +86,9 @@ Total estimated                    ~ 15.2 GB   (fits A10G 24 GB with headroom)
 
 ## How the Pipeline Works
 
-A user message flows through the following stages. Agent logic lives in `agents/` and `orchestration/`; the production inference layer is in `hf_space/app.py`.
+A user message flows through the stages below. Agent logic lives in `agents/` and `orchestration/`; the production inference layer is in `hf_space/app.py`.
+
+> *Step numbers follow the SPEC-700 execution order. Some step IDs are reserved for parallel branches or adjacent operations not surfaced in this overview (Steps 9 and 14, for example, are reserved for orchestrator-internal bookkeeping not visible to the agents themselves).*
 
 ### STEP 0 — Scope Classification
 
@@ -110,13 +114,13 @@ The **Router** reads the `SignalPayload` and assigns exactly one operational mod
 
 ### STEPs 4–8 — Evidence Retrieval and Synthesis (Guidance Mode only)
 
-If the Router assigned GUIDANCE, the **PubMed Adapter** queries NCBI's research database and the **Web Search Adapter** searches five sanctioned Australian health authority domains (Healthdirect, Better Health Channel, WHO, Beyond Blue, Black Dog Institute). Results are cached on disk.
+If the Router assigned GUIDANCE, the **PubMed Adapter** queries NCBI's research database and the **Web Search Adapter** searches five sanctioned health-information domains (Healthdirect Australia, Better Health Channel, the World Health Organization, Beyond Blue, and Black Dog Institute). Results are cached on disk.
 
 The **Evidence Synthesizer** then ranks all retrieved items by quality — peer-reviewed content within the last five years scores highest — and produces a single `SynthesizedEvidence` object. No LLM is involved in ranking or scoring.
 
 ### STEP 4 (parallel) — Support Strategy
 
-The **Support Strategy Agent** makes the second LLM call. It receives the Router's mode and Signal payload and returns communication guidance for the Interaction Model: tone, framing strategy, and constraints. It never generates user-facing text. In Crisis Mode this step is bypassed — a fixed, hardcoded strategy object is injected instead.
+The **Support Strategy Agent** makes the second LLM call. It runs in parallel with Evidence Retrieval. It receives the Router's mode and Signal payload and returns communication guidance for the Interaction Model: tone, framing strategy, and constraints. It never generates user-facing text. In Crisis Mode this step is bypassed — a fixed, hardcoded strategy object is injected instead.
 
 ### STEP 10 — Draft Generation (ADP-A)
 
@@ -148,14 +152,14 @@ A `PipelineTrace` records every agent that ran, the router decision, distress le
 
 ## The ADP Pipeline in Production
 
-In the deployed stack (Phase 7), all three adapter passes run inside a **single `@spaces.GPU` session** on HF Spaces ZeroGPU. This is a deliberate consolidation from the earlier design where three separate `/infer` calls each triggered an 80–110s CPU→VRAM model transfer. The consolidated `/pipeline` endpoint eliminates two of those transfers, reducing warm-turn latency to ~20–40s.
+In the deployed stack, all three adapter passes run inside a **single `@spaces.GPU` session** on HF Spaces ZeroGPU. This is a deliberate consolidation from the earlier design where three separate `/infer` calls each triggered an 80–110s CPU→VRAM model transfer. The consolidated `/pipeline` endpoint eliminates two of those transfers, reducing warm-turn latency to ~20–40s.
 
 ```
 User message (React frontend)
     │
     │  POST /api/message
     ▼
-Fly.io backend (FastAPI, nikko-companion.onrender.com)
+Render backend (FastAPI, nikko-companion.onrender.com)
     │
     │  POST /pipeline  (single ZeroGPU GPU session, timeout 360s)
     ▼
@@ -171,7 +175,7 @@ HF Spaces ZeroGPU (A10G 24 GB)
     │
     │  { text, is_crisis, flags, verdict, regen, elapsed }
     ▼
-Fly.io backend
+Render backend
     │
     │  SSE stream: event: chunk  data: { text, emotion, safetyFlags, trace }
     ▼
@@ -193,11 +197,11 @@ The `/pipeline` response payload is:
 
 ## Frontend–Backend Integration
 
-The React SPA (`web/`) communicates with the Fly.io backend exclusively via two endpoints defined in `docs/integration/FRONTEND_INTEGRATION_SPEC.md`.
+The React SPA (`web/`) communicates with the Render backend exclusively via two endpoints defined in `docs/integration/FRONTEND_INTEGRATION_SPEC.md`.
 
 ### Loading screen
 
-On app load, the frontend polls `GET /health` on Fly.io every 3 seconds until it receives `{"status": "ok", "space_ok": true}`. The `space_ok` flag reflects whether the HF Space `/health` probe returned 200. An interactive loading screen is shown until both services are confirmed live, preventing the user from sending messages into a cold pipeline.
+On app load, the frontend polls `GET /health` on the Render backend every 3 seconds until it receives `{"status": "ok", "space_ok": true}`. The `space_ok` flag reflects whether the HF Space `/health` probe returned 200. An interactive loading screen is shown until both services are confirmed live, preventing the user from sending messages into a cold pipeline.
 
 ### Chat endpoint (`POST /api/message`)
 
@@ -225,7 +229,7 @@ Because the pipeline takes 30–120s depending on whether the HF Space GPU conte
 
 ### Fallback (backend unreachable)
 
-If the Fly.io backend is unreachable (Render cold-start, network error, or empty SSE stream), the frontend gracefully degrades to `matchNikkoPattern()` — a local regex-based keyword matcher in `nikko-data.jsx`. The user always receives a response. This fallback is logged to console and not surfaced to the user. It is a temporary measure; Phase 5 completion removes the hardcoded patterns entirely.
+If the Render backend is unreachable (cold-start, network error, or empty SSE stream), the frontend gracefully degrades to `matchNikkoPattern()` — a local regex-based keyword matcher in `nikko-data.jsx`. The user always receives a response. This fallback is logged to console and not surfaced to the user. It is a temporary measure; Phase 5 completion removes the hardcoded patterns entirely.
 
 ### Agent debug overlay
 
@@ -246,8 +250,7 @@ nikko-companion/
 │   ├── specs/          # 8 authoritative specification documents (SPEC-000 through SPEC-700)
 │   ├── derived/        # Architecture, agent definitions, safety guardrails, evaluation criteria
 │   ├── schemas/        # Pydantic v2 inter-agent data schemas (acp_schemas.py, retrieval_schemas.py)
-│   ├── integration/    # FRONTEND_INTEGRATION_SPEC.md — frontend ↔ backend API contract
-│   └── GAPS.md         # All open questions and Director rulings
+│   └── integration/    # FRONTEND_INTEGRATION_SPEC.md — frontend ↔ backend API contract
 ├── agents/             # Seven specialist agents — see agents/README.md
 │   └── mistral-7b/     # Archived Mistral-7B agent implementations (retired 2026-05-14)
 ├── orchestration/      # Pipeline orchestrator
@@ -260,9 +263,9 @@ nikko-companion/
 ├── hf_space/           # ZeroGPU inference endpoint (Phi-3.5-mini + Gemma-2-2b-it)
 │   ├── app.py          # FastAPI + Gradio app — /pipeline endpoint
 │   └── mistral-7b/     # Archived Mistral-7B HF Space implementation
-├── backend/            # Fly.io orchestration API
+├── backend/            # Render orchestration API
 │   └── main.py         # FastAPI — /health + /api/message SSE endpoint
-└── web/                # React SPA (Phase 5 / Phase 7)
+└── web/                # React SPA
     ├── Nikko.html      # Entry point
     ├── nikko.jsx       # Root app + theme
     ├── chat.jsx        # Message thread, SSE handler, ThinkingBubble, composer
@@ -294,8 +297,8 @@ Every design decision in Nikko traces to a named requirement in the spec. The ke
 
 | Layer | Service | Notes |
 |-------|---------|-------|
-| Frontend | GitHub Pages — `equinox013.github.io/nikko` | Static React SPA; zero cost |
-| Backend orchestration | Fly.io (nikko-companion.onrender.com) | FastAPI + pipeline logic; Docker-native |
+| Frontend | GitHub Pages — `equinox013.github.io/nikko-companion` | Static React SPA; zero cost |
+| Backend orchestration | Render — `nikko-companion.onrender.com` | FastAPI + pipeline logic; Docker-native |
 | LLM inference | HF Spaces ZeroGPU | `/pipeline` endpoint; A10G 24 GB; Phi-3.5-mini + Gemma-2-2b-it |
 | Adapter weights | HF Hub private repo | Pulled at Space startup; not bundled in image |
 
@@ -307,10 +310,8 @@ Cold start (first request after Space rebuild): ~90–120s. Warm turns: ~20–40
 
 | Document | What it is |
 |----------|-----------|
-| [`CLAUDE.md`](CLAUDE.md) | Operating manual — phase gates, conventions, binding constraints. Read every session. |
 | [`docs/INDEX.md`](docs/INDEX.md) | Map of every spec and derived document. |
 | [`docs/GLOSSARY.md`](docs/GLOSSARY.md) | Canonical terms — modes, distress levels, agents, adapters. |
-| [`docs/GAPS.md`](docs/GAPS.md) | All open questions and Director rulings. |
 | [`docs/DEVLOG.md`](docs/DEVLOG.md) | Daily development log — decisions, justifications, learnings. |
 | [`docs/specs/SPEC-000-charter.md`](docs/specs/SPEC-000-charter.md) | System charter. Supersedes all other specs on conflict. |
 | [`docs/integration/FRONTEND_INTEGRATION_SPEC.md`](docs/integration/FRONTEND_INTEGRATION_SPEC.md) | Frontend ↔ backend API contract. |
