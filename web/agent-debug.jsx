@@ -222,4 +222,3 @@ function AgentDebugOverlay({ open, onClose }) {
 }
 
 Object.assign(window, { AgentRibbon, AgentDebugOverlay, useDebugGesture, buildAgentTrace, NikkoAgentLog });
- NikkoAgentLog });
