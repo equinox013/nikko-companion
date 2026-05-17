@@ -52,9 +52,9 @@ from docs.schemas.validate import get_confidence_band
 # If the copy changes, update it here AND in agent_prompts.md, then create a
 # new REQ-ID to track the change.
 WARM_REDIRECT: str = (
-    "Nikko is here to support your emotional wellbeing — it sounds like that "
-    "might not be what you're looking for right now. "
-    "If something's weighing on you, I'm here."
+    "Nikko focuses on emotional wellbeing — for physical health concerns, "
+    "your GP or a relevant specialist is the right call. "
+    "If something's weighing on you emotionally, I'm here."
 )
 
 # Confidence threshold below which we MUST return AMBIGUOUS, never OUT_OF_SCOPE.
@@ -123,6 +123,22 @@ _OUT_OF_SCOPE_PATTERNS: list[tuple[re.Pattern, float]] = [
 
     # --- Pure creative writing (non-emotional) ---
     (re.compile(r"\b(write (me )?(a )?(poem|story|essay|novel|script|blog post|cover letter|resume) about (?!my feelings|my anxiety|my depression|how i feel))\b", re.I), 0.75),
+
+    # --- Physical health (non-mental) ---
+    # Routes physical health complaints to the GP/specialist redirect.
+    # Weights are kept moderate (0.75–0.80) so physical symptoms mentioned
+    # alongside emotional distress still pass through via the asymmetric
+    # error policy — e.g. "my back pain is making me really depressed"
+    # scores IN_SCOPE (0.90 for "depressed") >> OUT_OF_SCOPE (0.80 for
+    # back pain), routing correctly to the pipeline. Only isolated physical
+    # health queries with no emotional language get redirected.
+    # Exclusions: psychological conditions (anxiety, depression, PTSD, OCD,
+    # ADHD, etc.) are deliberately absent — they are IN_SCOPE mental health.
+    (re.compile(r"\b(my\s+)?(back|neck|knee|shoulder|hip|wrist|ankle|elbow|spine|disc|joint)\s+(pain|ache|aches|hurts?|problems?|issues?|injury|injuries|condition|spasm|spasms)\b", re.I), 0.80),
+    (re.compile(r"\b(my\s+)?(stomach|chest|throat|ear|tooth|teeth|eye|nose|head)\s+(hurts?|is\s+sore|is\s+aching|ache|pain)\b", re.I), 0.75),
+    (re.compile(r"\b(i\s+(have|had|got|'?ve\s+(got|had))|been\s+diagnosed\s+with)\s+(chronic\s+)?(back\s+pain|neck\s+pain|sciatica|arthritis|fibromyalgia|diabetes|cancer|hypertension|high\s+blood\s+pressure|asthma|epilepsy|IBS|Crohn'?s?|colitis|GERD|acid\s+reflux|kidney\s+(disease|stones)|liver\s+(disease|problems?)|heart\s+(disease|condition|problems?)|a\s+hernia|tendinitis|bursitis)\b", re.I), 0.80),
+    (re.compile(r"\bi\s+(have|had|got)\s+(a\s+)?(cold|flu|fever|fracture|broken\s+(bone|arm|leg|rib)|sprain|pulled\s+muscle|concussion|food\s+poisoning|infection|rash|uti|urinary\s+tract)\b", re.I), 0.80),
+    (re.compile(r"\b(what\s+medication|which\s+doctor|should\s+I\s+see\s+a\s+(doctor|specialist|gp|physio)|do\s+I\s+need\s+(surgery|an?\s+x.?ray|a\s+(scan|referral)|antibiotics|stitches))\b", re.I), 0.75),
 
     # --- Current affairs / political opinion requests ---
     # Important design note: these patterns target INFORMATION REQUESTS and

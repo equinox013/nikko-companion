@@ -234,6 +234,40 @@ _HATE_PATTERNS: list[re.Pattern] = [
     re.compile(r"\b(old\s+people|elderly|seniors?)\s+(should\s+(die|be\s+(killed|put\s+down))|are\s+(useless|worthless|a\s+burden\s+on\s+society))\b", re.I),
 ]
 
+# Active crime / emergency report patterns.
+#
+# Catches first-person reports of having just committed or witnessed a serious
+# incident — "I just ran someone over", "I just stabbed someone", "I watched
+# someone get shot". These need emergency services (000) and/or legal advice,
+# not a mental health companion.
+#
+# Why the pre-gate and not the scope classifier?
+#   - We need a specific 000-redirect response, not the generic warm redirect.
+#   - Unlike physical health, there is no meaningful "crime + emotional distress"
+#     case where Nikko's comfort mode is the right FIRST response. The 000/legal
+#     need is always immediate; emotional support can follow once the person
+#     is safe (the response says as much).
+#
+# Scope: past-tense completed actions only. Threats ("I want to hurt someone")
+# and worries ("I'm scared I might hurt someone") are mental health / crisis
+# territory and are NOT matched here — they pass to the crisis pipeline.
+_CRIME_PATTERNS: list[re.Pattern] = [
+    # First-person perpetrator — "I just [harmed] someone"
+    re.compile(r"\bI\s+(just\s+|accidentally\s+)?(ran\s+over|hit|struck|stabbed|shot|killed|attacked|assaulted|punched|strangled|choked|hurt|harmed|injured)\s+(someone|somebody|a\s+(person|man|woman|kid|child|pedestrian|cyclist|driver))\b", re.I),
+    # First-person perpetrator — "I [committed a crime]"
+    re.compile(r"\bI\s+(just\s+)?(committed|did|have\s+(committed|done))\s+(a\s+)?(crime|murder|manslaughter|robbery|assault|sexual\s+assault|rape|theft|arson)\b", re.I),
+    # Witness — "I just witnessed / saw [serious incident]"
+    re.compile(r"\bI\s+(just\s+)?(witnessed|saw|watched)\s+(a\s+)?(murder|stabbing|shooting|hit.and.run|serious\s+accident|someone\s+(get\s+)?(stabbed|shot|killed|attacked))\b", re.I),
+    # "There's been an accident / someone is badly hurt / there's a body"
+    re.compile(r"\b(there'?s\s+(been\s+a|a)\s+(serious\s+)?accident|someone\s+is\s+(badly\s+hurt|unconscious|not\s+breathing|bleeding\s+out)|I\s+found\s+(a\s+)?body)\b", re.I),
+]
+
+_CRIME_RESPONSE: str = (
+    "If this is an active emergency, call 000 immediately — that needs real human help right now. "
+    "If you need legal support, a lawyer or Legal Aid can assist. "
+    "Once you're safe, if you're struggling with what happened emotionally, I'm here for that."
+)
+
 # Static moderation responses (REQ-XXX-CM3)
 _CSAM_RESPONSE: str = (
     "That's not something Nikko can engage with. "
@@ -1371,6 +1405,21 @@ class NikkoPipeline:
                 trace.final_action = "content_moderation_hate"
                 return PipelineResult(
                     response_text=_HATE_RESPONSE,
+                    out_of_scope=True,
+                    trace=trace,
+                )
+
+        # Check active crime / emergency report patterns
+        for pat in _CRIME_PATTERNS:
+            if pat.search(raw_input):
+                logger.warning(
+                    "Content moderation: crime/emergency pattern matched — redirecting to 000. "
+                    "Pattern: %s", pat.pattern
+                )
+                trace.step("content_moderation")
+                trace.final_action = "content_moderation_crime"
+                return PipelineResult(
+                    response_text=_CRIME_RESPONSE,
                     out_of_scope=True,
                     trace=trace,
                 )
