@@ -316,11 +316,38 @@ function Chat({ theme, onToggleTheme }) {
   };
 
   // USM memory state
+  // memLoaded / memName are persisted to sessionStorage so the "Memory active"
+  // indicator survives page reloads within the same tab.  The decrypted content
+  // is NOT stored anywhere persistent — it lives only in memContentRef for the
+  // duration of the in-memory session (SPEC-800 zero-retention).
   const [memOpen, setMemOpen] = useState(false);   // generate modal
   const [loadOpen, setLoadOpen] = useState(false); // load modal
-  const [memLoaded, setMemLoaded] = useState(false);
-  const [memName, setMemName] = useState('');
+  const [memLoaded, setMemLoaded] = useState(() => {
+    try { return sessionStorage.getItem('nikko.mem.loaded') === '1'; } catch (e) { return false; }
+  });
+  const [memName, setMemName] = useState(() => {
+    try { return sessionStorage.getItem('nikko.mem.name') || ''; } catch (e) { return ''; }
+  });
+  // [CONCEPT] useRef holds the decrypted memory content across renders without
+  // triggering a re-render on change.  We don't need the component to re-render
+  // when content changes — we only need it available at send time.
+  const memContentRef = useRef(null);
   const [memPop, setMemPop] = useState(false);     // popover
+
+  // Persist memLoaded / memName to sessionStorage whenever they change.
+  // This restores the visual indicator after a page reload within the same tab.
+  // Content is intentionally NOT persisted — user must re-load the file.
+  useEffect(() => {
+    try {
+      if (memLoaded) {
+        sessionStorage.setItem('nikko.mem.loaded', '1');
+        sessionStorage.setItem('nikko.mem.name', memName || '');
+      } else {
+        sessionStorage.removeItem('nikko.mem.loaded');
+        sessionStorage.removeItem('nikko.mem.name');
+      }
+    } catch (e) {}
+  }, [memLoaded, memName]);
 
   // Close memory popover on outside click
   useEffect(() => {
@@ -347,8 +374,13 @@ function Chat({ theme, onToggleTheme }) {
     setTimeout(scrollToBottom, 50);
   }, [messages.length, scrollToBottom]);
 
-  // Welcome-back assistant message when memory loads
-  const onMemoryLoaded = useCallback((name) => {
+  // Welcome-back assistant message when memory loads.
+  // Signature: (md, name) — md is the decrypted Markdown content, name is the
+  // filename.  Content stored in-memory only (SPEC-800); indicator flag + name
+  // persisted to sessionStorage so the topbar pill survives page reload.
+  const onMemoryLoaded = useCallback((md, name) => {
+    // Store decrypted content in ref — available at send time, not in React state.
+    memContentRef.current = md || null;
     setMemLoaded(true);
     setMemName(name);
     setMessages(prev => [...prev, {
@@ -420,10 +452,18 @@ function Chat({ theme, onToggleTheme }) {
     // We read it with fetch() + ReadableStream instead of EventSource because
     // EventSource doesn't support POST requests.
     try {
+      // Build request body — include memory context when a file is loaded.
+      // memContentRef.current is null if no file is loaded or after a page
+      // reload (SPEC-800: content is never persisted client-side across tabs).
+      const reqBody = { text: userText, contextID };
+      if (memContentRef.current) {
+        // Cap at 8000 chars client-side to match backend MessageRequest limit.
+        reqBody.memoryContext = memContentRef.current.slice(0, 8000);
+      }
       const response = await fetch(BACKEND_URL + '/api/message', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: userText, contextID }),
+        body: JSON.stringify(reqBody),
       });
 
       if (!response.ok) throw new Error('HTTP ' + response.status);
@@ -613,8 +653,20 @@ function Chat({ theme, onToggleTheme }) {
           {memLoaded && (
             <>
               <div className="divider" />
-              <span className="mem-indicator" title={memName ? 'Memory: ' + memName : 'Memory active'}>
-                <span className="pulse" />Memory active
+              {/* memContentRef.current is null after a page reload — the flag
+                  persists but the content is gone (SPEC-800).  Show a "re-load"
+                  hint so the user knows they need to re-load the file to have
+                  full memory context active for this session. */}
+              <span
+                className="mem-indicator"
+                title={
+                  memContentRef.current
+                    ? (memName ? 'Memory active · ' + memName : 'Memory active')
+                    : 'Memory file was loaded — re-load to restore context for this session'
+                }
+              >
+                <span className={memContentRef.current ? 'pulse' : 'pulse dim'} />
+                {memContentRef.current ? 'Memory active' : 'Memory · re-load'}
               </span>
             </>
           )}
@@ -832,14 +884,12 @@ function Chat({ theme, onToggleTheme }) {
         <MemoryLoadModal
           open={loadOpen}
           onClose={() => setLoadOpen(false)}
-          onLoaded={(name) => { setLoadOpen(false); onMemoryLoaded(name); }}
+          onLoaded={(md, name) => { setLoadOpen(false); onMemoryLoaded(md, name); }}
         />
       )}
 
       {/* First-run tutorial */}
       <Tutorial open={tutorialOpen} onSkip={closeTutorial} onDone={closeTutorial} />
-
-      {/* Agent debug overlay — gesture-gated: 2-click then 3s hold on avatar */}
       <AgentDebugOverlay open={debugOpen} onClose={() => setDebugOpen(false)} />
     </div>
   );

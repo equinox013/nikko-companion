@@ -227,6 +227,12 @@ class _StubSignalAgent:
         "technique", "techniques", "exercise", "exercises",
         "strategy", "strategies", "method", "methods",
         "how do i", "how to", "what can i do", "what should i",
+        # Catches "is there anything I can do", "anything that I could do",
+        # "anything I can try", "is there anything to help" — explicit
+        # action-seeking even when not phrased as "what can I do".
+        "anything i can", "anything that i can", "anything i could",
+        "is there anything i", "anything to help", "what to do",
+        "is there anything to", "what can help", "what helps",
         "help me", "advice", "tips", "resources", "skills",
         "psychoeducation", "mindfulness", "breathing",
     })
@@ -854,13 +860,21 @@ _PUBMED_ELIGIBLE_QUERY_KEYWORDS: tuple[str, ...] = (
 )
 
 
-def _is_pubmed_eligible(topic_hints: frozenset, query: str) -> bool:
+def _is_pubmed_eligible(topic_hints: frozenset, query: str, raw_text: str = "") -> bool:
     """
     Return True if the query warrants a PubMed lookup.
 
-    Two independent signals must agree — at least one of:
+    Three independent signals are checked — True if any of:
       (a) signal-derived topic hints include a CLINICAL-tier tag, OR
-      (b) the evidence query string contains explicit clinical/research terms.
+      (b) the derived evidence query string contains clinical/research vocabulary, OR
+      (c) the raw user text explicitly signals research intent (e.g. "is there
+          any research that supports...", "what does the evidence say about...").
+
+    Signal (c) is necessary because the derived evidence query loses the user's
+    explicit framing.  For example, "is there any research that supports deep
+    breathing for anxiety?" produces an evidence query like
+    "breathing exercises relaxation anxiety management" — which contains none of
+    the clinical keywords in (b).  Checking (c) catches this case.
 
     When False, the retrieval step runs WebSearch only.  This ensures general
     emotional queries ("I feel overwhelmed", "help me cope with grief") are
@@ -874,12 +888,30 @@ def _is_pubmed_eligible(topic_hints: frozenset, query: str) -> bool:
 
     G-RETRIEVAL-03 — Director-approved [date TBD].
     """
-    # Signal-derived check — CLINICAL support need explicitly detected.
+    # (a) Signal-derived check — CLINICAL support need explicitly detected.
     if _PUBMED_ELIGIBLE_TOPIC_HINTS & topic_hints:
         return True
-    # Query-string check — research/clinical vocabulary present.
+    # (b) Derived evidence query contains clinical/research vocabulary.
     q_lower = query.lower()
-    return any(kw in q_lower for kw in _PUBMED_ELIGIBLE_QUERY_KEYWORDS)
+    if any(kw in q_lower for kw in _PUBMED_ELIGIBLE_QUERY_KEYWORDS):
+        return True
+    # (c) Raw user text explicitly requests research/evidence — catches cases
+    # where the evidence query normalises away the user's research framing.
+    # Keywords chosen to be specific to research intent, not general questions.
+    if raw_text:
+        rt_lower = raw_text.lower()
+        _RAW_RESEARCH_KEYWORDS = (
+            "is there research", "is there any research", "is there evidence",
+            "any evidence", "does research", "does the research",
+            "what does research", "what does the research",
+            "what does evidence", "scientifically", "scientifically proven",
+            "science say", "science behind", "studies show", "studies suggest",
+            "any studies", "is there a study", "are there studies",
+            "evidence-based", "evidence based", "what does science",
+        )
+        if any(kw in rt_lower for kw in _RAW_RESEARCH_KEYWORDS):
+            return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -954,18 +986,24 @@ class NikkoPipeline:
         user_input: str,
         session_id: Optional[str] = None,
         regen_count: int = 0,
+        memory_context: Optional[str] = None,
     ) -> PipelineResult:
         """
         Execute the full SPEC-700 pipeline for one user turn.
 
         Parameters
         ----------
-        user_input   : Raw user message (untrusted — sanitized in STEP 1).
-        session_id   : Optional stable ID for the current session.
-                       Generated internally if not provided.
-        regen_count  : Incremented on each regeneration loop. The pipeline
-                       calls itself recursively when the Evaluator emits
-                       REGENERATE. Callers should always pass 0 (default).
+        user_input      : Raw user message (untrusted — sanitized in STEP 1).
+        session_id      : Optional stable ID for the current session.
+                          Generated internally if not provided.
+        regen_count     : Incremented on each regeneration loop. The pipeline
+                          calls itself recursively when the Evaluator emits
+                          REGENERATE. Callers should always pass 0 (default).
+        memory_context  : Decrypted USM memory file content (plaintext Markdown)
+                          forwarded from the frontend.  None when no memory file
+                          is loaded.  Injected into ADP-A system prompt via
+                          ResponseContextPayload.usm_content (REQ-850-070).
+                          Never persisted server-side (SPEC-800 zero-retention).
 
         Spec trace
         ----------
@@ -1035,6 +1073,11 @@ class NikkoPipeline:
         # [CONCEPT] This is the single object the Interaction Model (LLM)
         # receives. REQ-700-133 / REQ-200-129/130: the LLM sees only this
         # curated context — never raw retrieval outputs or signal payloads.
+        # [CONCEPT] USM (User-Scoped Memory) wiring — REQ-850-070/073/074.
+        # memory_context is the decrypted Markdown from the user's .nikko-mem.enc
+        # file, forwarded by the frontend.  We set usm_active=True and attach the
+        # content so build_adp_a_system() can inject it into the ADP-A system
+        # prompt.  The content is NEVER persisted here (SPEC-800 zero-retention).
         context = ResponseContextPayload(
             mode=mode,
             signals=signal,
@@ -1042,6 +1085,8 @@ class NikkoPipeline:
             synthesized_evidence=evidence,
             crisis_resources=crisis_resources,
             raw_user_message=clean_input,  # [MVP-INFRA] consumed by HFSpaceFullGenerator
+            usm_active=memory_context is not None,
+            usm_content=memory_context,    # None when no memory file loaded
         )
 
         # ── STEP 10: Draft generation (Interaction Model) ─────────────────
@@ -1181,6 +1226,12 @@ class NikkoPipeline:
                 "technique", "techniques", "exercise", "exercises",
                 "strategy", "strategies", "method", "methods",
                 "how do i", "how to", "what can i do", "what should i",
+                # Catches "is there anything I can do", "anything I could try",
+                # "is there anything to help", "what to do" — action-seeking
+                # phrasing that doesn't start with "what can I do".
+                "anything i can", "anything that i can", "anything i could",
+                "is there anything i", "anything to help", "what to do",
+                "is there anything to", "what can help", "what helps",
                 "help me", "advice", "tips", "resources", "skills",
                 "psychoeducation", "mindfulness", "breathing",
             })
@@ -1295,7 +1346,7 @@ class NikkoPipeline:
         # General emotional queries → WebSearch only (grey-lit guidance sites).
         # Explicitly clinical/research queries → PubMed first, WebSearch second.
         # See _is_pubmed_eligible() for the two-signal eligibility rule.
-        pubmed_eligible = _is_pubmed_eligible(topic_hints, query)
+        pubmed_eligible = _is_pubmed_eligible(topic_hints, query, raw_text=user_text)
         adapters_to_run = ADAPTER_PRIORITY_ORDER if pubmed_eligible else [WebSearchAdapter]
         # When PubMed is skipped, request more grey-lit results to compensate
         # for the absent peer-reviewed set.

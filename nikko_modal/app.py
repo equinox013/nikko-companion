@@ -183,6 +183,14 @@ image = (
     image=image,
     volumes={"/models": volume},
     timeout=360,
+    # [CONCEPT] scaledown_window: how many seconds Modal waits after a container
+    # becomes idle before terminating it. Default on the free tier is ~300s (5 min).
+    # Setting 600 (10 min) keeps the container alive through a gap between requests
+    # (e.g. a user typing their next message), avoiding a cold-start 429 when the
+    # next request arrives while a new container is still loading models.
+    # Cost impact: idle containers do NOT consume GPU credits — Modal only charges
+    # for active GPU time, so a longer scaledown window is effectively free.
+    scaledown_window=600,
     secrets=[
         modal.Secret.from_name("huggingface"),   # HF_TOKEN
         modal.Secret.from_name("nikko-config"),  # HF_ADAPTER_REPO, NIKKO_INTERNAL_TOKEN
@@ -224,7 +232,7 @@ class NikkoInference:
         log.info("Loading Qwen3-4B base model (bf16)...")
         self._qwen_model = AutoModelForCausalLM.from_pretrained(
             "/models/qwen",
-            torch_dtype=torch.bfloat16,
+            dtype=torch.bfloat16,
             # device_map="cuda": Modal CUDA is available from startup.
             # Unlike ZeroGPU (which defers CUDA allocation), Modal initialises
             # the GPU context before the container's Python process starts.
@@ -247,7 +255,7 @@ class NikkoInference:
         log.info("Loading Gemma-2-2b-it base model (bf16)...")
         gemma_base = AutoModelForCausalLM.from_pretrained(
             "/models/gemma",
-            torch_dtype=torch.bfloat16,
+            dtype=torch.bfloat16,
             device_map="cuda",
             trust_remote_code=False,
         )

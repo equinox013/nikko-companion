@@ -348,6 +348,19 @@ class ResponseContextPayload(BaseModel):
             "(REQ-850-073/074)"
         ),
     )
+    # [MVP-INFRA] Decrypted USM memory content — the plaintext Markdown from
+    # the user's encrypted memory file, decrypted client-side and forwarded by
+    # the frontend.  Injected into the ADP-A system prompt when present
+    # (REQ-850-070).  Never persisted server-side (SPEC-800 zero-retention).
+    usm_content:        Optional[str] = Field(
+        default=None,
+        description=(
+            "Decrypted USM memory file contents (plaintext Markdown). "
+            "Present only when usm_active=True. "
+            "Injected into ADP-A system prompt by context_prompt_builder. "
+            "(REQ-850-070)"
+        ),
+    )
     # [MVP-INFRA] Raw sanitized user message — set by NikkoPipeline before
     # handing context to DraftGeneratorProtocol. Not in original SPEC-200
     # (added for HFSpaceFullGenerator RAG prompt injection). Optional so all

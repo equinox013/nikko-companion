@@ -59,6 +59,16 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 # Obtain from `modal deploy nikko_modal/app.py` output.
 MODAL_URL = os.getenv("MODAL_URL", "").rstrip("/")
 
+# Modal health endpoint — separate Modal function from the pipeline.
+# The pipeline URL (MODAL_URL) is a POST-only FastAPI endpoint; doing GET /health
+# on it returns 404/405.  The health function has its own URL:
+#   https://equinox013--nikko-health.modal.run
+# Set on Render: MODAL_HEALTH_URL=https://equinox013--nikko-health.modal.run
+# If not set, falls back to using MODAL_URL root (GET /) which returns 200
+# from the root handler added in backend/main.py — but that only checks Render,
+# not Modal.  Setting MODAL_HEALTH_URL is strongly recommended for production.
+MODAL_HEALTH_URL = os.getenv("MODAL_HEALTH_URL", "").rstrip("/")
+
 # Fallback inference endpoint: HF Space ZeroGPU.
 # Used when Modal is unreachable or returns an error.
 # Set on Render: HF_SPACE_URL=https://<your-hf-space>.hf.space
@@ -141,10 +151,21 @@ class MoodSnapshot(BaseModel):
     dominantEmotion: str | None = None
 
 class MessageRequest(BaseModel):
-    text:          str           = Field(..., min_length=1, max_length=4000)
-    contextId:     str | None    = None
-    userId:        str | None    = None
-    moodSnapshot:  MoodSnapshot | None = None
+    text:           str           = Field(..., min_length=1, max_length=4000)
+    contextId:      str | None    = None
+    userId:         str | None    = None
+    moodSnapshot:   MoodSnapshot | None = None
+    # [REQ-850-070] Decrypted USM memory file content forwarded by the frontend.
+    # Decryption happens client-side only — the server receives plaintext Markdown
+    # and must never persist it (SPEC-800 zero-retention).  None when no memory
+    # file is loaded.  Capped at 8000 chars to prevent context-window overflow
+    # (Qwen3-4B 32k context; 8000 chars ≈ 2000 tokens, leaving headroom for
+    # evidence, strategy, and conversation history).
+    memoryContext:  str | None    = Field(
+        default=None,
+        max_length=8000,
+        description="Decrypted USM memory content (plaintext Markdown). Never persisted.",
+    )
 
 class SourceItem(BaseModel):
     """
@@ -314,7 +335,11 @@ async def _pipeline(request: MessageRequest) -> AsyncGenerator[SSEChunk, None]:
         # background thread from cancellation if wait_for times out — the
         # thread keeps running while we yield the keep-alive ping.
         task = asyncio.create_task(
-            asyncio.to_thread(_pipeline_run_sync, request.text.strip())
+            asyncio.to_thread(
+                _pipeline_run_sync,
+                request.text.strip(),
+                request.memoryContext,
+            )
         )
 
         # Keep-alive polling loop.
@@ -384,12 +409,16 @@ async def _pipeline(request: MessageRequest) -> AsyncGenerator[SSEChunk, None]:
     )
 
 
-def _pipeline_run_sync(user_text: str) -> PipelineResult:
+def _pipeline_run_sync(user_text: str, memory_context: str | None = None) -> PipelineResult:
     """
     Thin synchronous wrapper around NikkoPipeline.run() for use with
     asyncio.to_thread(). Separated so the async caller stays clean.
+
+    memory_context: decrypted USM memory file content from the frontend.
+    Forwarded to NikkoPipeline so it can set usm_active=True and inject
+    the content into the ADP-A system prompt (REQ-850-070).
     """
-    return _nikko.run(user_input=user_text)
+    return _nikko.run(user_input=user_text, memory_context=memory_context)
 
 
 # ── SSE helpers ───────────────────────────────────────────────────────────────
@@ -429,11 +458,15 @@ async def health():
     user to send messages — field name kept as space_ok for frontend compatibility.
     """
     space_ok = False
-    probe_url = MODAL_URL or HF_SPACE_URL
+    # Probe the dedicated Modal health URL if provided; otherwise fall back to
+    # the HF Space /health endpoint.  We do NOT append /health to MODAL_URL
+    # because the Modal pipeline endpoint is POST-only — GET /health on it
+    # returns 404.  The Modal health function lives at a separate URL.
+    probe_url = MODAL_HEALTH_URL or (HF_SPACE_URL + "/health" if HF_SPACE_URL else "")
     if probe_url:
         try:
             async with httpx.AsyncClient(timeout=5) as client:
-                r = await client.get(f"{probe_url}/health")
+                r = await client.get(probe_url)
                 space_ok = r.status_code == 200
         except Exception:
             pass

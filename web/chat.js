@@ -1,4 +1,4 @@
-var NikkoChat = (() => {
+var ChatModule = (() => {
   // web/chat.jsx
   var { useState, useEffect, useRef, useCallback } = React;
   function AiDisclaimer() {
@@ -219,9 +219,34 @@ var NikkoChat = (() => {
     };
     const [memOpen, setMemOpen] = useState(false);
     const [loadOpen, setLoadOpen] = useState(false);
-    const [memLoaded, setMemLoaded] = useState(false);
-    const [memName, setMemName] = useState("");
+    const [memLoaded, setMemLoaded] = useState(() => {
+      try {
+        return sessionStorage.getItem("nikko.mem.loaded") === "1";
+      } catch (e) {
+        return false;
+      }
+    });
+    const [memName, setMemName] = useState(() => {
+      try {
+        return sessionStorage.getItem("nikko.mem.name") || "";
+      } catch (e) {
+        return "";
+      }
+    });
+    const memContentRef = useRef(null);
     const [memPop, setMemPop] = useState(false);
+    useEffect(() => {
+      try {
+        if (memLoaded) {
+          sessionStorage.setItem("nikko.mem.loaded", "1");
+          sessionStorage.setItem("nikko.mem.name", memName || "");
+        } else {
+          sessionStorage.removeItem("nikko.mem.loaded");
+          sessionStorage.removeItem("nikko.mem.name");
+        }
+      } catch (e) {
+      }
+    }, [memLoaded, memName]);
     useEffect(() => {
       if (!memPop) return;
       const onDoc = (e) => {
@@ -240,7 +265,8 @@ var NikkoChat = (() => {
     useEffect(() => {
       setTimeout(scrollToBottom, 50);
     }, [messages.length, scrollToBottom]);
-    const onMemoryLoaded = useCallback((name) => {
+    const onMemoryLoaded = useCallback((md, name) => {
+      memContentRef.current = md || null;
       setMemLoaded(true);
       setMemName(name);
       setMessages((prev) => [...prev, {
@@ -293,10 +319,14 @@ var NikkoChat = (() => {
       setCurrentEmotion("think");
       coldStartTimerRef.current = setTimeout(() => setIsColdStart(true), 12e3);
       try {
+        const reqBody = { text: userText, contextID };
+        if (memContentRef.current) {
+          reqBody.memoryContext = memContentRef.current.slice(0, 8e3);
+        }
         const response = await fetch(BACKEND_URL + "/api/message", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: userText, contextID })
+          body: JSON.stringify(reqBody)
         });
         if (!response.ok) throw new Error("HTTP " + response.status);
         const reader = response.body.getReader();
@@ -425,7 +455,15 @@ var NikkoChat = (() => {
         "aria-hidden": "true"
       },
       /* @__PURE__ */ React.createElement(NikkoAvatar, { emotion: liveEmotion, size: 34 })
-    ), /* @__PURE__ */ React.createElement("span", { className: "wordmark" }, "Nikko")), /* @__PURE__ */ React.createElement("div", { className: "divider" }), /* @__PURE__ */ React.createElement("div", { className: "tip-host" }, /* @__PURE__ */ React.createElement("span", { className: "pill linklike", tabIndex: 0 }, /* @__PURE__ */ React.createElement("span", { className: "dot" }), "Research preview"), /* @__PURE__ */ React.createElement("div", { className: "tip", role: "tooltip" }, "Nikko is an open research preview \u2014 non-diagnostic, not a clinician, implementation publicly visible at", " ", /* @__PURE__ */ React.createElement("a", { href: "https://github.com/nikko-research/nikko", target: "_blank", rel: "noopener noreferrer" }, "github.com/nikko-research/nikko"), ".")), memLoaded && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { className: "divider" }), /* @__PURE__ */ React.createElement("span", { className: "mem-indicator", title: memName ? "Memory: " + memName : "Memory active" }, /* @__PURE__ */ React.createElement("span", { className: "pulse" }), "Memory active"))), /* @__PURE__ */ React.createElement("div", { className: "pillbar" }, /* @__PURE__ */ React.createElement("div", { className: "mem-pop-host", style: { position: "relative" } }, /* @__PURE__ */ React.createElement(
+    ), /* @__PURE__ */ React.createElement("span", { className: "wordmark" }, "Nikko")), /* @__PURE__ */ React.createElement("div", { className: "divider" }), /* @__PURE__ */ React.createElement("div", { className: "tip-host" }, /* @__PURE__ */ React.createElement("span", { className: "pill linklike", tabIndex: 0 }, /* @__PURE__ */ React.createElement("span", { className: "dot" }), "Research preview"), /* @__PURE__ */ React.createElement("div", { className: "tip", role: "tooltip" }, "Nikko is an open research preview \u2014 non-diagnostic, not a clinician, implementation publicly visible at", " ", /* @__PURE__ */ React.createElement("a", { href: "https://github.com/nikko-research/nikko", target: "_blank", rel: "noopener noreferrer" }, "github.com/nikko-research/nikko"), ".")), memLoaded && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { className: "divider" }), /* @__PURE__ */ React.createElement(
+      "span",
+      {
+        className: "mem-indicator",
+        title: memContentRef.current ? memName ? "Memory active \xB7 " + memName : "Memory active" : "Memory file was loaded \u2014 re-load to restore context for this session"
+      },
+      /* @__PURE__ */ React.createElement("span", { className: memContentRef.current ? "pulse" : "pulse dim" }),
+      memContentRef.current ? "Memory active" : "Memory \xB7 re-load"
+    ))), /* @__PURE__ */ React.createElement("div", { className: "pillbar" }, /* @__PURE__ */ React.createElement("div", { className: "mem-pop-host", style: { position: "relative" } }, /* @__PURE__ */ React.createElement(
       "button",
       {
         className: "ghostbtn" + (memLoaded ? " active" : ""),
@@ -518,9 +556,9 @@ var NikkoChat = (() => {
       {
         open: loadOpen,
         onClose: () => setLoadOpen(false),
-        onLoaded: (name) => {
+        onLoaded: (md, name) => {
           setLoadOpen(false);
-          onMemoryLoaded(name);
+          onMemoryLoaded(md, name);
         }
       }
     ), /* @__PURE__ */ React.createElement(Tutorial, { open: tutorialOpen, onSkip: closeTutorial, onDone: closeTutorial }), /* @__PURE__ */ React.createElement(AgentDebugOverlay, { open: debugOpen, onClose: () => setDebugOpen(false) }));

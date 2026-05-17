@@ -42,6 +42,7 @@ the FastAPI async event loop while waiting for the GPU (30-120s cold start).
 """
 
 import logging
+import time
 
 import httpx
 
@@ -151,34 +152,66 @@ class HFSpaceFullGenerator:
         if self._fallback:
             urls_to_try.append(self._fallback)
 
-        last_exc: Exception | None = None
-        for idx, url in enumerate(urls_to_try):
-            # Use tighter timeout for Modal (faster cold start); relaxed for HF Space.
-            # Index 0 = primary (Modal), index 1+ = fallback (HF Space).
-            read_timeout = _MODAL_TIMEOUT_S if idx == 0 else _HF_SPACE_TIMEOUT_S
-            _timeout = httpx.Timeout(read=read_timeout, connect=10.0, write=30.0, pool=5.0)
+        # [CONCEPT] 429 retry strategy for the primary (Modal) endpoint.
+        # Modal returns 429 when its GPU container is temporarily busy processing
+        # a previous request. Instead of immediately falling back to the slow HF
+        # Space (~90-120s cold start), we wait and retry — the container is usually
+        # free again within one inference cycle (~20-40s warm).
+        # Three retries × 10s = 30s max patience before accepting the fallback.
+        # The HF Space never gets 429-retried: its ZeroGPU queue handles concurrency.
+        _MAX_429_RETRIES = 3
+        _429_BACKOFF_S   = 10   # seconds between retries
 
-            try:
-                with httpx.Client(timeout=_timeout) as client:
-                    # URLs are stored as complete endpoint URLs — no path appended.
-                    # Modal:    https://equinox013--nikko-pipeline.modal.run  (root IS the endpoint)
-                    # HF Space: https://equinox013-nikko-inference.hf.space/pipeline
-                    resp = client.post(url, json=payload)
-                    resp.raise_for_status()
-                # Successful response — break out of retry loop.
-                break
-            except Exception as exc:
-                logger.warning(
-                    "HFSpaceFullGenerator: /pipeline call to %s failed (%s). %s",
-                    url,
-                    exc,
-                    "Retrying against fallback..." if idx < len(urls_to_try) - 1 else "No more URLs to try.",
-                )
-                last_exc = exc
-                if idx < len(urls_to_try) - 1:
-                    continue  # try next URL
-                # All URLs exhausted — re-raise so NikkoPipeline emits SAFE_FALLBACK.
-                raise last_exc
+        last_exc: Exception | None = None
+        succeeded = False
+
+        for idx, url in enumerate(urls_to_try):
+            # Tighter timeout for Modal (fast GPU); relaxed for HF Space (cold start).
+            read_timeout  = _MODAL_TIMEOUT_S if idx == 0 else _HF_SPACE_TIMEOUT_S
+            _timeout      = httpx.Timeout(read=read_timeout, connect=10.0, write=30.0, pool=5.0)
+            is_primary    = (idx == 0)
+            max_attempts  = (_MAX_429_RETRIES + 1) if is_primary else 1
+
+            for attempt in range(max_attempts):
+                # Sleep before retries (not before the first attempt).
+                if attempt > 0:
+                    time.sleep(_429_BACKOFF_S)
+                try:
+                    with httpx.Client(timeout=_timeout) as client:
+                        # URLs are complete endpoint URLs — no path suffix needed.
+                        # Modal:    https://equinox013--nikko-pipeline.modal.run
+                        # HF Space: https://equinox013-nikko-inference.hf.space/pipeline
+                        resp = client.post(url, json=payload)
+
+                    # 429 on primary with retries remaining → sleep-and-retry.
+                    if resp.status_code == 429 and is_primary and attempt < _MAX_429_RETRIES:
+                        logger.warning(
+                            "HFSpaceFullGenerator: Modal 429 (attempt %d/%d) — "
+                            "container busy. Retrying in %ds...",
+                            attempt + 1, _MAX_429_RETRIES, _429_BACKOFF_S,
+                        )
+                        continue  # next attempt in inner loop
+
+                    resp.raise_for_status()   # raises on 4xx/5xx (including final 429)
+                    succeeded = True
+                    break                     # success — exit inner attempt loop
+
+                except Exception as exc:
+                    logger.warning(
+                        "HFSpaceFullGenerator: /pipeline call to %s failed (%s). %s",
+                        url,
+                        exc,
+                        "Retrying against fallback..." if idx < len(urls_to_try) - 1 else "No more URLs to try.",
+                    )
+                    last_exc = exc
+                    break  # non-retryable error — exit inner loop, try next URL
+
+            if succeeded:
+                break   # exit URL loop — we have a good response
+
+        if not succeeded:
+            # All URLs exhausted (or all retries consumed).
+            raise last_exc or RuntimeError("Pipeline request failed — no URLs remaining.")
 
         result = resp.json()
 

@@ -180,7 +180,7 @@ function AgentDebugOverlay({ open, onClose }) {
               {current.liveData
                 ? <span className="debug-meta-pill live">● live data</span>
                 : <span className="debug-meta-pill sim">simulated</span>}
-              {current.elapsed ? <span className="debug-meta-item">{current.elapsed}s total</span> : null}
+              {current.elapsed ? <span className="debug-meta-item">{parseFloat(current.elapsed).toFixed(1)}s total</span> : null}
               {current.regen ? <span className="debug-meta-pill regen">regen triggered</span> : null}
             </div>
 
@@ -190,7 +190,7 @@ function AgentDebugOverlay({ open, onClose }) {
                 detail={current.adp_b?.flags?.length ? `flags: ${current.adp_b.flags.join(', ')}` : 'no flags'}
                 running={false}
               />
-              <AdapterCard step="2" name="ADP-A" role="Phi-3.5-mini · Empathy response"
+              <AdapterCard step="2" name="ADP-A" role="Qwen3-4B · Empathy response"
                 verdict={current.is_crisis ? 'BYPASSED' : 'GENERATED'}
                 detail={current.adp_a?.chars ? `${current.adp_a.chars} chars` : null}
                 running={false}
@@ -222,3 +222,4 @@ function AgentDebugOverlay({ open, onClose }) {
 }
 
 Object.assign(window, { AgentRibbon, AgentDebugOverlay, useDebugGesture, buildAgentTrace, NikkoAgentLog });
+ NikkoAgentLog });

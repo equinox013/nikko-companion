@@ -78,6 +78,38 @@ def build_adp_a_system(context: ResponseContextPayload) -> str:
     """
     parts = [_NIKKO_PERSONA]
 
+    # ── USM memory injection (REQ-850-070) ───────────────────────────────────
+    # When the user has loaded a personal memory file (usm_active=True), its
+    # decrypted Markdown content is injected here so Qwen3-4B can personalise
+    # the response.  The content is supplied by the frontend (client-side
+    # decrypt) and never stored server-side (SPEC-800 zero-retention).
+    #
+    # [CONCEPT] USM = User-Scoped Memory.  It's an encrypted .md file the user
+    # carries between sessions — a private diary/context note they choose to
+    # share for the duration of a session.  Injecting it into the ADP-A prompt
+    # lets the model reference their history without the server ever storing it.
+    #
+    # Safety constraints (REQ-850-073/074):
+    #   - Frame memory as background context, not as clinical history.
+    #   - Do NOT use memory to infer current crisis state.
+    #   - Do NOT position Nikko as a continuous care provider.
+    if context.usm_active and context.usm_content:
+        # Truncate to protect context window — 1200 chars is ≈ 300 tokens,
+        # enough for a rich diary entry while leaving headroom for evidence.
+        mem_snippet = context.usm_content[:1200]
+        if len(context.usm_content) > 1200:
+            mem_snippet += "\n[Memory file truncated — remaining content not shown]"
+        parts.append(
+            "\nPERSONAL CONTEXT (from user's memory file — treat as background, "
+            "not diagnosis):\n"
+            "---\n"
+            f"{mem_snippet}\n"
+            "---\n"
+            "Use this context to personalise your response. "
+            "Do NOT infer clinical diagnoses, crisis state, or ongoing care needs "
+            "from memory content alone.  The live conversation is your primary signal."
+        )
+
     # ── Strategy guidance (tone + framing from SupportStrategyAgent) ─────────
     # The SupportStrategyAgent has already determined the optimal tone for this
     # user's distress level and mode. Inject it so ADP-A doesn't override it.
