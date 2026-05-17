@@ -137,7 +137,7 @@ class HFSpaceFullGenerator:
         }
 
         logger.info(
-            "HFSpaceFullGenerator: calling /pipeline | mode=%s evidence_items=%d",
+            "HFSpaceFullGenerator: calling pipeline endpoint | mode=%s evidence_items=%d",
             context.mode.value,
             len(context.synthesized_evidence.citations) if context.synthesized_evidence else 0,
         )
@@ -160,7 +160,10 @@ class HFSpaceFullGenerator:
 
             try:
                 with httpx.Client(timeout=_timeout) as client:
-                    resp = client.post(f"{url}/pipeline", json=payload)
+                    # URLs are stored as complete endpoint URLs — no path appended.
+                    # Modal:    https://equinox013--nikko-pipeline.modal.run  (root IS the endpoint)
+                    # HF Space: https://equinox013-nikko-inference.hf.space/pipeline
+                    resp = client.post(url, json=payload)
                     resp.raise_for_status()
                 # Successful response — break out of retry loop.
                 break
