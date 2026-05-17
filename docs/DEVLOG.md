@@ -260,6 +260,74 @@ I noted in this entry that I'd "fixed the Fly.io / Render label contradiction" �
 
 ---
 
+## 2026-05-16 — Phase 5 Sign-off + Backend Integration Complete
+
+### What we did
+
+- Wired `memoryContext` end-to-end: frontend sends decrypted USM content in the POST body; `MessageRequest` receives it; `NikkoPipeline.run()` accepts `memory_context: Optional[str]`; `ResponseContextPayload` carries `usm_content`; `build_adp_a_system()` injects it into the ADP-A system prompt as personalisation context (capped at 1200 chars with truncation notice).
+- Added `sessionStorage` persistence for USM loaded/name flags so a page refresh no longer silently drops the "memory loaded" indicator — content is intentionally not persisted (SPEC-800 zero-retention).
+- Reconstructed truncated `chat.jsx` tail from compiled `chat.js` (React.createElement reverse-engineering) — ~70 lines were missing from the source file due to a heredoc escaping issue in the previous session's bash writes.
+- Added `MODAL_HEALTH_URL` env var to `backend/main.py` — health probe now uses a separate designated health endpoint rather than appending `/health` to the inference URL (which is POST-only and returned 404).
+- Phase 5 signed off.
+
+### Decisions & justifications
+
+| Decision | Justification |
+|----------|--------------|
+| USM content capped at 1200 chars in ADP-A system prompt | ADP-A context window has a hard limit. 1200 chars carries enough to personalise without crowding out strategy guidance and evidence. Truncation is visible to the model ("Memory file truncated"). |
+| `memContentRef` as useRef, not useState | The decrypted content is large and doesn't need to trigger re-renders when set. useRef holds it across renders without the cost of re-diffing. |
+| sessionStorage for loaded flag, not content | Flag/name need to survive React re-renders. Content must not persist across sessions (SPEC-800). Two different signals, two different mechanisms. |
+| Separate `MODAL_HEALTH_URL` env var | The `/pipeline` endpoint is POST-only. Appending `/health` to the Modal inference URL returned 404 on every health probe, incorrectly marking the stack as unhealthy on every `/health` check from the frontend. |
+
+### Where I went wrong
+
+**File truncation from bash heredocs caused two separate source-file corruptions in the same session.** Both `chat.jsx` and `agent-debug.jsx` ended up with missing content — one lost ~70 lines, the other got an extra stray line appended due to CRLF/LF mismatch. Both caused GitHub Actions CI failures that were only caught after push. The root cause in both cases was using bash `echo >>` and heredoc constructs to write long JSX files, which is fragile under escaping edge cases and line-ending translation.
+
+The pattern I need to stop is using bash to write anything longer than a few lines when file tools are available. Python `write()` — bypassing bash entirely — is what actually fixed both files. I've now learned this the hard way twice in one session.
+
+### Learnings
+
+- Heredoc + bash on a Windows-mounted filesystem is a trap for LF/CRLF corruption. Once line endings get mixed, esbuild will reject the source silently at the character level — the error message points to a line number, not an encoding issue, so diagnosis is slow.
+- Reconstructing JSX from compiled JS is possible but slow. `React.createElement(Component, props, ...)` is mechanically reversible to JSX, but it requires careful mapping of nested createElement calls back to their JSX equivalents. The real lesson is to not lose the source in the first place.
+- Health probe and inference endpoint are architecturally separate concerns. A single URL can't be both — one accepts GET with no body, the other accepts POST with a complex payload. I should have caught this at the design stage.
+
+---
+
+## 2026-05-17 — Phase 6 Active: Pipeline Routing Fixes + Modal Reliability + MVP Declaration
+
+### What we did
+
+- **PubMed gate fix:** `_is_pubmed_eligible()` wasn't triggering on research-intent queries like "is there any research that supports deep breathing?" because the evidence query normalisation strips the user's research framing before the gate check. Added signal (c): raw user text is now checked independently against a list of explicit research-intent phrases (`"is there any research"`, `"does research show"`, `"are there studies"`, `"evidence shows"`, etc.).
+- **GUIDANCE routing fix:** Extended `_GUIDANCE_KEYWORDS` with action-seeking phrases that don't match the existing `"what can i do"` pattern: `"anything i can"`, `"anything that i can"`, `"anything i could"`, `"is there anything i"`, `"anything to help"`, `"what to do"`, `"is there anything to"`, `"what can help"`, `"what helps"`. Fixes misclassification of "is there anything I can do?" as COMFORT.
+- **Modal 429 handling:** Added 3-retry × 10s backoff loop in `draft_generator.py` for 429 responses from the primary Modal endpoint. Previously a 429 immediately fell back to HF Space (~90–120s cold start). Now retries exhaust first (30s max patience) before accepting the slower fallback.
+- **`scaledown_window=600`** added to Modal `@app.cls` — container stays warm for 10 minutes after last request, substantially reducing 429 frequency during normal usage cadence.
+- **`torch_dtype` → `dtype`** deprecation fix applied to both Qwen3 and Gemma-2 `from_pretrained` calls in `nikko_modal/app.py`.
+- **agent-debug.jsx line-ending normalization:** Python script corrected the stray `NikkoAgentLog });` extra line left by a previous bash append. LF normalised. CI esbuild compilation now passes cleanly.
+- **MVP declared.** Status updated from "research preview" to MVP across README and badges.
+
+### Decisions & justifications
+
+| Decision | Justification |
+|----------|--------------|
+| Raw text PubMed signal alongside query signal | Evidence query normalisation is intentionally aggressive — it strips research framing to produce a clean search string. We need the raw text for intent detection; we need the normalised query for the search itself. These are separate signals and should be checked separately. |
+| Retry-then-fallback for Modal 429 (not immediate fallback) | HF Space cold start is 90–120s. A Modal container busy with a prior request is usually free again in 20–40s. Three retries × 10s is 30s maximum patience — a much better outcome than a 90s penalty. |
+| `scaledown_window=600` over a shorter value | Our usage pattern is conversational — turns arrive roughly 60–180s apart. A 10-minute warmth window covers a typical session without keeping the container hot during idle periods. |
+| GUIDANCE keyword extension rather than regex | The existing `_GUIDANCE_KEYWORDS` frozenset is a fast, auditable, deterministic structure. Adding phrase variants is lower-risk than introducing regex patterns that might over-match. |
+
+### Where I went wrong
+
+**I didn't check the evidence query normalisation path when designing the PubMed gate.** The gate called `_is_pubmed_eligible()` with the derived evidence query, not the raw user text — so the very signal the gate was supposed to detect (explicit research intent) was being stripped before the check ran. The fix was trivially small (add `raw_text=""` parameter, check against a phrase list), but it took a screenshot of the broken behaviour to surface it. I should have traced the full data flow from raw user text to the gate check when the gate was originally written.
+
+**GUIDANCE routing was similarly incomplete by design.** The keyword list was built around the most obvious phrasings ("what can i do," "how do i") and missed the natural-language variants people actually use ("is there anything I can do," "is there anything to help"). This is a coverage problem that only shows up when real users interact with the system — which is exactly why Phase 6 exists. The fix is fast; the lesson is that keyword-based routing always needs live testing against real phrasings, not just the ones that come to mind during spec design.
+
+### Learnings
+
+- Normalisation pipelines are opaque to downstream gates. Any signal that lives in the raw user text and gets processed before the gate sees it must be extracted *before* normalisation and carried separately. The evidence query and the intent signal are two different things and should always have been treated as such.
+- Modal 429s are not errors — they're a concurrency signal. The container is alive and will be ready again soon. Treating them as failures and immediately routing to the fallback is the wrong call; a brief wait is almost always the right one.
+- Live routing evaluation reveals phrasings that spec design misses. No amount of spec review would have surfaced "is there anything I can do?" as an uncovered GUIDANCE variant — it took a user query to find it. Phase 6 exists for exactly this reason.
+
+---
+
 ## Template for future entries
 
 ```

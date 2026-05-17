@@ -1,6 +1,8 @@
 # Nikko — Evidence-Grounded Wellbeing Assistant
 
-![Research Preview](https://img.shields.io/badge/status-research%20preview-orange)
+![docs/assets/nikko-banner.png](docs/assets/nikko-banner.png)
+
+![Status](https://img.shields.io/badge/status-MVP-brightgreen)
 ![Phase](https://img.shields.io/badge/phase-6%20%E2%80%94%20evaluation-blue)
 ![Models](https://img.shields.io/badge/models-Qwen3--4B%20%2B%20Gemma--2--2b-informational)
 ![Python](https://img.shields.io/badge/python-3.11-green)
@@ -15,7 +17,7 @@ Nikko is a safety-aligned, evidence-grounded LLM ecosystem designed to function 
 
 ## Project Status
 
-> **Active evaluation.** The full stack is deployed end-to-end. Phase 5 (backend API integration) is complete — the frontend is wired to live agents with no hardcoded fallbacks. Phase 6 (end-to-end evaluation) is now active, running alongside ongoing UX refinement and backend latency work.
+> **MVP.** The full stack is deployed end-to-end. All core features are wired and live. Phase 6 (end-to-end evaluation) is active — running ongoing evaluation, UX refinement, and latency work in parallel with production usage.
 
 | Layer | Status |
 |-------|--------|
@@ -233,7 +235,7 @@ Because the pipeline takes 30–120s depending on whether the HF Space GPU conte
 
 ### Fallback (backend unreachable)
 
-If the Render backend is unreachable (cold-start, network error, or empty SSE stream), the frontend gracefully degrades to `matchNikkoPattern()` — a local regex-based keyword matcher in `nikko-data.jsx`. The user always receives a response. This fallback is logged to console and not surfaced to the user. It is a temporary measure; Phase 5 completion removes the hardcoded patterns entirely.
+If the Render backend is unreachable (cold-start, network error, or empty SSE stream), the frontend gracefully degrades to `matchNikkoPattern()` — a local regex-based keyword matcher in `nikko-data.jsx`. The user always receives a response. This fallback is logged to console and not surfaced to the user. It remains as an offline safety net; the primary path is always the live backend pipeline.
 
 ### Agent debug overlay
 
