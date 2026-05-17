@@ -514,106 +514,106 @@ _COGNITIVE_PATTERN_TERMS: dict[str, str] = {
 _TOPIC_KEYWORD_PATTERNS: list[tuple[re.Pattern, str]] = [
     # ── Specific technique categories ────────────────────────────────────────
     (re.compile(
-        r"\b(calm|calming|relax|relaxation|soothe|settle|ease|unwind|de-stress)\b", re.I),
+        r"\b(calm|calming|relax|relaxation|soothe|settle|ease|unwind|de-stress)", re.I),
      "relaxation techniques anxiety management"),
     (re.compile(
-        r"\b(breath|breathing|breathe|box breath|4-7-8|diaphragm|belly breath)\b", re.I),
+        r"\b(breath|breathing|breathe|box breath|4-7-8|diaphragm|belly breath)", re.I),
      "breathing exercises relaxation"),
     (re.compile(
-        r"\b(ground|grounding|5-4-3-2-1|anchor|present moment|here and now)\b", re.I),
+        r"\b(ground|grounding|5-4-3-2-1|anchor|present moment|here and now)", re.I),
      "grounding exercises anxiety"),
     (re.compile(
-        r"\b(mindful|mindfulness|meditat|aware|awareness|body scan)\b", re.I),
+        r"\b(mindful|mindfulness|meditat|aware|awareness|body scan)", re.I),
      "mindfulness meditation mental health"),
     (re.compile(
-        r"\b(progressiv(e)? muscle|PMR|muscle relax|tension.releas)\b", re.I),
+        r"\b(progressiv(e)? muscle|PMR|muscle relax|tension.releas)", re.I),
      "progressive muscle relaxation"),
     (re.compile(
-        r"\b(yoga|stretching|movement|exercise for (stress|anxiety|mood))\b", re.I),
+        r"\b(yoga|stretching|movement|exercise for (stress|anxiety|mood))", re.I),
      "exercise movement mental health benefits"),
     (re.compile(
-        r"\b(journal|writing|expressive writing|thought diary|mood diary)\b", re.I),
+        r"\b(journal|writing|expressive writing|thought diary|mood diary)", re.I),
      "expressive writing journaling mental health"),
     (re.compile(
-        r"\b(CBT|cognitive behav|thought challeng|reframe|restructur|negative thought)\b", re.I),
+        r"\b(CBT|cognitive behav|thought challeng|reframe|restructur|negative thought)", re.I),
      "cognitive behavioural therapy techniques"),
     (re.compile(
-        r"\b(DBT|dialectical|distress toleran|emotion regulat|interpersonal effectiv)\b", re.I),
+        r"\b(DBT|dialectical|distress toleran|emotion regulat|interpersonal effectiv)", re.I),
      "dialectical behaviour therapy skills"),
     (re.compile(
-        r"\b(ACT|acceptance.commit|psychological flexib|defusion|values-based)\b", re.I),
+        r"\b(ACT|acceptance.commit|psychological flexib|defusion|values-based)", re.I),
      "acceptance commitment therapy"),
     (re.compile(
-        r"\b(EMDR|eye movement|trauma-focused|trauma processing)\b", re.I),
+        r"\b(EMDR|eye movement|trauma-focused|trauma processing)", re.I),
      "EMDR trauma therapy"),
 
     # ── Physical / somatic symptoms ───────────────────────────────────────────
     (re.compile(
-        r"\b(shak|trembl|tremble|shiver|quiver|body shak)\b", re.I),
+        r"\b(shak|trembl|tremble|shiver|quiver|body shak)", re.I),
      "anxiety physical symptoms shaking management"),
     (re.compile(
-        r"\b(heart (racing|pound|beat fast)|palpitat|chest tight|chest pain)\b", re.I),
+        r"\b(heart (racing|pound|beat fast)|palpitat|chest tight|chest pain)", re.I),
      "panic attack physical symptoms management"),
     (re.compile(
-        r"\b(sweat|sweat(ing)?|flush|hot flash|dizziness|lightheaded|nausea)\b", re.I),
+        r"\b(sweat|sweat(ing)?|flush|hot flash|dizziness|lightheaded|nausea)", re.I),
      "anxiety somatic symptoms management"),
     (re.compile(
-        r"\b(panic attack|hyperventilat|freeze|frozen|fight.or.flight)\b", re.I),
+        r"\b(panic attack|hyperventilat|freeze|frozen|fight.or.flight)", re.I),
      "panic attack management acute anxiety"),
     (re.compile(
-        r"\b(headache|tension headache|migraine|muscle tension|jaw clench)\b", re.I),
+        r"\b(headache|tension headache|migraine|muscle tension|jaw clench)", re.I),
      "stress physical symptoms management"),
     (re.compile(
-        r"\b(sleep|insomni|can't sleep|wake up|night sweat|restless|fatigue|exhaust)\b", re.I),
+        r"\b(sleep|insomni|can't sleep|wake up|night sweat|restless|fatigue|exhaust)", re.I),
      "sleep hygiene mental health anxiety"),
 
     # ── Emotional states (more specific than signal keys) ─────────────────────
     (re.compile(
-        r"\b(anxi|worry|worr|dread|apprehens|on edge|nervous|fear)\b", re.I),
+        r"\b(anxi|worry|worr|dread|apprehens|on edge|nervous|fear)", re.I),
      "anxiety management strategies"),
     (re.compile(
-        r"\b(depress|low mood|down|unmotivat|no energy|empty|flat)\b", re.I),
+        r"\b(depress|low mood|down|unmotivat|no energy|empty|flat)", re.I),
      "depression management wellbeing strategies"),
     (re.compile(
-        r"\b(sad|sadness|grief|loss|bereavem|mourn|losing someone)\b", re.I),
+        r"\b(sad|sadness|grief|loss|bereavem|mourn|losing someone)", re.I),
      "grief loss coping mental health"),
     (re.compile(
-        r"\b(anger|angry|rage|furious|frustrat|irrita|snap|temper)\b", re.I),
+        r"\b(anger|angry|rage|furious|frustrat|irrita|snap|temper)", re.I),
      "anger management strategies"),
     (re.compile(
-        r"\b(stress|stressed|overwhelm|pressure|too much|burnout)\b", re.I),
+        r"\b(stress|stressed|overwhelm|pressure|too much|burnout)", re.I),
      "stress management wellbeing"),
     (re.compile(
-        r"\b(shame|ashamed|embarrass|humiliat|self-conscious)\b", re.I),
+        r"\b(shame|ashamed|embarrass|humiliat|self-conscious)", re.I),
      "shame self-compassion mental health"),
     (re.compile(
-        r"\b(guilt|guilty|blame myself|regret|remorse)\b", re.I),
+        r"\b(guilt|guilty|blame myself|regret|remorse)", re.I),
      "guilt self-forgiveness mental health"),
     (re.compile(
-        r"\b(numb|empty|hollow|dissociat|feel nothing|disconnect)\b", re.I),
+        r"\b(numb|empty|hollow|dissociat|feel nothing|disconnect)", re.I),
      "emotional numbing dissociation wellbeing"),
     (re.compile(
-        r"\b(lonely|alone|isolat|no one|disconnected|left out)\b", re.I),
+        r"\b(lonely|alone|isolat|no one|disconnected|left out)", re.I),
      "loneliness social connection mental health"),
 
     # ── Life domains ──────────────────────────────────────────────────────────
     (re.compile(
-        r"\b(work stress|workplace|job stress|overwork|work.life|career pressure)\b", re.I),
+        r"\b(work stress|workplace|job stress|overwork|work.life|career pressure)", re.I),
      "workplace stress burnout management"),
     (re.compile(
-        r"\b(relationship|partner|marriage|breakup|divorce|conflict)\b", re.I),
+        r"\b(relationship|partner|marriage|breakup|divorce|conflict)", re.I),
      "relationship wellbeing mental health"),
     (re.compile(
-        r"\b(social anxiet|social situation|meeting people|crowds|public)\b", re.I),
+        r"\b(social anxiet|social situation|meeting people|crowds|public)", re.I),
      "social anxiety management strategies"),
     (re.compile(
-        r"\b(trauma|PTSD|post-traumatic|flashback|nightmare|hypervigilant|triggered)\b", re.I),
+        r"\b(trauma|PTSD|post-traumatic|flashback|nightmare|hypervigilant|triggered)", re.I),
      "trauma recovery PTSD mental health"),
     (re.compile(
-        r"\b(self.esteem|confidence|self-worth|self.image|believe in myself|imposter)\b", re.I),
+        r"\b(self.esteem|confidence|self-worth|self.image|believe in myself|imposter)", re.I),
      "self-esteem confidence mental health"),
     (re.compile(
-        r"\b(motivation|unmotivat|procrastinat|can't start|no drive)\b", re.I),
+        r"\b(motivation|unmotivat|procrastinat|can't start|no drive)", re.I),
      "motivation wellbeing mental health"),
 ]
 
@@ -755,7 +755,7 @@ def _signal_to_topic_hints(signal: SignalPayload) -> frozenset:
     # ── Support needs → topics ────────────────────────────────────────────
     _NEED_MAP: dict[str, _TopicTag] = {
         "crisis_escalation":              _TopicTag.CRISIS,
-        "psychoeducation":                _TopicTag.CLINICAL,
+        "psychoeducation":                _TopicTag.GENERAL,   # grey-lit educational sources, not PubMed
         "encouragement_external_support": _TopicTag.SERVICES,
         "grounding_stabilization":        _TopicTag.ANXIETY,
     }
