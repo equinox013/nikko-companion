@@ -1,5 +1,3 @@
-# Nikko — Evidence-Grounded Wellbeing Assistant
-
 ![docs/assets/nikko-banner.png](docs/assets/nikko-banner.png)
 
 ![Status](https://img.shields.io/badge/status-MVP-brightgreen)
@@ -9,7 +7,7 @@
 ![License](https://img.shields.io/badge/license-research%20use-lightgrey)
 ![Infra](https://img.shields.io/badge/infra-Modal%20%2B%20Render%20%2B%20GitHub%20Pages-purple)
 
-Nikko is a safety-aligned, evidence-grounded LLM ecosystem designed to function as a compassionate digital confidant. It listens, validates, and surfaces reliable information — but it never diagnoses, never prescribes, and always defers to human care when it matters most.
+Nikko is a safety-aligned, evidence-grounded LLM ecosystem designed to function as a compassionate digital mental wellbeing companion. It listens, validates, and surfaces reliable information — but it never diagnoses, never prescribes, and always defers to human care when it matters most.
 
 > *Nikko illuminates possible paths. The user must always walk toward human support themselves.*
 
@@ -31,8 +29,6 @@ Nikko is a safety-aligned, evidence-grounded LLM ecosystem designed to function 
 | Phase 5 — Backend API integration | ✅ Complete |
 | Phase 6 — End-to-end evaluation | 🔨 Active — running alongside UX + backend speed refinement |
 
-> *Note on phase ordering: the original plan ran Phase 6 (Evaluation) before Phase 7 (Infra). Phase 6 needs a live deployed stack to evaluate against, so the order was revised to **Phase 5 → Phase 7 infra → Phase 6 → Phase 7 sign-off**. The infra portion of Phase 7 is therefore active now, ahead of the formal phase number.*
-
 ---
 
 ## Proof of Concept
@@ -50,6 +46,19 @@ Nikko is a safety-aligned, evidence-grounded LLM ecosystem designed to function 
 Nikko is not a chatbot. It is a **multi-agent pipeline** in which every user message passes through a sequence of specialist agents before a response is generated. No single agent has the whole picture — each one does one job, checks its own constraints, and hands off to the next. The LLM that generates the final response never receives raw user input, never accesses evidence directly, and never decides whether the response is safe. Other agents handle those concerns before and after the model runs.
 
 This architecture exists because mental-health-adjacent AI carries real risk. A single unconstrained LLM can confidently say the wrong thing. A pipeline with hard-coded routing rules, a regex-based safety gate, and a structural integrity check is much harder to break.
+
+Nikko is meant to be used as a digital mental wellbeing companion - capable of evidence-based mental health first aid that is safe and private by design, but never meant to replace professional help provided by humans.
+
+---
+
+## Governing Principles
+
+Nikko exists to support — not to replace. The full ethical charter is in `docs/specs/SPEC-000-charter.md`. The short version:
+
+- Nikko will not diagnose, prescribe, or plan treatment.
+- Nikko will not simulate being a therapist.
+- Nikko will not encourage exclusive reliance on itself.
+- When risk increases, Nikko increases its encouragement toward human support — it does not increase its own authority.
 
 ---
 
@@ -351,14 +360,3 @@ curl -X POST https://<your-hf-space-url>/pipeline \
   -d '{"messages": [{"role": "user", "content": "I have been feeling very low lately."}],
        "system": "...", "safety_system": "...", "eval_system": "...", "token": "..."}'
 ```
-
----
-
-## Governing Principles
-
-Nikko exists to support — not to replace. The full ethical charter is in `docs/specs/SPEC-000-charter.md`. The short version:
-
-- Nikko will not diagnose, prescribe, or plan treatment.
-- Nikko will not simulate being a therapist.
-- Nikko will not encourage exclusive reliance on itself.
-- When risk increases, Nikko increases its encouragement toward human support — it does not increase its own authority.
