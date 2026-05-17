@@ -131,6 +131,129 @@ _ADPB_CRISIS_RESPONSE = (
 )
 
 # ---------------------------------------------------------------------------
+# Content moderation pre-gate
+# ---------------------------------------------------------------------------
+# These patterns fire BEFORE the Scope Classifier (STEP 0). They handle content
+# that is not merely out-of-scope but actively harmful or CSAM-adjacent. The scope
+# classifier is designed to route; this gate is designed to reject.
+#
+# Design principles:
+#   - Runs on RAW (unsanitized) input so whitespace normalization cannot bypass it.
+#   - Pattern-only — no LLM involved. Sub-millisecond, deterministic.
+#   - Responses are STATIC strings (REQ-XXX-CM3). Never LLM-generated.
+#   - Three tiers: CSAM-adjacent, child attraction/pedophilia, hate speech.
+#
+# Response policy:
+#   CSAM content      → terse, firm, zero empathy for the content itself.
+#   Child attraction  → firm redirect to licensed professional, non-shaming.
+#                       (Some people seek help for unwanted pedophilic urges;
+#                        the response is a redirect to care, not a rejection
+#                        of the person — but Nikko is not that care provider.)
+#   Hate speech       → short firm redirect, no engagement.
+#
+# [REQ-XXX-CM1] Content moderation MUST fire before any agent or LLM processing.
+# [REQ-XXX-CM2] CSAM-adjacent content MUST NOT receive an empathetic validation response.
+# [REQ-XXX-CM3] Moderation responses MUST be static strings — never LLM-generated.
+
+# CSAM-adjacent patterns — explicit illegal or quasi-illegal sexual content involving minors
+_CSAM_PATTERNS: list[re.Pattern] = [
+    # Anime-convention CSAM terminology
+    re.compile(r"\b(loli|lolicon|shota|shotacon)\b", re.I),
+    # Explicit CSAM naming
+    re.compile(r"\bchild\s*(porn|pornography)\b", re.I),
+    re.compile(r"\bunderage\s+(porn|sex|content|hentai|material)\b", re.I),
+    re.compile(r"\b(sexual\s+content|hentai)\s+(involving|featuring|of|with)\s*(children|kids|minors|underage)\b", re.I),
+    # Masturbation explicitly to CSAM/minor-coded material
+    re.compile(r"\b(wank(ing)?|masturbat\w*|jerk(ing)?\s+off?)\s+(to|over)\s+(loli|shota|child|kid|minor|underage|children)\b", re.I),
+]
+
+# Child attraction / pedophilia patterns — disclosure of sexual attraction to children
+_CHILD_ATTRACTION_PATTERNS: list[re.Pattern] = [
+    re.compile(r"\b(attracted|attraction)\s+to\s+(children|kids|minors|child|kid|underage)\b", re.I),
+    re.compile(r"\bpedophil\w*\b", re.I),
+    re.compile(r"\b(sexual\s+feelings?|sexual\s+interest|sexual\s+attraction)\s+(in|towards?|for|about)\s+(children|kids|minors|a\s+child|a\s+kid)\b", re.I),
+    re.compile(r"\b(like|love|want)\s+(children|kids|minors)\s+(sexually|in\s+that\s+way|that\s+way)\b", re.I),
+]
+
+# Hate speech, hard slurs, and explicit dehumanization patterns.
+#
+# Coverage rationale:
+#   Hard slurs and explicit calls for violence/extermination against groups are
+#   unambiguous and warrant immediate blocking. This is NOT a soft-discrimination
+#   filter — statements like "my boss is ageist", "I hate immigrants", or
+#   "women are too emotional" are grey-area and potentially valid wellbeing
+#   conversations (frustration, relationship stress, etc.). Those pass through
+#   to the LLM, which is better positioned to navigate nuance than a regex gate.
+#   Softer discrimination is handled downstream by ADP-B and the COMFORT framing.
+#
+#   Slur patterns use common 1337-speak substitutions to catch basic obfuscation
+#   (1→i, 3→e, @→a, 0→o). They do not attempt to out-race creative obfuscation
+#   — that is a losing arms race. Clear-text and light-obfuscation hits are the
+#   intended target; edge cases fall to ADP-B.
+_HATE_PATTERNS: list[re.Pattern] = [
+    # ── Calls for mass violence / extermination ───────────────────────────────
+    re.compile(r"\b(kill\s+all|exterminate\s+(all|the)|genocide\s+(the|all)|gas\s+the)\b", re.I),
+    re.compile(r"\b(should\s+be\s+(exterminated|wiped\s+out|eliminated|purged))\b", re.I),
+    re.compile(r"\bdie\s+(you|all|every)\b", re.I),
+
+    # ── Explicit dehumanization of demographic groups ─────────────────────────
+    # "[group] are subhuman / animals / vermin / parasites / inferior"
+    re.compile(
+        r"\b(black|white|asian|hispanic|latino|jewish|muslim|christian|gay|lesbian|"
+        r"trans|queer|immigrant|refugee|aboriginal|indigenous|disabled|women|men)\s+"
+        r"(people\s+)?(are\s+)?(subhuman|animals?|vermin|parasites?|filth|scum|inferior|worthless)\b",
+        re.I,
+    ),
+
+    # ── Racial / ethnic slurs ─────────────────────────────────────────────────
+    re.compile(r"\bn[i1][gq][gq][e3][rr]s?\b", re.I),          # anti-Black
+    re.compile(r"\bch[i1][n][k]s?\b", re.I),                     # anti-Asian
+    re.compile(r"\bg[o0][o0]ks?\b", re.I),                        # anti-Asian
+    re.compile(r"\bsp[i1][ck]s?\b", re.I),                        # anti-Hispanic/Latino
+    re.compile(r"\bw[e3]tb[a@]cks?\b", re.I),                    # anti-Hispanic/Latino
+    re.compile(r"\bk[i1][k][e3]s?\b", re.I),                     # anti-Jewish
+    re.compile(r"\bpak[i1]s?\b", re.I),                           # anti-South Asian (AU/UK context)
+    re.compile(r"\br[a@]gh[e3][a@]ds?\b", re.I),                 # anti-Arab/Muslim
+    re.compile(r"\btow[e3]l\s*h[e3][a@]ds?\b", re.I),            # anti-Arab/Muslim
+    re.compile(r"\bs[a@]nd\s*n[i1]gg[e3]rs?\b", re.I),           # anti-Arab/Middle Eastern
+
+    # ── Homophobic / transphobic slurs ────────────────────────────────────────
+    re.compile(r"\bf[a@][gq][gq][o0]ts?\b", re.I),               # homophobic
+    re.compile(r"\btr[a@]nn[yi]e?s?\b", re.I),                   # transphobic
+    re.compile(r"\bsh[e3]males?\b", re.I),                        # transphobic (used as slur)
+
+    # ── Ableist slurs ─────────────────────────────────────────────────────────
+    re.compile(r"\br[e3]t[a@]rd(ed|s)?\b", re.I),                # ableist hard slur
+
+    # ── Sexist dehumanization ─────────────────────────────────────────────────
+    # Targets explicit collective attacks on gender groups, not casual language
+    re.compile(r"\b(all\s+women|all\s+men|every\s+woman|every\s+man|all\s+females?|all\s+males?)\s+(are\s+)?(wh[o0]res?|sl[u]ts?)\b", re.I),
+    re.compile(r"\bwomen\s+(belong|should\s+(be|stay))\s+(in\s+the\s+kitchen|beneath\s+men|below\s+men)\b", re.I),
+
+    # ── Ageist dehumanization ─────────────────────────────────────────────────
+    re.compile(r"\b(old\s+people|elderly|seniors?)\s+(should\s+(die|be\s+(killed|put\s+down))|are\s+(useless|worthless|a\s+burden\s+on\s+society))\b", re.I),
+]
+
+# Static moderation responses (REQ-XXX-CM3)
+_CSAM_RESPONSE: str = (
+    "That's not something Nikko can engage with. "
+    "If something else is genuinely on your mind, I'm here."
+)
+
+_CHILD_ATTRACTION_RESPONSE: str = (
+    "Nikko is a wellbeing support tool — what you've described is outside what I can help with here. "
+    "If you're experiencing unwanted attractions to children and want to address that, "
+    "speaking with a licensed psychologist who specialises in this area is the right step. "
+    "A GP referral is confidential."
+)
+
+_HATE_RESPONSE: str = (
+    "That's not something I'm able to engage with here. "
+    "If something else is weighing on you, I'm here to listen."
+)
+
+
+# ---------------------------------------------------------------------------
 # Inference environment flag
 # ---------------------------------------------------------------------------
 
@@ -1018,6 +1141,14 @@ class NikkoPipeline:
         )
         logger.info("Pipeline.run() — session=%s regen=%d", trace.session_id, regen_count)
 
+        # ── Content moderation pre-gate ──────────────────────────────────
+        # Runs on RAW input before sanitization or scope classification.
+        # REQ-XXX-CM1: MUST fire before any agent or LLM processing.
+        moderation_result = self._step_content_moderation(user_input, trace)
+        if moderation_result is not None:
+            moderation_result.trace.latency_ms = (time.perf_counter() - t0) * 1000
+            return moderation_result
+
         # ── STEP 0: Scope Classification ─────────────────────────────────
         # REQ-700-SC1: MUST evaluate every input before any other processing.
         # REQ-700-SC2: OUT_OF_SCOPE → terminate here, ≤ 500 ms.
@@ -1176,6 +1307,75 @@ class NikkoPipeline:
     # ------------------------------------------------------------------
     # Private step implementations
     # ------------------------------------------------------------------
+
+    def _step_content_moderation(
+        self, raw_input: str, trace: PipelineTrace
+    ) -> Optional[PipelineResult]:
+        """
+        Content moderation pre-gate — runs before STEP 0 (Scope Classifier).
+
+        Checks raw user input against three pattern sets:
+          1. CSAM-adjacent content — illegal or quasi-illegal sexual content
+             involving minors (loli/shota terminology, explicit naming).
+          2. Child attraction / pedophilia — disclosure of sexual attraction
+             to children. Response redirects to a licensed professional;
+             it is non-shaming because some people seek help for unwanted
+             urges — but Nikko is not the right provider for that work.
+          3. Hate speech / dehumanizing language.
+
+        Returns a PipelineResult (block immediately) if any pattern fires.
+        Returns None if the input is clean (pipeline continues normally).
+
+        Runs on RAW input (before sanitization) so whitespace normalization
+        or case changes in _step1_sanitize cannot bypass the check.
+        [REQ-XXX-CM1 through CM3]
+        """
+        # Check CSAM patterns — highest priority
+        for pat in _CSAM_PATTERNS:
+            if pat.search(raw_input):
+                logger.warning(
+                    "Content moderation: CSAM pattern matched — blocking. "
+                    "Pattern: %s", pat.pattern
+                )
+                trace.step("content_moderation")
+                trace.final_action = "content_moderation_csam"
+                return PipelineResult(
+                    response_text=_CSAM_RESPONSE,
+                    out_of_scope=True,
+                    trace=trace,
+                )
+
+        # Check child attraction / pedophilia patterns
+        for pat in _CHILD_ATTRACTION_PATTERNS:
+            if pat.search(raw_input):
+                logger.warning(
+                    "Content moderation: child attraction pattern matched — blocking. "
+                    "Pattern: %s", pat.pattern
+                )
+                trace.step("content_moderation")
+                trace.final_action = "content_moderation_child_attraction"
+                return PipelineResult(
+                    response_text=_CHILD_ATTRACTION_RESPONSE,
+                    out_of_scope=True,
+                    trace=trace,
+                )
+
+        # Check hate speech / dehumanizing language patterns
+        for pat in _HATE_PATTERNS:
+            if pat.search(raw_input):
+                logger.warning(
+                    "Content moderation: hate speech pattern matched — blocking. "
+                    "Pattern: %s", pat.pattern
+                )
+                trace.step("content_moderation")
+                trace.final_action = "content_moderation_hate"
+                return PipelineResult(
+                    response_text=_HATE_RESPONSE,
+                    out_of_scope=True,
+                    trace=trace,
+                )
+
+        return None  # Clean — pipeline continues normally
 
     def _step0_scope(self, text: str, trace: PipelineTrace) -> ScopeClassifierDecision:
         """STEP 0 — Scope classification (REQ-700-SC1/SC2)."""

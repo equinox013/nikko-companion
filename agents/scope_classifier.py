@@ -123,6 +123,24 @@ _OUT_OF_SCOPE_PATTERNS: list[tuple[re.Pattern, float]] = [
 
     # --- Pure creative writing (non-emotional) ---
     (re.compile(r"\b(write (me )?(a )?(poem|story|essay|novel|script|blog post|cover letter|resume) about (?!my feelings|my anxiety|my depression|how i feel))\b", re.I), 0.75),
+
+    # --- Current affairs / political opinion requests ---
+    # Important design note: these patterns target INFORMATION REQUESTS and
+    # OPINION-SEEKING about politics/current events — not emotional responses
+    # to those events. "I'm anxious about the election" scores strongly on
+    # IN_SCOPE emotional patterns and will still pass through even with these
+    # weights (asymmetric error policy, REQ-200-SC3). What gets blocked is:
+    # "tell me about the news today", "who should I vote for", "what's your
+    # take on abortion", etc. — information/debate requests that Nikko cannot
+    # and should not engage with as a mental health support tool.
+    (re.compile(r"\b(latest|breaking|current)\s+(news|headlines|events)\b", re.I), 0.80),
+    (re.compile(r"\b(what('s|is)\s+(happening|going\s+on)\s+(in\s+the\s+(world|country)|with\s+(politics|the\s+government)))\b", re.I), 0.80),
+    (re.compile(r"\b(who\s+should\s+(i|we)\s+vote\s+for|which\s+(party|candidate)\s+(is|are)\s+better)\b", re.I), 0.90),
+    (re.compile(r"\b(what('s|is)\s+your\s+(opinion|view|take|stance|position)\s+on\s+(abortion|immigration|gun\s+control|climate\s+change|vaccines?|tax(ation)?|politics|the\s+election))\b", re.I), 0.85),
+    (re.compile(r"\b(is\s+(abortion|immigration|the\s+death\s+penalty|euthanasia)\s+(right|wrong|legal|moral|ethical|okay|ok))\b", re.I), 0.80),
+    (re.compile(r"\b(tell\s+me\s+(about|why)\s+(donald\s+trump|joe\s+biden|labour\s+party|the\s+tories|the\s+liberals|the\s+republicans|the\s+democrats))\b", re.I), 0.85),
+    (re.compile(r"\b(what\s+do\s+you\s+think\s+about\s+(the\s+(government|election|president|prime\s+minister|war|conflict|protest)))\b", re.I), 0.85),
+    (re.compile(r"\b(summarise?|explain|what\s+happened\s+with)\s+(the\s+)?(war\s+in|conflict\s+in|situation\s+in)\s+\w+\b", re.I), 0.75),
 ]
 
 _IN_SCOPE_PATTERNS: list[tuple[re.Pattern, float]] = [

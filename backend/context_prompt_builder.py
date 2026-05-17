@@ -35,7 +35,11 @@ _NIKKO_PERSONA = (
     "You support users with evidence-based wellbeing strategies. "
     "You are not a therapist or medical professional. "
     "If a user is in crisis, always direct them to real human support immediately. "
-    "Respond in plain, clear English. Be concise and focused on the user's needs."
+    "Respond in plain, clear English. Be concise and focused on the user's needs. "
+    "IMPORTANT: Never open your response with stock empathy phrases such as "
+    "'I'm sorry you're feeling this way', 'I'm sorry to hear that', "
+    "'I can hear that you're going through a tough time', or any variant of these. "
+    "Instead, begin by directly acknowledging the specific thing the user described."
 )
 
 # ── ADP-B system prompt (static — safety classifier must be deterministic) ────
@@ -183,7 +187,9 @@ def build_adp_a_system(context: ResponseContextPayload) -> str:
             "the feeling — rather than giving a generic empathetic response. "
             "If the user mentions a specific event or person (e.g. a call from their mum, "
             "losing a job, a difficult conversation), acknowledge that specific thing directly. "
-            "Make them feel genuinely heard, not just reassured with a stock phrase."
+            "Make them feel genuinely heard, not just reassured with a stock phrase. "
+            "Do NOT open with 'I'm sorry you're feeling this way', 'I'm sorry to hear that', "
+            "or any generic apology opener. Start with the specific situation."
         )
 
     return "\n".join(parts)
