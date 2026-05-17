@@ -1,11 +1,12 @@
 """
 backend/draft_generator.py
 ============================
-HFSpaceFullGenerator — implements DraftGeneratorProtocol by calling HF Space /pipeline.
+HFSpaceFullGenerator — implements DraftGeneratorProtocol by calling the remote
+/pipeline inference endpoint (Modal primary, HF Space fallback).
 
 This is the bridge between the local NikkoPipeline (agents, RAG, signal detection,
 routing, strategy) and the remote LLM inference layer (Qwen3-4B for ADP-A, Gemma-2
-for ADP-B/C on ZeroGPU).
+for ADP-B/C).
 
 Data flow
 ---------
@@ -18,10 +19,19 @@ Data flow
       └── build_adp_c_system(context)   ← mode-aware evaluator prompt
       │
       ▼
-  POST /pipeline → HF Space ZeroGPU (ADP-B → ADP-A → ADP-C)
+  POST /pipeline → Modal Serverless (primary)  (ADP-B → ADP-A → ADP-C)
+      │   on httpx error or non-2xx
+      └── POST /pipeline → HF Space ZeroGPU (fallback)
       │
       ▼
   Returns approved response text
+
+Fallback behaviour
+------------------
+If the primary URL raises an httpx exception or returns a non-2xx status, the
+call is transparently retried against the fallback URL (if one was provided).
+This gives zero-downtime failover: Modal down → requests route to HF Space.
+The user gets a slower response (ZeroGPU cold start) but not an error.
 
 Sync / async note
 -----------------
@@ -45,11 +55,12 @@ from orchestration.pipeline import ADPB_CRISIS_SENTINEL
 
 logger = logging.getLogger(__name__)
 
-# Timeout budget: ZeroGPU cold start can reach 300–600s when the Space has been
-# idle (GPU must be re-allocated, both Phi-3.5-mini and Gemma-2-2b-it loaded into
-# VRAM). Observed worst case: 591s. Set ceiling at 720s (12 min) to give ~2 min
-# of headroom beyond that worst case while still failing fast on genuine hangs.
-_PIPELINE_TIMEOUT_S = 720
+# Timeout budget per inference endpoint.
+# Modal: cold start ~30-60s; warm turn ~20-40s. 360s gives ~5x headroom.
+# HF Space (fallback): cold start up to 600s observed. 720s ceiling gives ~2 min
+# headroom beyond worst case while still failing fast on genuine hangs.
+_MODAL_TIMEOUT_S    = 360
+_HF_SPACE_TIMEOUT_S = 720
 
 
 class HFSpaceFullGenerator:
@@ -70,17 +81,23 @@ class HFSpaceFullGenerator:
         pipeline = NikkoPipeline(draft_generator=generator)
     """
 
-    def __init__(self, hf_space_url: str, token: str = "") -> None:
+    def __init__(self, hf_space_url: str, token: str = "", fallback_url: str = "") -> None:
         """
         Parameters
         ----------
-        hf_space_url : Base URL of the HF Space, e.g. https://user-space.hf.space
-                       Set via Fly.io secret: fly secrets set HF_SPACE_URL=...
+        hf_space_url : Primary inference endpoint base URL (Modal in production).
+                       Set via Render env var: MODAL_URL=https://...
+                       Falls back to HF Space if MODAL_URL is not set.
         token        : NIKKO_INTERNAL_TOKEN shared secret. Empty string skips
                        auth (development only).
+        fallback_url : Secondary inference endpoint (HF Space ZeroGPU).
+                       Set via Render env var: HF_SPACE_URL=https://...
+                       If provided, generate() retries against this URL on any
+                       httpx error or non-2xx response from the primary.
         """
-        self._url   = hf_space_url.rstrip("/")
-        self._token = token
+        self._url      = hf_space_url.rstrip("/")
+        self._token    = token
+        self._fallback = fallback_url.rstrip("/") if fallback_url else None
 
     def generate(self, context: ResponseContextPayload) -> str:
         """
@@ -125,14 +142,40 @@ class HFSpaceFullGenerator:
             len(context.synthesized_evidence.citations) if context.synthesized_evidence else 0,
         )
 
-        # httpx.Timeout(read=..., connect=10) — separates the long read wait
-        # (ZeroGPU cold start) from the connect phase (should be fast on Render→HF).
-        # A single scalar timeout=N applies to *every* phase including connect,
-        # which is wasteful; explicit read timeout avoids masking genuine connect failures.
-        _timeout = httpx.Timeout(read=_PIPELINE_TIMEOUT_S, connect=10.0, write=30.0, pool=5.0)
-        with httpx.Client(timeout=_timeout) as client:
-            resp = client.post(f"{self._url}/pipeline", json=payload)
-            resp.raise_for_status()
+        # Build ordered list of URLs to try: primary first, fallback second (if set).
+        # [CONCEPT] The fallback list means generate() is self-healing: if Modal is
+        # unavailable (cold-start timeout, deploy in progress, quota exceeded), the
+        # request silently retries against the HF Space. No code changes needed on
+        # the Render backend — the response shape is identical from both endpoints.
+        urls_to_try = [self._url]
+        if self._fallback:
+            urls_to_try.append(self._fallback)
+
+        last_exc: Exception | None = None
+        for idx, url in enumerate(urls_to_try):
+            # Use tighter timeout for Modal (faster cold start); relaxed for HF Space.
+            # Index 0 = primary (Modal), index 1+ = fallback (HF Space).
+            read_timeout = _MODAL_TIMEOUT_S if idx == 0 else _HF_SPACE_TIMEOUT_S
+            _timeout = httpx.Timeout(read=read_timeout, connect=10.0, write=30.0, pool=5.0)
+
+            try:
+                with httpx.Client(timeout=_timeout) as client:
+                    resp = client.post(f"{url}/pipeline", json=payload)
+                    resp.raise_for_status()
+                # Successful response — break out of retry loop.
+                break
+            except Exception as exc:
+                logger.warning(
+                    "HFSpaceFullGenerator: /pipeline call to %s failed (%s). %s",
+                    url,
+                    exc,
+                    "Retrying against fallback..." if idx < len(urls_to_try) - 1 else "No more URLs to try.",
+                )
+                last_exc = exc
+                if idx < len(urls_to_try) - 1:
+                    continue  # try next URL
+                # All URLs exhausted — re-raise so NikkoPipeline emits SAFE_FALLBACK.
+                raise last_exc
 
         result = resp.json()
 

@@ -2,10 +2,10 @@
 
 ![Research Preview](https://img.shields.io/badge/status-research%20preview-orange)
 ![Phase](https://img.shields.io/badge/phase-6%20%E2%80%94%20evaluation-blue)
-![Models](https://img.shields.io/badge/models-Phi--3.5--mini%20%2B%20Gemma--2--2b-informational)
+![Models](https://img.shields.io/badge/models-Qwen3--4B%20%2B%20Gemma--2--2b-informational)
 ![Python](https://img.shields.io/badge/python-3.11-green)
 ![License](https://img.shields.io/badge/license-research%20use-lightgrey)
-![Infra](https://img.shields.io/badge/infra-HF%20Spaces%20%2B%20Render%20%2B%20GitHub%20Pages-purple)
+![Infra](https://img.shields.io/badge/infra-Modal%20%2B%20Render%20%2B%20GitHub%20Pages-purple)
 
 Nikko is a safety-aligned, evidence-grounded LLM ecosystem designed to function as a compassionate digital confidant. It listens, validates, and surfaces reliable information — but it never diagnoses, never prescribes, and always defers to human care when it matters most.
 
@@ -23,8 +23,8 @@ Nikko is a safety-aligned, evidence-grounded LLM ecosystem designed to function 
 | Phase 3 — Agent pipeline (7 specialist agents) | ✅ Complete |
 | Phase 4 — ADP-C fine-tuning (Gemma-2-2b-it) | ✅ Complete |
 | Phase 4 — ADP-B fine-tuning (Gemma-2-2b-it) | ✅ Complete |
-| Phase 4 — ADP-A fine-tuning (Phi-3.5-mini) | ⛔ Discontinued — using Phi-3.5-mini base model directly |
-| Phase 7 — Deployment infra (HF + Render + GH Pages) | ✅ Live (pulled forward of Phase 6) |
+| Phase 4 — ADP-A (Qwen3-4B base, no LoRA) | ⛔ Fine-tuning discontinued — Qwen3-4B base used directly in production |
+| Phase 7 — Deployment infra (Modal + Render + GH Pages) | ✅ Live (pulled forward of Phase 6) |
 | Frontend SPA | ✅ Complete |
 | Phase 5 — Backend API integration | ✅ Complete |
 | Phase 6 — End-to-end evaluation | 🔨 Active — running alongside UX + backend speed refinement |
@@ -57,30 +57,32 @@ Nikko uses a **dual-model architecture** built around two base models and three 
 
 | Adapter | Base model | Role | Temperature |
 |---------|-----------|------|-------------|
-| **ADP-A** | Phi-3.5-mini-instruct (3.8B, Microsoft, MIT licence) | Empathy — generates the user-facing response | 0.75 (warm, varied) |
+| **ADP-A** | Qwen3-4B (4B, Alibaba Qwen Team, Apache-2.0) | Empathy — generates the user-facing response | 0.75 (warm, varied) |
 | **ADP-B** | Gemma-2-2b-it (2.0B, Google Gemma licence) | Safety / crisis classifier | 0.2 (near-deterministic JSON) |
 | **ADP-C** | Gemma-2-2b-it (same base as ADP-B) | Response quality evaluator | 0.2 (near-deterministic JSON) |
 
 ### Why two base models?
 
-Phi-3.5-mini converges empathy fine-tuning in ~2 hours and produces fluent, contextually warm responses — tasks that reward generative diversity. Gemma-2-2b-it is better suited to structured classification tasks (binary crisis flags, APPROVE/REGENERATE verdicts) where compact JSON output and near-greedy decoding matter more than creativity. ADP-B and ADP-C **share the Gemma-2 base**: they are loaded once as a single `PeftModel`, and `set_adapter()` hot-swaps their LoRA delta tensors at O(1) cost — no weight duplication, no second model load.
+Qwen3-4B produces strong zero-shot empathic responses at the 4B parameter scale without fine-tuning — tasks that reward generative diversity and natural language fluency. Gemma-2-2b-it is better suited to structured classification tasks (binary crisis flags, APPROVE/REGENERATE verdicts) where compact JSON output and near-greedy decoding matter more than creativity. ADP-B and ADP-C **share the Gemma-2 base**: they are loaded once as a single `PeftModel`, and `set_adapter()` hot-swaps their LoRA delta tensors at O(1) cost — no weight duplication, no second model load.
 
 ### What a LoRA adapter is
 
 A LoRA (Low-Rank Adaptation) adapter is a small set of weight deltas — typically 50–100 MB — stored separately from the base model. During inference, the adapter's delta tensors are added to the base model's weight matrices, steering the model toward a specific task. Swapping adapters means replacing those delta tensors; the base model weights never change. This is why ADP-B and ADP-C can coexist in the same `PeftModel` and be selected at runtime with a single `set_adapter()` call.
 
-### VRAM budget (ZeroGPU A10G 24 GB)
+### VRAM budget (Modal A10G 24 GB — production)
 
 ```
-Phi-3.5-mini-instruct (3.8B bf16)  ~  8.5 GB
-Gemma-2-2b-it         (2.0B bf16)  ~  4.5 GB
-Adapter weights (3 × ~50 MB)       ~  0.2 GB
+Qwen3-4B              (4.0B bf16)  ~  8.0 GB  (ADP-A)
+Gemma-2-2b-it         (2.0B bf16)  ~  4.5 GB  (ADP-B + ADP-C shared)
+Adapter weights (2 × ~50 MB)       ~  0.1 GB
 Activations + overhead             ~  2.0 GB
 ────────────────────────────────────────────
-Total estimated                    ~ 15.2 GB   (fits A10G 24 GB with headroom)
+Total estimated                    ~ 14.6 GB   (fits A10G 24 GB with 9.4 GB headroom)
 ```
 
-`bitsandbytes` / NF4 quantization is not used. ZeroGPU only allocates GPU memory inside `@spaces.GPU` context functions; bitsandbytes checks for CUDA at import time, sees no GPU, and crashes before any context is established. Both models load cleanly in native bf16 within the A10G budget.
+`bitsandbytes` / NF4 quantization is not used — both models load cleanly in native bf16 within the A10G budget and quantization adds complexity without meaningful latency benefit at this parameter scale.
+
+> **HF Space fallback:** The fallback ZeroGPU endpoint runs on H200 (70 GB VRAM per slice), not A10G. The same bf16 weights fit with significantly more headroom. `bitsandbytes` remains excluded from `hf_space/requirements.txt` because ZeroGPU defers CUDA allocation until inside a `@spaces.GPU` context — bitsandbytes checks for CUDA at import time and crashes. This restriction does not apply to Modal (CUDA available from container startup).
 
 ---
 
@@ -126,7 +128,7 @@ The **Support Strategy Agent** makes the second LLM call. It runs in parallel wi
 
 The **Interaction Model** runs. It receives a `ResponseContextPayload` — strategy guidance, synthesised evidence if any, and the mode — and generates the empathetic user-facing response.
 
-In production this is **ADP-A: Phi-3.5-mini-instruct** fine-tuned for empathetic, non-diagnostic wellbeing responses. The model has no access to raw retrieval results, intermediate agent outputs, or conversation history beyond what the payload explicitly contains.
+In production this is **ADP-A: Qwen3-4B** (base model, no LoRA for MVP) used for empathetic, non-diagnostic wellbeing responses. The model has no access to raw retrieval results, intermediate agent outputs, or conversation history beyond what the payload explicitly contains.
 
 ### STEP 11 — Evaluation (ADP-C)
 
@@ -152,7 +154,9 @@ A `PipelineTrace` records every agent that ran, the router decision, distress le
 
 ## The ADP Pipeline in Production
 
-In the deployed stack, all three adapter passes run inside a **single `@spaces.GPU` session** on HF Spaces ZeroGPU. This is a deliberate consolidation from the earlier design where three separate `/infer` calls each triggered an 80–110s CPU→VRAM model transfer. The consolidated `/pipeline` endpoint eliminates two of those transfers, reducing warm-turn latency to ~20–40s.
+In the deployed stack, all three adapter passes run inside a **single GPU session** on Modal Serverless. This consolidation means both models stay resident in VRAM for the entire turn, paying the CPU→VRAM transfer cost once rather than three times. Warm-turn latency: ~20–40s. Cold start: ~30–60s (Volume read) vs ~90–120s (HF Hub download on ZeroGPU).
+
+If Modal is unavailable, the backend transparently retries against the HF Space ZeroGPU fallback — no user-visible error, just a slower response.
 
 ```
 User message (React frontend)
@@ -161,14 +165,14 @@ User message (React frontend)
     ▼
 Render backend (FastAPI, nikko-companion.onrender.com)
     │
-    │  POST /pipeline  (single ZeroGPU GPU session, timeout 360s)
+    │  POST /pipeline  (single GPU session, timeout 360s)
     ▼
-HF Spaces ZeroGPU (A10G 24 GB)
+Modal Serverless A10G (primary)  ──or──  HF Spaces ZeroGPU H200 (fallback)
     │
     ├─ ADP-B  (Gemma-2 + adp_b adapter)  → crisis check
     │         ↓ CRISIS → return immediately; ADP-A/C skipped
     │
-    ├─ ADP-A  (Phi-3.5-mini + adp_a)     → empathetic response draft
+    ├─ ADP-A  (Qwen3-4B base)            → empathetic response draft
     │
     └─ ADP-C  (Gemma-2 + adp_c adapter)  → evaluate draft; APPROVE or REGENERATE
                                             (max 1 regen pass before safe fallback)
@@ -237,7 +241,7 @@ The pipeline debug overlay is gesture-gated (2 clicks then 3-second hold on the 
 
 The overlay correctly labels the adapters:
 - **ADP-B** — Gemma-2-2b-it · Safety / crisis
-- **ADP-A** — Phi-3.5-mini · Empathy response
+- **ADP-A** — Qwen3-4B · Empathy response
 - **ADP-C** — Gemma-2-2b-it · Quality evaluator
 
 ---
@@ -260,7 +264,8 @@ nikko-companion/
 │   └── mistral-7b/     # Archived Mistral-7B finetuning artefacts (retired 2026-05-14)
 ├── notebooks/          # Step-by-step implementation notebooks (Steps 11–19 active)
 │   └── mistral-7b/     # Archived Mistral-7B notebooks (retired 2026-05-14)
-├── hf_space/           # ZeroGPU inference endpoint (Phi-3.5-mini + Gemma-2-2b-it)
+├── modal/              # Modal Serverless inference endpoint (Qwen3-4B + Gemma-2-2b-it) — primary
+├── hf_space/           # HF Spaces ZeroGPU inference endpoint — fallback
 │   ├── app.py          # FastAPI + Gradio app — /pipeline endpoint
 │   └── mistral-7b/     # Archived Mistral-7B HF Space implementation
 ├── backend/            # Render orchestration API
@@ -299,10 +304,11 @@ Every design decision in Nikko traces to a named requirement in the spec. The ke
 |-------|---------|-------|
 | Frontend | GitHub Pages — `equinox013.github.io/nikko-companion` | Static React SPA; zero cost |
 | Backend orchestration | Render — `nikko-companion.onrender.com` | FastAPI + pipeline logic; Docker-native |
-| LLM inference | HF Spaces ZeroGPU | `/pipeline` endpoint; A10G 24 GB; Phi-3.5-mini + Gemma-2-2b-it |
-| Adapter weights | HF Hub private repo | Pulled at Space startup; not bundled in image |
+| LLM inference (primary) | Modal Serverless — `modal.run` | `/pipeline` endpoint; A10G 24 GB; Qwen3-4B + Gemma-2-2b-it; ~$0.015/call on $30/month free credit |
+| LLM inference (fallback) | HF Spaces ZeroGPU | Auto-failover from Render backend; H200 slice; slower cold start |
+| Adapter weights | HF Hub private repo + Modal Volume | Cached in Modal Volume at build time; pulled at Space startup for fallback |
 
-Cold start (first request after Space rebuild): ~90–120s. Warm turns: ~20–40s. The ThinkingBubble and loading screen manage user expectation during both cases.
+Cold start (Modal, Volume read): ~30–60s. Cold start (HF Space fallback): ~90–120s. Warm turns: ~20–40s either path. The ThinkingBubble and loading screen manage user expectation during both cases.
 
 ---
 

@@ -54,10 +54,19 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-# HF Space URL -- set via: fly secrets set HF_SPACE_URL=https://...
+# Primary inference endpoint: Modal Serverless.
+# Set on Render: MODAL_URL=https://<your-modal-app>--nikko-pipeline.modal.run
+# Obtain from `modal deploy nikko_modal/app.py` output.
+MODAL_URL = os.getenv("MODAL_URL", "").rstrip("/")
+
+# Fallback inference endpoint: HF Space ZeroGPU.
+# Used when Modal is unreachable or returns an error.
+# Set on Render: HF_SPACE_URL=https://<your-hf-space>.hf.space
 HF_SPACE_URL = os.getenv("HF_SPACE_URL", "").rstrip("/")
 
-# Shared secret with the HF Space -- set via: fly secrets set NIKKO_INTERNAL_TOKEN=...
+# Shared secret with both inference endpoints.
+# Set on Render: NIKKO_INTERNAL_TOKEN=<value>
+# Set on Modal:  modal secret create nikko-config NIKKO_INTERNAL_TOKEN=<same value>
 INTERNAL_TOKEN = os.getenv("NIKKO_INTERNAL_TOKEN", "")
 
 # ── Pipeline initialisation ───────────────────────────────────────────────────
@@ -72,13 +81,22 @@ INTERNAL_TOKEN = os.getenv("NIKKO_INTERNAL_TOKEN", "")
 # If HF_SPACE_URL is not set (local dev), HFSpaceFullGenerator will raise at
 # generate() time and NikkoPipeline will catch it → SAFE_FALLBACK_RESPONSE.
 
-_generator = HFSpaceFullGenerator(hf_space_url=HF_SPACE_URL, token=INTERNAL_TOKEN)
+# Primary URL: Modal if configured, otherwise fall back to HF Space directly.
+# Fallback URL: HF Space (only set if Modal is the primary — avoids double HF calls).
+_primary_url  = MODAL_URL or HF_SPACE_URL
+_fallback_url = HF_SPACE_URL if MODAL_URL else ""
+
+_generator = HFSpaceFullGenerator(
+    hf_space_url=_primary_url,
+    token=INTERNAL_TOKEN,
+    fallback_url=_fallback_url,
+)
 _nikko     = NikkoPipeline(draft_generator=_generator)  # renamed: _pipeline collides with the async def below
 
 log.info(
-    "NikkoPipeline initialised | draft_generator=%s hf_space_url=%s",
-    type(_generator).__name__,
-    HF_SPACE_URL or "(not set — pipeline calls will fail until HF_SPACE_URL is configured)",
+    "NikkoPipeline initialised | primary=%s fallback=%s",
+    _primary_url or "(not set — pipeline calls will fail)",
+    _fallback_url or "(none)",
 )
 
 # Australian crisis resources — injected when Router routes to CRISIS mode.
@@ -387,14 +405,35 @@ async def _sse_stream(msg_id: str, gen: AsyncGenerator) -> AsyncGenerator[str, N
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
+@app.get("/")
+async def root():
+    """
+    Root health card — returns a plain status object so navigating to the
+    Render URL doesn't produce a FastAPI 404. Not a functional endpoint.
+    """
+    return {
+        "service":   "Nikko Backend API",
+        "version":   "0.2.0",
+        "status":    "ok",
+        "inference": "modal" if MODAL_URL else "hf_space",
+    }
+
+
 @app.get("/health")
 async def health():
-    """REQ-600-HL1: Fly.io platform probe + loading screen poll (REQ-FIS-LS2)."""
+    """
+    REQ-600-HL1: Platform probe + loading screen poll (REQ-FIS-LS2).
+
+    Probes the active primary inference endpoint (Modal if configured, HF Space
+    otherwise). The frontend polls this until space_ok=true before allowing the
+    user to send messages — field name kept as space_ok for frontend compatibility.
+    """
     space_ok = False
-    if HF_SPACE_URL:
+    probe_url = MODAL_URL or HF_SPACE_URL
+    if probe_url:
         try:
             async with httpx.AsyncClient(timeout=5) as client:
-                r = await client.get(f"{HF_SPACE_URL}/health")
+                r = await client.get(f"{probe_url}/health")
                 space_ok = r.status_code == 200
         except Exception:
             pass
@@ -402,6 +441,7 @@ async def health():
         "status":    "ok",
         "version":   "0.2.0",
         "space_ok":  space_ok,
+        "inference": "modal" if MODAL_URL else "hf_space",
         "ts":        int(time.time()),
     }
 

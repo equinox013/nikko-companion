@@ -1,0 +1,26 @@
+name: Keep Services Warm
+
+# Pings Render and Modal health endpoints every 10 minutes.
+# Prevents Render's free tier from spinning down (15-min inactivity window).
+# CPU-only health probes — Modal's /health function has no GPU decorator,
+# so these pings do NOT consume Modal GPU credits.
+#
+# GitHub Actions free tier: 2,000 min/month.
+# This workflow consumes ~450 min/month — well within limit.
+#
+# Note: replace <modal-endpoint-url> with the URL output by `modal deploy nikko_modal/app.py`
+# once the Modal app is deployed (Change 3 in the infrastructure spec).
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Render backend
+        run: curl -sf https://nikko-companion.onrender.com/health || true
+
+      - name: Ping Modal inference endpoint
+        run: curl -sf https://equinox013--nikko-health.modal.run || true

@@ -821,6 +821,68 @@ def _signal_to_topic_hints(signal: SignalPayload) -> frozenset:
 
 
 # ---------------------------------------------------------------------------
+# PubMed eligibility gate (G-RETRIEVAL-03)
+# ---------------------------------------------------------------------------
+
+# Topics that warrant a PubMed lookup.  These map to explicitly clinical or
+# research-oriented signals — the user is asking "how does X work" or
+# "what is the evidence for Y", not "I feel X" or "help me cope with Y".
+#
+# Only CLINICAL is included by design.  ANXIETY, DEPRESSION, GRIEF etc. are
+# *population signals*, not necessarily *research queries*.  Someone saying
+# "I've been feeling anxious lately" should get grey-lit guidance sites
+# (Beyond Blue, headspace), not a PubMed abstract.  Someone asking "what CBT
+# techniques are evidence-based for GAD?" has a CLINICAL support need and
+# warrants a PubMed lookup alongside the grey-lit sources.
+#
+# If future evaluation shows that TRAUMA or other topics consistently produce
+# high-quality PubMed results that meaningfully improve response quality,
+# add them to this set and log the decision here.
+_PUBMED_ELIGIBLE_TOPIC_HINTS: frozenset = frozenset({_TopicTag.CLINICAL})
+
+# Additional clinical keywords checked directly against the evidence query
+# string.  This handles the case where the signal agent produces a CLINICAL
+# topic hint (e.g. "psychoeducation" support need) but the query-level
+# keywords also confirm research intent.  Also catches cases where the stub
+# signal agent fires (empty arrays) but the query string is clearly clinical.
+_PUBMED_ELIGIBLE_QUERY_KEYWORDS: tuple[str, ...] = (
+    "clinical", "evidence", "research", "guideline", "diagnosis",
+    "diagnostic", "treatment", "medication", "pharmacological",
+    "cognitive behavio",  # catches "cognitive behavioural" and "cognitive behavioral"
+    "cbt", "dbt", "therapy", "systematic review", "meta-analysis",
+    "randomised", "randomized", "study", "trial",
+)
+
+
+def _is_pubmed_eligible(topic_hints: frozenset, query: str) -> bool:
+    """
+    Return True if the query warrants a PubMed lookup.
+
+    Two independent signals must agree — at least one of:
+      (a) signal-derived topic hints include a CLINICAL-tier tag, OR
+      (b) the evidence query string contains explicit clinical/research terms.
+
+    When False, the retrieval step runs WebSearch only.  This ensures general
+    emotional queries ("I feel overwhelmed", "help me cope with grief") are
+    served by high-quality grey-lit sources instead of peer-reviewed abstracts
+    that the user has no context to interpret.
+
+    When True, PubMed runs first (ADAPTER_PRIORITY_ORDER) and grey-lit follows.
+    Both result sets are passed to the Synthesizer — the Synthesizer's quality
+    ranking ensures peer-reviewed evidence surfaces above grey-lit in the
+    final response when both are present.
+
+    G-RETRIEVAL-03 — Director-approved [date TBD].
+    """
+    # Signal-derived check — CLINICAL support need explicitly detected.
+    if _PUBMED_ELIGIBLE_TOPIC_HINTS & topic_hints:
+        return True
+    # Query-string check — research/clinical vocabulary present.
+    q_lower = query.lower()
+    return any(kw in q_lower for kw in _PUBMED_ELIGIBLE_QUERY_KEYWORDS)
+
+
+# ---------------------------------------------------------------------------
 # Main pipeline
 # ---------------------------------------------------------------------------
 
@@ -1229,10 +1291,26 @@ class NikkoPipeline:
             sorted(topic_hints), sorted(preferred_sources),
         )
 
+        # ── PubMed eligibility gate (G-RETRIEVAL-03) ──────────────────────────
+        # General emotional queries → WebSearch only (grey-lit guidance sites).
+        # Explicitly clinical/research queries → PubMed first, WebSearch second.
+        # See _is_pubmed_eligible() for the two-signal eligibility rule.
+        pubmed_eligible = _is_pubmed_eligible(topic_hints, query)
+        adapters_to_run = ADAPTER_PRIORITY_ORDER if pubmed_eligible else [WebSearchAdapter]
+        # When PubMed is skipped, request more grey-lit results to compensate
+        # for the absent peer-reviewed set.
+        web_max_results = 3 if pubmed_eligible else 6
+        logger.info(
+            "PubMed eligible: %s (topic_hints=%s) → adapters: %s",
+            pubmed_eligible,
+            sorted(topic_hints),
+            [cls.__name__ for cls in adapters_to_run],
+        )
+
         retrieval_results: list[EvidencePayload] = []
         adapters_run = []
 
-        for AdapterClass in ADAPTER_PRIORITY_ORDER:
+        for AdapterClass in adapters_to_run:
             adapter_name = AdapterClass.__name__
             try:
                 adapter = AdapterClass()
@@ -1245,7 +1323,7 @@ class NikkoPipeline:
                 else:
                     params = StaticCacheQueryParams(
                         query=query,
-                        max_results=3,
+                        max_results=web_max_results,
                         topic_hints=topic_hints,
                     )
                 result: RetrievalResult = adapter.search(params)
