@@ -325,9 +325,13 @@ function Chat({ theme, onToggleTheme }) {
   const [memLoaded, setMemLoaded] = useState(() => {
     try { return sessionStorage.getItem('nikko.mem.loaded') === '1'; } catch (e) { return false; }
   });
+  // memName = the filename (persisted to sessionStorage so the pill survives reload).
+  // memUserName = the name extracted from the ## Name section of the memory file.
+  //   Not persisted — requires re-loading the file (SPEC-800 zero-retention).
   const [memName, setMemName] = useState(() => {
     try { return sessionStorage.getItem('nikko.mem.name') || ''; } catch (e) { return ''; }
   });
+  const [memUserName, setMemUserName] = useState('');  // parsed from ## Name section
   // [CONCEPT] useRef holds the decrypted memory content across renders without
   // triggering a re-render on change.  We don't need the component to re-render
   // when content changes — we only need it available at send time.
@@ -383,12 +387,25 @@ function Chat({ theme, onToggleTheme }) {
     memContentRef.current = md || null;
     setMemLoaded(true);
     setMemName(name);
+
+    // Extract the user's name from the ## Name section (if they set one).
+    // parseMemoryName() is exported from memory.jsx and available on window.
+    const userName = (typeof parseMemoryName === 'function')
+      ? parseMemoryName(md)
+      : '';
+    setMemUserName(userName);
+
+    // Personalise the welcome-back message if we know the user's name.
+    const greeting = userName
+      ? `Welcome back, ${userName}.`
+      : 'Welcome back.';
+
     setMessages(prev => [...prev, {
       id: 'wb-' + Date.now(),
       role: 'assistant',
       emotion: 'care',
       streaming: false,
-      text: "Welcome back. Your memory file is loaded — I'll keep what's there in mind, but the live conversation is what I'll really listen to. You're in charge of what stays."
+      text: `${greeting} Your memory file is loaded — I'll keep what's there in mind, but the live conversation is what I'll really listen to. You're in charge of what stays.`
     }]);
     setTimeout(scrollToBottom, 30);
   }, [scrollToBottom]);
@@ -459,6 +476,26 @@ function Chat({ theme, onToggleTheme }) {
       if (memContentRef.current) {
         // Cap at 8000 chars client-side to match backend MessageRequest limit.
         reqBody.memoryContext = memContentRef.current.slice(0, 8000);
+      }
+
+      // Build session-scoped conversation history from React state.
+      // Excludes: the fixed opening message (id='open'), welcome-back messages
+      // (id prefix 'wb-'), any messages still streaming, and the current turn
+      // (which is being sent right now as `text`).
+      // Capped at the last 10 turns (5 user + 5 assistant) to stay within
+      // ADP-A's context budget.  Clears automatically on refresh (React state).
+      const historyRaw = messages
+        .filter(m =>
+          m.id !== 'open' &&
+          !String(m.id).startsWith('wb-') &&
+          !m.streaming &&
+          m.text &&
+          (m.role === 'user' || m.role === 'assistant')
+        )
+        .slice(-10)   // last 10 turns
+        .map(m => ({ role: m.role, text: m.text }));
+      if (historyRaw.length > 0) {
+        reqBody.conversationHistory = historyRaw;
       }
       const response = await fetch(BACKEND_URL + '/api/message', {
         method: 'POST',
@@ -666,7 +703,9 @@ function Chat({ theme, onToggleTheme }) {
                 }
               >
                 <span className={memContentRef.current ? 'pulse' : 'pulse dim'} />
-                {memContentRef.current ? 'Memory active' : 'Memory · re-load'}
+                {memContentRef.current
+                  ? (memUserName ? `Memory · ${memUserName}` : 'Memory active')
+                  : 'Memory · re-load'}
               </span>
             </>
           )}

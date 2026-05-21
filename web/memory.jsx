@@ -6,10 +6,14 @@ const NIKKO_MEM_HEADER = '# Nikko Personal Memory File';
 const NIKKO_MEM_FILE_MAGIC = 'NIKKO-MEM-v1';
 const NIKKO_MEM_EXT = '.nikko-mem.enc';
 
-function makeEmptyMemoryMd() {
+function makeEmptyMemoryMd(name = '') {
   const today = new Date().toISOString().slice(0, 10);
+  const nameLine = name.trim() ? name.trim() : '';
   return `${NIKKO_MEM_HEADER}
-> Generated: ${today} | Version: 1.0
+> Generated: ${today} | Version: 1.1
+
+## Name
+${nameLine}
 
 ## User Preferences
 <!-- Tone, communication style, what user wants Nikko to know about how they prefer to interact -->
@@ -27,6 +31,14 @@ function makeEmptyMemoryMd() {
 ## Support Notes
 <!-- Specific guidance for Nikko's response style based on user experience -->
 `;
+}
+
+/** Extract the Name field from a parsed memory Markdown string. Returns '' if absent. */
+function parseMemoryName(md) {
+  if (!md) return '';
+  const match = md.match(/^##\s*Name\s*\n([^\n#]*)/m);
+  if (!match) return '';
+  return match[1].trim();
 }
 
 // ── Web Crypto helpers ─────────────────────────────────────────────
@@ -126,13 +138,14 @@ function downloadFile(name, content) {
 function MemoryGenerateModal({ open, onClose, onCreated }) {
   const [step, setStep] = React.useState('disclosure'); // disclosure | password
   const [acked, setAcked] = React.useState(false);
+  const [name, setName] = React.useState('');
   const [pw1, setPw1] = React.useState('');
   const [pw2, setPw2] = React.useState('');
   const [busy, setBusy] = React.useState(false);
   const [err, setErr] = React.useState('');
 
   React.useEffect(() => {
-    if (open) { setStep('disclosure'); setAcked(false); setPw1(''); setPw2(''); setErr(''); setBusy(false); }
+    if (open) { setStep('disclosure'); setAcked(false); setName(''); setPw1(''); setPw2(''); setErr(''); setBusy(false); }
   }, [open]);
 
   if (!open) return null;
@@ -143,7 +156,7 @@ function MemoryGenerateModal({ open, onClose, onCreated }) {
     if (pw1 !== pw2) { setErr('Passwords don\'t match.'); return; }
     setBusy(true);
     try {
-      const md = makeEmptyMemoryMd();
+      const md = makeEmptyMemoryMd(name);
       const enc = await encryptMemory(md, pw1);
       downloadFile('nikko-memory' + NIKKO_MEM_EXT, enc);
       onCreated && onCreated(md);
@@ -198,8 +211,12 @@ function MemoryGenerateModal({ open, onClose, onCreated }) {
             <p className="lede">This password derives the encryption key. It can't be reset — write it down somewhere safe before continuing.</p>
             {err && <div className="err">{err}</div>}
             <div className="input-row">
+              <label htmlFor="memname">Your name <span style={{ fontWeight: 400, opacity: 0.6 }}>(optional)</span></label>
+              <input id="memname" type="text" value={name} onChange={e => setName(e.target.value)} autoFocus placeholder="What should Nikko call you?" maxLength={60} />
+            </div>
+            <div className="input-row">
               <label htmlFor="pw1">Password</label>
-              <input id="pw1" type="password" value={pw1} onChange={e => setPw1(e.target.value)} autoFocus placeholder="At least 8 characters" />
+              <input id="pw1" type="password" value={pw1} onChange={e => setPw1(e.target.value)} placeholder="At least 8 characters" />
             </div>
             <div className="input-row">
               <label htmlFor="pw2">Confirm password</label>
@@ -334,5 +351,6 @@ function MemoryLoadModal({ open, onClose, onLoaded }) {
 Object.assign(window, {
   NIKKO_MEM_HEADER, NIKKO_MEM_EXT, NIKKO_MEM_FILE_MAGIC,
   makeEmptyMemoryMd, encryptMemory, decryptMemory, isValidMemoryMd, downloadFile,
+  parseMemoryName,
   MemoryGenerateModal, MemoryLoadModal,
 });

@@ -166,6 +166,14 @@ class MessageRequest(BaseModel):
         max_length=8000,
         description="Decrypted USM memory content (plaintext Markdown). Never persisted.",
     )
+    # Session-scoped conversation history — prior turns from the current browser
+    # session.  The frontend holds this in React state only (evaporates on refresh).
+    # Capped at 20 turns server-side; older turns are silently dropped beyond that.
+    # Format: [{role: "user"|"assistant", text: str}].  Never persisted (SPEC-800).
+    conversationHistory: list | None = Field(
+        default=None,
+        description="Prior session turns [{role, text}]. Session-scoped, not persisted.",
+    )
 
 class SourceItem(BaseModel):
     """
@@ -339,6 +347,7 @@ async def _pipeline(request: MessageRequest) -> AsyncGenerator[SSEChunk, None]:
                 _pipeline_run_sync,
                 request.text.strip(),
                 request.memoryContext,
+                request.conversationHistory,
             )
         )
 
@@ -409,16 +418,30 @@ async def _pipeline(request: MessageRequest) -> AsyncGenerator[SSEChunk, None]:
     )
 
 
-def _pipeline_run_sync(user_text: str, memory_context: str | None = None) -> PipelineResult:
+def _pipeline_run_sync(
+    user_text: str,
+    memory_context: str | None = None,
+    conversation_history: list | None = None,
+) -> PipelineResult:
     """
     Thin synchronous wrapper around NikkoPipeline.run() for use with
     asyncio.to_thread(). Separated so the async caller stays clean.
 
-    memory_context: decrypted USM memory file content from the frontend.
-    Forwarded to NikkoPipeline so it can set usm_active=True and inject
-    the content into the ADP-A system prompt (REQ-850-070).
+    memory_context       : Decrypted USM memory file content from the frontend.
+                           Forwarded to NikkoPipeline so it can set usm_active=True
+                           and inject the content into the ADP-A system prompt
+                           (REQ-850-070).
+    conversation_history : Prior session turns [{role, text}].  Capped at 20 turns
+                           before forwarding — silently drops oldest beyond that.
+                           Session-scoped only; never persisted (SPEC-800).
     """
-    return _nikko.run(user_input=user_text, memory_context=memory_context)
+    # Cap history depth server-side as a safety net (frontend already caps at 10).
+    history = conversation_history[-20:] if conversation_history else None
+    return _nikko.run(
+        user_input=user_text,
+        memory_context=memory_context,
+        conversation_history=history,
+    )
 
 
 # ── SSE helpers ───────────────────────────────────────────────────────────────

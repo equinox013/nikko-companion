@@ -128,10 +128,21 @@ class HFSpaceFullGenerator:
                 "ResponseContextPayload may have been constructed without it."
             )
 
-        # [CONCEPT] messages is a list of chat turn dicts. For a single-turn
-        # request we send just the user message. Multi-turn history would extend
-        # this list — a Phase 5 enhancement (USM memory integration, REQ-850-070).
-        messages = [{"role": "user", "content": user_msg}]
+        # [CONCEPT] messages is the ordered turn list sent to ADP-A (Qwen3-4B).
+        # We now support multi-turn context: prior session turns from the frontend
+        # (React state, session-scoped, never persisted) are prepended here so the
+        # model can reference what was said earlier in the same conversation.
+        # Each prior turn has keys "role" ("user"|"assistant") and "text" (str).
+        # The current user message is always appended last.
+        messages = []
+        if context.conversation_history:
+            for turn in context.conversation_history:
+                role    = turn.get("role", "user")
+                content = turn.get("text", "")
+                # Guard: only include user/assistant roles; skip empty turns.
+                if role in ("user", "assistant") and content.strip():
+                    messages.append({"role": role, "content": content})
+        messages.append({"role": "user", "content": user_msg})
 
         # Build system prompts — adp_a_system is constructed once and reused
         # both in the payload and as the source for base_strategy_text extraction.

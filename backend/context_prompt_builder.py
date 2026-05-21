@@ -24,7 +24,135 @@ Design notes
   nudging the safety verdict.
 """
 
+import re
+
 from docs.schemas.acp_schemas import OperationalMode, ResponseContextPayload
+
+
+# ── USM smart truncation ──────────────────────────────────────────────────────
+
+def _smart_truncate_usm(content: str, max_chars: int = 1200) -> str:
+    """
+    Intelligently reduce a USM memory file to `max_chars` for injection into
+    the ADP-A system prompt.
+
+    Strategy (priority order — highest value context first):
+      1. Name        — always included first; personalises every response.
+      2. Mood Diary  — date-indexed entries sorted newest-first so the most
+                       recent mood data fills the budget before older entries
+                       are considered.  This is the highest-signal section for
+                       live session context.
+      3. User Preferences, Helpful Interventions, Support Notes, Emotional
+                       Patterns — included in that order until the budget runs
+                       out; comment-only sections are skipped silently.
+
+    Comment lines (<!-- ... -->) are stripped from all sections before counting
+    chars — they add no signal for the LLM.
+
+    [CONCEPT] The 1200-char / ~300-token budget is intentionally tight: it
+    leaves headroom in Qwen3-4B's context window for retrieved evidence
+    (Guidance Mode), the strategy block, and the live conversation history.
+    Exceeding it risks crowding out real-time signal with stale diary entries.
+    """
+    # ── Parse the file into sections (keyed by ## heading) ───────────────
+    sections: dict[str, str] = {}
+    current_key: str | None  = None
+    current_lines: list[str] = []
+
+    for line in content.split("\n"):
+        if line.startswith("## "):
+            if current_key is not None:
+                sections[current_key] = "\n".join(current_lines).strip()
+            current_key  = line[3:].strip()
+            current_lines = []
+        elif current_key is not None:
+            current_lines.append(line)
+
+    if current_key is not None:
+        sections[current_key] = "\n".join(current_lines).strip()
+
+    def _strip_comments(text: str) -> str:
+        """Remove HTML-comment lines (<!-- ... -->) — no signal for the LLM."""
+        return "\n".join(
+            l for l in text.split("\n")
+            if not l.strip().startswith("<!--")
+        ).strip()
+
+    budget  = max_chars
+    parts: list[str] = []
+
+    def _try_add(section_heading: str, body: str) -> bool:
+        """
+        Append '## {heading}\n{body}' to parts if it fits in the remaining
+        budget.  Returns True if added (even partially on last call).
+        """
+        nonlocal budget
+        block = f"## {section_heading}\n{body}"
+        if len(block) <= budget:
+            parts.append(block)
+            budget -= len(block) + 1   # +1 for the separating newline
+            return True
+        elif budget > 60:
+            # Partial include: truncate to budget and mark it.
+            truncated = block[: budget - 15] + "\n[…truncated]"
+            parts.append(truncated)
+            budget = 0
+        return False
+
+    # ── 1. Name ──────────────────────────────────────────────────────────
+    name_raw = _strip_comments(sections.get("Name", ""))
+    if name_raw:
+        _try_add("Name", name_raw)
+
+    if budget <= 0:
+        return "\n\n".join(parts)
+
+    # ── 2. Mood Diary — newest entries first ─────────────────────────────
+    diary_raw = sections.get("Mood Diary", "")
+    if diary_raw:
+        diary_lines = diary_raw.split("\n")
+        # An entry line starts with an ISO date (YYYY-MM-DD).
+        entry_lines = [
+            l for l in diary_lines
+            if re.match(r"\s*\d{4}-\d{2}-\d{2}", l) and l.strip()
+        ]
+        # Sort newest-first by the date prefix.
+        entry_lines.sort(
+            key=lambda l: re.match(r"\s*(\d{4}-\d{2}-\d{2})", l).group(1),
+            reverse=True,
+        )
+
+        # Take as many entries as fit.
+        taken: list[str] = []
+        diary_budget = budget - len("## Mood Diary\n") - 1
+        for entry in entry_lines:
+            cost = len(entry) + 1   # +1 for newline
+            if cost <= diary_budget:
+                taken.append(entry)
+                diary_budget -= cost
+            else:
+                break   # stop — remaining entries are older and won't fit
+
+        if taken:
+            _try_add("Mood Diary", "\n".join(taken))
+
+    if budget <= 0:
+        return "\n\n".join(parts)
+
+    # ── 3. Remaining sections — fixed priority ────────────────────────────
+    for section_name in (
+        "User Preferences",
+        "Helpful Interventions",
+        "Support Notes",
+        "Emotional Patterns",
+    ):
+        if budget <= 0:
+            break
+        raw = _strip_comments(sections.get(section_name, ""))
+        if raw:
+            _try_add(section_name, raw)
+
+    return "\n\n".join(parts)
 
 # ── Shared persona string ─────────────────────────────────────────────────────
 # This is the base Nikko persona — replicated from backend/main.py NIKKO_SYSTEM
@@ -98,11 +226,10 @@ def build_adp_a_system(context: ResponseContextPayload) -> str:
     #   - Do NOT use memory to infer current crisis state.
     #   - Do NOT position Nikko as a continuous care provider.
     if context.usm_active and context.usm_content:
-        # Truncate to protect context window — 1200 chars is ≈ 300 tokens,
-        # enough for a rich diary entry while leaving headroom for evidence.
-        mem_snippet = context.usm_content[:1200]
-        if len(context.usm_content) > 1200:
-            mem_snippet += "\n[Memory file truncated — remaining content not shown]"
+        # Smart truncation: Name first, then newest Mood Diary entries, then
+        # remaining sections in priority order — all within a 1200-char budget
+        # (~300 tokens).  See _smart_truncate_usm() for full strategy.
+        mem_snippet = _smart_truncate_usm(context.usm_content, max_chars=1200)
         parts.append(
             "\nPERSONAL CONTEXT (from user's memory file — treat as background, "
             "not diagnosis):\n"
@@ -110,6 +237,7 @@ def build_adp_a_system(context: ResponseContextPayload) -> str:
             f"{mem_snippet}\n"
             "---\n"
             "Use this context to personalise your response. "
+            "If the user's name is provided above, address them by it naturally. "
             "Do NOT infer clinical diagnoses, crisis state, or ongoing care needs "
             "from memory content alone.  The live conversation is your primary signal."
         )

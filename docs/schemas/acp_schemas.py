@@ -385,6 +385,20 @@ class ResponseContextPayload(BaseModel):
             "(G-HYBRID-01 resolution)"
         ),
     )
+    # [MVP-INFRA] Session-scoped conversation history — prior turns from the
+    # current browser session, forwarded by the frontend.  Used to build a
+    # multi-turn messages list for ADP-A so the model can reference what was
+    # said earlier in the same conversation.
+    # NEVER persisted server-side (SPEC-800 zero-retention).  The frontend
+    # holds history in React state only — it evaporates on page refresh or tab
+    # close.  Each dict has keys: "role" ("user"|"assistant") and "text" (str).
+    conversation_history: Optional[list] = Field(
+        default=None,
+        description=(
+            "Prior session turns [{role, text}]. Session-scoped React state — "
+            "cleared on refresh. Used for multi-turn ADP-A context. Not persisted. "
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------

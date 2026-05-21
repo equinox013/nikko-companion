@@ -187,6 +187,22 @@ _CHILD_ATTRACTION_PATTERNS: list[re.Pattern] = [
     re.compile(r"\bpedophil\w*\b", re.I),
     re.compile(r"\b(sexual\s+feelings?|sexual\s+interest|sexual\s+attraction)\s+(in|towards?|for|about)\s+(children|kids|minors|a\s+child|a\s+kid)\b", re.I),
     re.compile(r"\b(like|love|want)\s+(children|kids|minors)\s+(sexually|in\s+that\s+way|that\s+way)\b", re.I),
+    # Physical contact verbs + child terms — catches "I want to touch some kids",
+    # "want to feel/fondle/grope little boys", etc. The (some\s+|a\s+)? quantifier
+    # handles "touch some kids" / "touch a child" without requiring explicit sexual
+    # language (which the earlier patterns already cover).
+    re.compile(
+        r"\b(want|need|like|love|crave|desire|urge)\s+(to\s+)?"
+        r"(touch|feel|grope|fondle|caress)\s+(some\s+|a\s+)?"
+        r"(kids?|child(?:ren)?|minors?|little\s+ones?|little\s+(boys?|girls?)|young\s+(boys?|girls?))\b",
+        re.I,
+    ),
+    # Grooming-indicator: wanting to isolate a child — "want to be alone with kids/a child".
+    re.compile(
+        r"\b(want|need|trying|plan|manage)\s+(to\s+)?be\s+alone\s+with\s+"
+        r"(kids?|children|minors?|a\s+child|a\s+kid|little\s+(boys?|girls?))\b",
+        re.I,
+    ),
 ]
 
 # Hate speech, hard slurs, and explicit dehumanization patterns.
@@ -1172,23 +1188,29 @@ class NikkoPipeline:
         session_id: Optional[str] = None,
         regen_count: int = 0,
         memory_context: Optional[str] = None,
+        conversation_history: Optional[list] = None,
     ) -> PipelineResult:
         """
         Execute the full SPEC-700 pipeline for one user turn.
 
         Parameters
         ----------
-        user_input      : Raw user message (untrusted — sanitized in STEP 1).
-        session_id      : Optional stable ID for the current session.
-                          Generated internally if not provided.
-        regen_count     : Incremented on each regeneration loop. The pipeline
-                          calls itself recursively when the Evaluator emits
-                          REGENERATE. Callers should always pass 0 (default).
-        memory_context  : Decrypted USM memory file content (plaintext Markdown)
-                          forwarded from the frontend.  None when no memory file
-                          is loaded.  Injected into ADP-A system prompt via
-                          ResponseContextPayload.usm_content (REQ-850-070).
-                          Never persisted server-side (SPEC-800 zero-retention).
+        user_input           : Raw user message (untrusted — sanitized in STEP 1).
+        session_id           : Optional stable ID for the current session.
+                               Generated internally if not provided.
+        regen_count          : Incremented on each regeneration loop. The pipeline
+                               calls itself recursively when the Evaluator emits
+                               REGENERATE. Callers should always pass 0 (default).
+        memory_context       : Decrypted USM memory file content (plaintext Markdown)
+                               forwarded from the frontend.  None when no memory file
+                               is loaded.  Injected into ADP-A system prompt via
+                               ResponseContextPayload.usm_content (REQ-850-070).
+                               Never persisted server-side (SPEC-800 zero-retention).
+        conversation_history : Prior session turns [{role, text}] from the frontend.
+                               Session-scoped React state — evaporates on refresh.
+                               Forwarded to ADP-A as a multi-turn messages list so
+                               the model can reference earlier conversation context.
+                               Never persisted server-side (SPEC-800 zero-retention).
 
         Spec trace
         ----------
@@ -1284,6 +1306,9 @@ class NikkoPipeline:
             # the context so HFSpaceFullGenerator can forward it to the Modal
             # combined moderation+scope LLM pass as a weighting hint.
             scope_ambiguous=(scope.decision == ScopeDecision.AMBIGUOUS),
+            # Session-scoped conversation history — React state only, never persisted.
+            # Forwarded to HFSpaceFullGenerator so ADP-A sees multi-turn context.
+            conversation_history=conversation_history,
         )
 
         # ── STEP 10: Draft generation (Interaction Model) ─────────────────
