@@ -812,7 +812,21 @@ class WebSearchAdapter(CachedBaseAdapter):
         # because parentheses are not part of standard boolean search syntax on
         # these engines.  Removing them restores reliable results.  (Phase 6 finding)
         site_clause = " OR ".join(f"site:{d}" for d in selected_domains)
-        ddg_query   = f"{site_clause} {query}"
+
+        # Truncate query to 5 core words before combining with the site: clause.
+        # DDG's backend (Yahoo/Bing) silently drops domain restrictions when the
+        # total query string gets too long — 6 site: operators + 10+ word query
+        # reliably produces 0 sanctioned results because the engine treats the
+        # combined string as too noisy.  Keeping the content query short (≤5 words)
+        # ensures the site: restriction is honoured.  Phase 6 regression 2026-05-21.
+        query_words    = query.split()
+        ddg_core_query = " ".join(query_words[:5]) if len(query_words) > 5 else query
+        if len(query_words) > 5:
+            logger.debug(
+                "[WebSearch] Query truncated for DDG: '%s' → '%s'",
+                query, ddg_core_query,
+            )
+        ddg_query = f"{site_clause} {ddg_core_query}"
 
         raw_results = self._ddg_search(ddg_query, max_results)
         if isinstance(raw_results, RetrievalError):

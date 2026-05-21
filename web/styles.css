@@ -487,6 +487,8 @@ body::before {
   margin-top: 2px;
 }
 .panel-body {
+  flex: 1;          /* fill remaining panel height so overflow-y:auto is bounded */
+  min-height: 0;    /* flex default min-height:auto prevents shrink → scroll */
   overflow-y: auto;
   padding: 14px 16px 20px;
   display: flex;
