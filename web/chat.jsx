@@ -179,14 +179,14 @@ function MemBanner({ type, onDismiss, onOpenLoad }) {
       <span className="mem-banner-icon" aria-hidden="true">
         {type === 'loaded' ? (
           // Lock icon — memory is secure and active
-          <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+          <svg viewBox="0 0 12 12" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
             <rect x="2" y="5.5" width="8" height="5.5" rx="1" />
             <path d="M4 5.5V4a2 2 0 0 1 4 0v1.5" />
             <path d="M6 7.5v1.5" />
           </svg>
         ) : (
           // Info icon — gentle nudge, not an alert
-          <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+          <svg viewBox="0 0 12 12" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
             <circle cx="6" cy="6" r="4.5" />
             <path d="M6 5v3" />
             <circle cx="6" cy="3.5" r="0.4" fill="currentColor" stroke="none" />
@@ -202,7 +202,7 @@ function MemBanner({ type, onDismiss, onOpenLoad }) {
         <button className="mem-banner-action" onClick={onOpenLoad}>Set up</button>
       )}
       <button className="dismiss" onClick={onDismiss} aria-label="Dismiss banner">
-        <svg viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+        <svg viewBox="0 0 10 10" width="10" height="10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
           <path d="m2.5 2.5 5 5M7.5 2.5l-5 5" />
         </svg>
       </button>
