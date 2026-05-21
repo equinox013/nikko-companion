@@ -52,7 +52,11 @@ from backend.context_prompt_builder import (
     build_adp_c_system,
 )
 from docs.schemas.acp_schemas import ResponseContextPayload
-from orchestration.pipeline import ADPB_CRISIS_SENTINEL
+from orchestration.pipeline import (
+    ADPB_CRISIS_SENTINEL,
+    MODERATION_BLOCK_SENTINEL,
+    SCOPE_BLOCK_SENTINEL,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -162,12 +166,12 @@ class HFSpaceFullGenerator:
                 base_strategy_text += f"\nConstraints: {constraints}"
 
         # ── scope_ambiguous ──────────────────────────────────────────────────────
-        # Set True when the ScopeClassifier returned AMBIGUOUS to trigger the
-        # Modal LLM scope resolution pass (Pass 0a). Currently always False —
-        # the ScopeClassifier result is not yet threaded into ResponseContextPayload.
-        # TODO: add scope_decision field to ResponseContextPayload (or pipeline
-        #       context) to wire this up; log the gap in GAPS.md.
-        scope_ambiguous = False
+        # True when the ScopeClassifier returned AMBIGUOUS for this turn. Forwarded
+        # to the Modal combined moderation+scope pass so Qwen3-4B weights its scope
+        # decision more carefully when the rule engine itself was uncertain.
+        # Previously hardcoded False (G-HYBRID-01 gap) — now wired from context
+        # via the scope_ambiguous field added to ResponseContextPayload.
+        scope_ambiguous = getattr(context, "scope_ambiguous", False)
 
         payload = {
             "messages":           messages,
@@ -277,6 +281,28 @@ class HFSpaceFullGenerator:
                 result.get("flags"),
             )
             return ADPB_CRISIS_SENTINEL
+
+        # Modal LLM moderation pass detected coded hate (antisemitism, Islamophobia,
+        # etc.) that the Render regex pre-gate missed. Return sentinel so pipeline.run()
+        # issues the static _HATE_RESPONSE (REQ-XXX-CM3: static strings only).
+        if result.get("moderation_block"):
+            logger.warning(
+                "HFSpaceFullGenerator: Modal moderation block — category=%s. "
+                "Returning MODERATION_BLOCK_SENTINEL.",
+                result.get("harm_category", "unknown"),
+            )
+            return MODERATION_BLOCK_SENTINEL
+
+        # Modal LLM scope pass determined the message is OUT_OF_SCOPE for Nikko
+        # after the regex ScopeClassifier passed or called it AMBIGUOUS. Return
+        # sentinel so pipeline.run() issues the WARM_REDIRECT (static string).
+        if result.get("scope_block"):
+            logger.info(
+                "HFSpaceFullGenerator: Modal scope block — reason=%r. "
+                "Returning SCOPE_BLOCK_SENTINEL.",
+                result.get("oos_reason", ""),
+            )
+            return SCOPE_BLOCK_SENTINEL
 
         text = result.get("text", "")
 

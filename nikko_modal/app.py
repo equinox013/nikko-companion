@@ -95,6 +95,12 @@ VALID_ADAPTERS = frozenset(ADAPTER_GEN_PARAMS.keys())
 # Low temperature + do_sample=False enforces near-deterministic JSON output.
 # Latency budget: scope ~2s, signal ~5s, strategy ~3s (warm container, A10G).
 ANALYSIS_GEN_PARAMS = {
+    # Combined moderation + scope pass — runs for every message that survives the
+    # regex pre-gate on Render. Kept short (128 tokens) because the output is a
+    # compact JSON object; longer output budgets are wasted here.
+    "moderation_scope": dict(max_new_tokens=128, temperature=0.1,  do_sample=False),
+    # Legacy scope-only pass (was Pass 0a for AMBIGUOUS cases). Retained for
+    # reference; its logic is now absorbed into the moderation_scope pass above.
     "scope":    dict(max_new_tokens=64,  temperature=0.1,  do_sample=False),
     "signal":   dict(max_new_tokens=256, temperature=0.25, do_sample=False),
     "strategy": dict(max_new_tokens=128, temperature=0.25, do_sample=False),
@@ -193,9 +199,50 @@ image = (
 # GPU session as ADP-A. They are intentionally terse — the rule engine provides
 # the safety backbone; the LLM adds nuance on top, never replacing hard anchors.
 
+# ── Combined moderation + scope system prompt ────────────────────────────────
+# Runs for EVERY message that survives the Render regex pre-gate.
+# Two jobs in one Qwen call (already loaded, zero extra cold-start cost):
+#
+#   1. Catch coded hate that regex can't reach — antisemitism, Islamophobia,
+#      white nationalism, veiled dehumanization. Hard slurs are already caught
+#      by regex; this catches dog-whistles, coded language, and ideological framing.
+#
+#   2. Final scope check — catches OOS messages the regex classifier passed or
+#      called AMBIGUOUS. scope_ambiguous=True is included as a hint so Qwen
+#      weighs the scope decision more carefully when the rule engine was uncertain.
+#
+# Confidence gate: 0.80 threshold on both checks guards against false positives.
+# Experiencing discrimination ("my coworker makes antisemitic jokes") is valid
+# wellbeing input and must NOT be blocked — only advocacy/promotion is.
+_MODERATION_SCOPE_SYSTEM = (
+    "You are a safety and scope classifier for Nikko, a mental health wellbeing companion. "
+    "Analyse the user message and output ONLY a JSON object with these keys:\n\n"
+    '"harmful": true ONLY if the message advocates, promotes, or spreads:\n'
+    "  - Coded antisemitism (e.g. 'globalists', '(((them)))', '14/88', 'ZOG', 'Jewish elites', 'Rothschilds control...')\n"
+    "  - Coded Islamophobia (e.g. 'great replacement' targeting Muslims, 'Islam is a political ideology', "
+    "'they are replacing us', 'Sharia takeover')\n"
+    "  - White nationalist or ethno-nationalist ideology (e.g. 'replace us', 'white genocide', '14 words')\n"
+    "  - Veiled dehumanization of demographic groups not caught by explicit slurs\n"
+    "IMPORTANT: EXPERIENCING or DESCRIBING discrimination is NOT harmful — it is valid distress. "
+    "'My coworker keeps making antisemitic jokes' is IN_SCOPE, not harmful.\n\n"
+    '"harm_category": "antisemitism" | "islamophobia" | "white_nationalism" | "coded_hate" | "none"\n\n'
+    '"in_scope": true if the message is about emotional wellbeing, mental health, relationships, '
+    "personal struggles, grief, stress, loneliness, anxiety, or anything a wellbeing companion can help with. "
+    "false ONLY if clearly about: physical symptoms/medical diagnosis, general knowledge (science, geography, "
+    "history, maths), coding/tech help, finance, legal questions, or entertainment with no emotional component. "
+    "When in doubt, default to true — a distressed person phrasing a message oddly must not be blocked. "
+    "If the user mentions anything that could be related to their emotional state or relationships, lean in_scope=true.\n\n"
+    '"oos_reason": brief phrase describing why, if in_scope=false, else ""\n\n'
+    '"confidence": 0.0–1.0 confidence in your harmful=true or in_scope=false verdict. '
+    "If confidence < 0.80, you MUST output harmful=false and in_scope=true regardless of your reading.\n\n"
+    "Output ONLY the JSON object. No explanation, no preamble."
+)
+
 # Scope: only called for AMBIGUOUS cases. Deterministic classifier handles clear
 # IN_SCOPE / OUT_OF_SCOPE without Modal. (REQ-200-SC3: asymmetric error policy —
 # ambiguous passes through rather than being silently dropped.)
+# NOTE: This prompt is retained as a standalone but its logic is now absorbed
+# into _MODERATION_SCOPE_SYSTEM for the combined pass. Kept for reference.
 _SCOPE_SYSTEM = (
     "You are a scope classifier for Nikko, a mental health support chatbot. "
     "Nikko handles: emotional wellbeing, mental health, relationships, stress, grief, "
@@ -468,6 +515,83 @@ class NikkoInference:
         new_ids = output_ids[0][inputs["input_ids"].shape[1]:]
         return self._qwen_tokenizer.decode(new_ids, skip_special_tokens=True).strip()
 
+    def _analyze_moderation_scope(self, user_text: str, scope_ambiguous: bool = False) -> dict:
+        """
+        Combined LLM moderation + scope pass (runs for ALL non-regex-blocked messages).
+
+        Unlike the legacy _analyze_scope() which only ran on AMBIGUOUS cases, this
+        method runs for every message that survives the Render regex pre-gate. It
+        performs two jobs in one Qwen3-4B call:
+
+          1. Coded hate detection — antisemitism, Islamophobia, white nationalism,
+             and veiled dehumanization that slur regex cannot catch.
+
+          2. Final scope validation — edge-case OOS content the regex classifier
+             passed or flagged as AMBIGUOUS.
+
+        scope_ambiguous is forwarded as a hint in the user content so Qwen knows
+        the rule engine was uncertain and should weigh the scope decision carefully.
+
+        Confidence gate: 0.80 threshold on both checks.
+        Safety fallback: always returns no-block on any error (REQ-200-SC3).
+
+        Returns:
+            {
+                "moderation_block": bool,
+                "scope_block": bool,
+                "harm_category": str,
+                "oos_reason": str,
+                "confidence": float,
+            }
+        """
+        try:
+            # Include the scope_ambiguous hint so Qwen weights scope more carefully
+            # when the rule engine itself was uncertain.
+            ambiguous_note = (
+                " (Note: the rule-based scope classifier was AMBIGUOUS on this message — "
+                "please apply extra care when deciding in_scope.)"
+                if scope_ambiguous else ""
+            )
+            raw = self._infer_qwen_analysis(
+                user_content=f'User message: "{user_text}"{ambiguous_note}',
+                system=_MODERATION_SCOPE_SYSTEM,
+                gen_params=ANALYSIS_GEN_PARAMS["moderation_scope"],
+            )
+            result = self._parse_json(raw)
+
+            confidence      = float(result.get("confidence", 0.0))
+            # Both decisions are gated at 0.80 — below this, always pass through.
+            harmful         = bool(result.get("harmful", False)) and confidence >= 0.80
+            in_scope        = bool(result.get("in_scope", True))
+            scope_blocked   = (not in_scope) and confidence >= 0.80
+
+            harm_category = str(result.get("harm_category", "none")) if harmful else "none"
+            oos_reason    = str(result.get("oos_reason", ""))        if scope_blocked else ""
+
+            log.info(
+                "[mod_scope_llm] harmful=%s cat=%s in_scope=%s oos=%r conf=%.2f",
+                harmful, harm_category, in_scope, oos_reason[:60], confidence,
+            )
+            return {
+                "moderation_block": harmful,
+                "scope_block":      scope_blocked,
+                "harm_category":    harm_category,
+                "oos_reason":       oos_reason,
+                "confidence":       confidence,
+            }
+        except Exception as exc:
+            # On any LLM error, default to no-block.
+            # REQ-200-SC3: asymmetric error policy — safer to pass through than
+            # to silently block a distressed user due to an LLM failure.
+            log.warning("[mod_scope_llm] failed (%s) — defaulting to no-block (REQ-200-SC3)", exc)
+            return {
+                "moderation_block": False,
+                "scope_block":      False,
+                "harm_category":    "none",
+                "oos_reason":       "",
+                "confidence":       0.0,
+            }
+
     def _analyze_scope(self, user_text: str) -> dict:
         """
         Resolves AMBIGUOUS scope classification via Qwen3-4B.
@@ -672,41 +796,62 @@ class NikkoInference:
         enhanced_strategy: dict | None = None
 
         # ── Analysis preamble (Qwen3-4B, zero extra cold-start cost) ──────────
-        # Passes 0a/0b/0c run before Stage 1 (ADP-B). Each pass is wrapped in
-        # try/except — any failure is logged and skipped without aborting the
-        # pipeline. The ADP-B → ADP-A → ADP-C flow is always the safety net.
+        # Three passes run before Stage 1 (ADP-B). Each is wrapped in try/except
+        # — any failure is logged and skipped without aborting the pipeline.
+        # The ADP-B → ADP-A → ADP-C flow is always the safety net.
         if run_analysis and _user_text:
 
-            # Pass 0a: Scope resolution — AMBIGUOUS cases only.
-            # The Render-side ScopeClassifier already rejected clear OUT_OF_SCOPE.
-            # This pass makes the final call for genuine edge cases.
-            if scope_ambiguous:
-                scope_result  = self._analyze_scope(_user_text)
-                scope_verdict = "IN_SCOPE" if scope_result["in_scope"] else "OUT_OF_SCOPE"
-                if not scope_result["in_scope"]:
-                    log.info(
-                        f"[scope_llm] AMBIGUOUS → OUT_OF_SCOPE: {scope_result['rationale']}"
-                    )
-                    return {
-                        "text": "", "is_crisis": False, "flags": [],
-                        "verdict": "OUT_OF_SCOPE", "regen": False,
-                        "adp_b_raw": "", "adp_a_raw": "", "adp_c_raw": "",
-                        "scope_verdict": scope_verdict,
-                        "enhanced_signal": None, "enhanced_strategy": None,
-                        "elapsed": round(time.time() - start, 2),
-                    }
+            # ── Pass 0: Combined moderation + scope (runs for ALL messages) ───
+            # Catches what the Render regex pre-gate cannot:
+            #   - Coded antisemitism, Islamophobia, white nationalism
+            #   - Edge-case OOS content the ScopeClassifier passed or called AMBIGUOUS
+            # scope_ambiguous is forwarded as a hint so Qwen weights scope carefully
+            # when the rule engine itself was uncertain (G-HYBRID-01 resolution).
+            mod_scope = self._analyze_moderation_scope(_user_text, scope_ambiguous)
 
-            # Pass 0b: Signal enrichment.
-            # rule_signal carries the deterministic baseline.  Risk indicators
-            # are never present in rule_signal here — active/acute risk has
-            # already been handled by the Router (CRISIS path) before Modal
-            # is ever called.
+            if mod_scope["moderation_block"]:
+                log.warning(
+                    "[mod_scope_llm] MODERATION BLOCK — category=%s conf=%.2f",
+                    mod_scope["harm_category"], mod_scope["confidence"],
+                )
+                return {
+                    "text": "", "is_crisis": False, "flags": [],
+                    "verdict": "BLOCKED", "regen": False,
+                    "moderation_block": True, "scope_block": False,
+                    "harm_category": mod_scope["harm_category"],
+                    "adp_b_raw": "", "adp_a_raw": "", "adp_c_raw": "",
+                    "scope_verdict": None,
+                    "enhanced_signal": None, "enhanced_strategy": None,
+                    "elapsed": round(time.time() - start, 2),
+                }
+
+            if mod_scope["scope_block"]:
+                log.info(
+                    "[mod_scope_llm] SCOPE BLOCK — reason=%r conf=%.2f",
+                    mod_scope["oos_reason"][:80], mod_scope["confidence"],
+                )
+                return {
+                    "text": "", "is_crisis": False, "flags": [],
+                    "verdict": "OUT_OF_SCOPE", "regen": False,
+                    "moderation_block": False, "scope_block": True,
+                    "oos_reason": mod_scope["oos_reason"],
+                    "adp_b_raw": "", "adp_a_raw": "", "adp_c_raw": "",
+                    "scope_verdict": "OUT_OF_SCOPE",
+                    "enhanced_signal": None, "enhanced_strategy": None,
+                    "elapsed": round(time.time() - start, 2),
+                }
+
+            # ── Pass 1: Signal enrichment ─────────────────────────────────────
+            # rule_signal carries the deterministic baseline. Risk indicators
+            # are never present here — active/acute risk fired the CRISIS path
+            # on Render before Modal was ever called.
             if rule_signal:
                 enhanced_signal = self._analyze_signal(_user_text, rule_signal)
 
-            # Pass 0c: Strategy enrichment.
-            # Injects a tone refinement + framing note into the ADP-A system
-            # prompt, appended after the deterministic RESPONSE GUIDANCE block.
+            # ── Pass 2: Strategy enrichment ───────────────────────────────────
+            # Appends a tone refinement + framing note to the ADP-A system prompt
+            # after the deterministic RESPONSE GUIDANCE block (additive, not
+            # replacement).
             if enhanced_signal and base_strategy_text:
                 enhanced_strategy = self._enrich_strategy(
                     _user_text, enhanced_signal, base_strategy_text
@@ -724,6 +869,7 @@ class NikkoInference:
             return {
                 "text": "", "is_crisis": True, "flags": flags,
                 "verdict": "CRISIS", "regen": False,
+                "moderation_block": False, "scope_block": False,
                 "adp_b_raw": adp_b_raw, "adp_a_raw": "", "adp_c_raw": "",
                 "scope_verdict": scope_verdict,
                 "enhanced_signal": enhanced_signal,
@@ -789,6 +935,8 @@ class NikkoInference:
             "flags":              flags,
             "verdict":            verdict,
             "regen":              regen,
+            "moderation_block":   False,
+            "scope_block":        False,
             "adp_b_raw":          adp_b_raw,
             "adp_a_raw":          draft,
             "adp_c_raw":          adp_c_raw,

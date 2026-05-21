@@ -373,6 +373,18 @@ class ResponseContextPayload(BaseModel):
             "the messages list sent to HF Space /pipeline."
         ),
     )
+    # [MVP-INFRA] Set True when ScopeClassifier returned AMBIGUOUS for this turn.
+    # Forwarded to the Modal LLM moderation+scope pass so Qwen3-4B knows the
+    # rule engine was uncertain and should weight the scope decision more carefully.
+    # Resolves G-HYBRID-01 (scope_ambiguous not previously threaded into context).
+    scope_ambiguous:    bool = Field(
+        default=False,
+        description=(
+            "True when the regex ScopeClassifier returned AMBIGUOUS for this turn. "
+            "Passed to the Modal LLM as a hint for the combined moderation+scope pass. "
+            "(G-HYBRID-01 resolution)"
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -524,55 +536,6 @@ class ACKMessage(BaseModel):
             )
         return self
 
-
-# ---------------------------------------------------------------------------
-# Scope Classifier decision (pre-Router gate)
-# ---------------------------------------------------------------------------
-
-class ScopeClassifierDecision(BaseModel):
-    """
-    Structured output of the Scope Classifier. (SPEC-200 §5.0, REQ-200-SC1/SC2)
-
-    This is not an ACP-Message — it is emitted before the Router and does not
-    travel through the standard envelope. It is typed separately to enforce
-    REQ-200-SC2 (three-outcome constraint) and REQ-200-SC3 (asymmetric error
-    policy: AMBIGUOUS preferred over OUT_OF_SCOPE on low confidence).
-
-    Authority level: HIGH. OUT_OF_SCOPE decision is final and cannot be
-    overridden by downstream agents. (REQ-200-SC6)
-    """
-    decision:      ScopeDecision
-    confidence:    ConfidenceFloat
-    warm_redirect: Optional[str] = Field(
-        default=None,
-        description=(
-            "Populated only when decision=OUT_OF_SCOPE. "
-            "MUST use the verbatim template from REQ-200-SC4 or a close variant. "
-            "MUST NOT be LLM-generated. (REQ-200-SC5)"
-        ),
-    )
-
-    @model_validator(mode="after")
-    def out_of_scope_requires_redirect(self) -> "ScopeClassifierDecision":
-        if self.decision == ScopeDecision.OUT_OF_SCOPE and not self.warm_redirect:
-            raise ValueError(
-                "decision=OUT_OF_SCOPE requires a warm_redirect message. (REQ-200-SC4)"
-            )
-        return self
-
-    @model_validator(mode="after")
-    def low_confidence_must_not_be_out_of_scope(self) -> "ScopeClassifierDecision":
-        """
-        Asymmetric error policy: when confidence < 0.40, classifier MUST
-        default to AMBIGUOUS, not OUT_OF_SCOPE. (REQ-200-SC3, REQ-100-CB1)
-        """
-        if self.confidence < 0.40 and self.decision == ScopeDecision.OUT_OF_SCOPE:
-            raise ValueError(
-                "Confidence < 0.40 (low band): classifier must emit AMBIGUOUS, "
-                "not OUT_OF_SCOPE. Asymmetric error policy requires erring toward "
-                "inclusion. (REQ-200-SC3)"
-            )
-        return self
 
 # ---------------------------------------------------------------------------
 # Scope Classifier decision (pre-Router gate)

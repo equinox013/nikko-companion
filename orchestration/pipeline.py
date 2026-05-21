@@ -118,6 +118,18 @@ logger = logging.getLogger(__name__)
 # orchestration.pipeline — the dependency direction never reverses.
 ADPB_CRISIS_SENTINEL = "__NIKKO_ADPB_CRISIS_DETECTED__"
 
+# Sentinel returned by HFSpaceFullGenerator.generate() when the Modal LLM
+# moderation+scope pass detects coded hate (antisemitism, Islamophobia, etc.)
+# that regex pre-gate on Render did not catch.
+# pipeline.run() intercepts this and returns _HATE_RESPONSE (static string).
+MODERATION_BLOCK_SENTINEL = "__NIKKO_MODERATION_BLOCK__"
+
+# Sentinel returned by HFSpaceFullGenerator.generate() when the Modal LLM
+# moderation+scope pass determines the message is OUT_OF_SCOPE for Nikko,
+# after the regex ScopeClassifier passed it or called it AMBIGUOUS.
+# pipeline.run() intercepts this and returns the generic WARM_REDIRECT.
+SCOPE_BLOCK_SENTINEL = "__NIKKO_SCOPE_BLOCK__"
+
 # Crisis text used for the ADP-B late-override path. Mirrors _CRISIS_TEXT in
 # backend/main.py — keep in sync if the hotlines or framing ever change.
 _ADPB_CRISIS_RESPONSE = (
@@ -157,14 +169,16 @@ _ADPB_CRISIS_RESPONSE = (
 
 # CSAM-adjacent patterns — explicit illegal or quasi-illegal sexual content involving minors
 _CSAM_PATTERNS: list[re.Pattern] = [
-    # Anime-convention CSAM terminology
-    re.compile(r"\b(loli|lolicon|shota|shotacon)\b", re.I),
+    # Anime-convention CSAM terminology — includes plural forms (lolis, shotas, etc.)
+    re.compile(r"\b(lolis?|lolicons?|shotas?|shotacons?)\b", re.I),
     # Explicit CSAM naming
     re.compile(r"\bchild\s*(porn|pornography)\b", re.I),
     re.compile(r"\bunderage\s+(porn|sex|content|hentai|material)\b", re.I),
     re.compile(r"\b(sexual\s+content|hentai)\s+(involving|featuring|of|with)\s*(children|kids|minors|underage)\b", re.I),
-    # Masturbation explicitly to CSAM/minor-coded material
-    re.compile(r"\b(wank(ing)?|masturbat\w*|jerk(ing)?\s+off?)\s+(to|over)\s+(loli|shota|child|kid|minor|underage|children)\b", re.I),
+    # Masturbation explicitly to CSAM/minor-coded material.
+    # `.{0,30}` allows up to 30 intervening chars ("wanking it to", "masturbating while looking at", etc.)
+    # without being loose enough to match across sentence boundaries.
+    re.compile(r"\b(wank(ing)?|masturbat\w*|jerk(ing)?\s+off?).{0,30}(to|over)\s+(lolis?|shotas?|child|kids?|minor|underage|children)\b", re.I),
 ]
 
 # Child attraction / pedophilia patterns — disclosure of sexual attraction to children
@@ -334,10 +348,16 @@ if not _LOCAL_LLM:
 
 # ── ScopeClassifier — always imported, no LLM dependency ─────────────────────
 try:
-    from agents.scope_classifier import ScopeClassifier as _ScopeClassifier
+    from agents.scope_classifier import ScopeClassifier as _ScopeClassifier, WARM_REDIRECT
     _HAVE_SCOPE_CLASSIFIER = True
 except (SyntaxError, ImportError) as _exc:
     _HAVE_SCOPE_CLASSIFIER = False
+    # Fallback redirect used when the real ScopeClassifier cannot be imported.
+    WARM_REDIRECT = (
+        "That's a bit outside what I'm set up for — Nikko is here for emotional "
+        "wellbeing and mental health support. If something's been on your mind "
+        "or weighing on you, I'm here for that."
+    )
     logger.warning("ScopeClassifier unavailable (%s) — using stub (all messages pass through).", _exc)
 
 # ── LLM-backed agents — only loaded when NIKKO_LOCAL_LLM=true ────────────────
@@ -1257,9 +1277,13 @@ class NikkoPipeline:
             strategy=strategy,
             synthesized_evidence=evidence,
             crisis_resources=crisis_resources,
-            raw_user_message=clean_input,  # [MVP-INFRA] consumed by HFSpaceFullGenerator
+            raw_user_message=clean_input,       # [MVP-INFRA] consumed by HFSpaceFullGenerator
             usm_active=memory_context is not None,
-            usm_content=memory_context,    # None when no memory file loaded
+            usm_content=memory_context,         # None when no memory file loaded
+            # [G-HYBRID-01 resolution] Thread ScopeClassifier AMBIGUOUS verdict into
+            # the context so HFSpaceFullGenerator can forward it to the Modal
+            # combined moderation+scope LLM pass as a weighting hint.
+            scope_ambiguous=(scope.decision == ScopeDecision.AMBIGUOUS),
         )
 
         # ── STEP 10: Draft generation (Interaction Model) ─────────────────
@@ -1286,6 +1310,36 @@ class NikkoPipeline:
                 response_text=_ADPB_CRISIS_RESPONSE,
                 mode=OperationalMode.CRISIS,
                 crisis_resources=crisis_resources,
+                trace=trace,
+            )
+
+        # ── Modal moderation block (coded hate detected by LLM pass) ──────
+        # The Render regex pre-gate catches hard slurs and explicit CSAM; the
+        # Modal LLM pass catches coded antisemitism, Islamophobia, white
+        # nationalism, and veiled dehumanization. Same static _HATE_RESPONSE
+        # used for both (REQ-XXX-CM3: moderation responses must be static).
+        if draft == MODERATION_BLOCK_SENTINEL:
+            trace.step("moderation_llm_block")
+            trace.final_action = "moderation_llm_block"
+            trace.latency_ms = (time.perf_counter() - t0) * 1000
+            logger.warning("Pipeline: Modal LLM moderation block — issuing static hate response.")
+            return PipelineResult(
+                response_text=_HATE_RESPONSE,
+                trace=trace,
+            )
+
+        # ── Modal scope block (OOS detected by LLM pass after regex passed) ─
+        # The regex ScopeClassifier passed or called this AMBIGUOUS; the Modal
+        # LLM pass made the final OUT_OF_SCOPE determination. Issue the same
+        # WARM_REDIRECT used for regex-detected OUT_OF_SCOPE.
+        if draft == SCOPE_BLOCK_SENTINEL:
+            trace.step("scope_llm_block")
+            trace.final_action = "scope_llm_block"
+            trace.latency_ms = (time.perf_counter() - t0) * 1000
+            logger.info("Pipeline: Modal LLM scope block — issuing warm redirect.")
+            return PipelineResult(
+                response_text=WARM_REDIRECT,
+                out_of_scope=True,
                 trace=trace,
             )
 

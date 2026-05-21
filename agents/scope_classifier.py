@@ -52,9 +52,9 @@ from docs.schemas.validate import get_confidence_band
 # If the copy changes, update it here AND in agent_prompts.md, then create a
 # new REQ-ID to track the change.
 WARM_REDIRECT: str = (
-    "Nikko focuses on emotional wellbeing — for physical health concerns, "
-    "your GP or a relevant specialist is the right call. "
-    "If something's weighing on you emotionally, I'm here."
+    "That's a bit outside what I'm set up for — Nikko is here for emotional "
+    "wellbeing and mental health support. If something's been on your mind "
+    "or weighing on you, I'm here for that."
 )
 
 # Confidence threshold below which we MUST return AMBIGUOUS, never OUT_OF_SCOPE.
