@@ -99,7 +99,7 @@ Total estimated                    ~ 14.6 GB   (fits A10G 24 GB with 9.4 GB head
 
 ## How the Pipeline Works
 
-A user message flows through the stages below. Agent logic lives in `agents/` and `orchestration/`; the production inference layer is in `hf_space/app.py`.
+A user message flows through the stages below. Agent logic lives in `agents/` and `orchestration/`; the primary production inference layer is in `nikko_modal/app.py` (Modal Serverless), with `hf_space/app.py` as the ZeroGPU fallback.
 
 > *Step numbers follow the SPEC-700 execution order. Some step IDs are reserved for parallel branches or adjacent operations not surfaced in this overview (Steps 9 and 14, for example, are reserved for orchestrator-internal bookkeeping not visible to the agents themselves).*
 
@@ -115,7 +115,7 @@ The message is stripped of PII patterns, control characters, and anything exceed
 
 The **Signal Agent** makes the first LLM call. It receives the sanitised text and returns a structured `SignalPayload` — a validated, immutable data object describing detected distress level (LOW / MODERATE / HIGH / CRISIS), emotional states, cognitive patterns, risk indicators, and what kind of support the user appears to need.
 
-In Phase 3 this runs on Qwen2.5-3B-Instruct (zero-shot, fits 8 GB VRAM). Phase 4 replaces the base model with the fine-tuned ADP-A / ADP-B stack via PEFT `load_adapter()` — the class interface does not change.
+In production (Phase 4+) this is Qwen3-4B (base model, no LoRA) accessed via the Modal `/pipeline` endpoint. During Phase 3 development it ran on Qwen2.5-3B-Instruct zero-shot locally.
 
 ### STEP 3 — Routing
 
@@ -267,16 +267,16 @@ The overlay correctly labels the adapters:
 
 ## User Sovereign Memory (USM) & Personalisation
 
-Nikko supports an optional, fully client-side memory system. No plaintext ever leaves the user's device.
+Nikko supports an optional memory system. Encryption and decryption are fully client-side — the encryption key never leaves the device. The decrypted content travels over HTTPS to the Render backend per turn but is never written to persistent storage on any server.
 
 ### How it works
 
 1. **Generate** — a 5-step modal (Disclosure → Name → Style → Support → Password) collects personalisation preferences and produces a structured Markdown file.
-2. **Encrypt** — the file is AES-GCM encrypted client-side using the Web Crypto API and downloaded as `.nikko-mem.enc`. The server never receives the plaintext or the key.
+2. **Encrypt** — the file is AES-GCM encrypted client-side using the Web Crypto API and downloaded as `.nikko-mem.enc`. The encryption key never leaves the browser.
 3. **Load** — on a future session, the user re-uploads the file, enters their password, and the decrypted content is held in a `useRef` for the session lifetime. A lock-icon banner confirms the file is active.
-4. **Inject** — on each message, the decrypted content is sent as `memoryContext` in the POST body. The backend truncates it to 1200 chars using priority ordering (`_smart_truncate_usm()`) and injects a `USER PREFERENCES` block into the ADP-A system prompt.
+4. **Inject** — on each message, the decrypted content is sent as `memoryContext` in the POST body (HTTPS, in-flight only). The backend truncates it to 1200 chars using priority ordering (`_smart_truncate_usm()`) and injects a `USER PREFERENCES` block into the ADP-A system prompt.
 
-The session ends, the ref is cleared. Nothing is written to server storage at any point.
+The session ends, the ref is cleared. No server writes plaintext to persistent storage at any point.
 
 ### Personalisation options (Style screen)
 
@@ -327,7 +327,7 @@ nikko-companion/
 │   └── mistral-7b/     # Archived Mistral-7B finetuning artefacts (retired 2026-05-14)
 ├── notebooks/          # Step-by-step implementation notebooks (Steps 11–19 active)
 │   └── mistral-7b/     # Archived Mistral-7B notebooks (retired 2026-05-14)
-├── modal/              # Modal Serverless inference endpoint (Qwen3-4B + Gemma-2-2b-it) — primary
+├── nikko_modal/        # Modal Serverless inference endpoint (Qwen3-4B + Gemma-2-2b-it) — primary
 ├── hf_space/           # HF Spaces ZeroGPU inference endpoint — fallback
 │   ├── app.py          # FastAPI + Gradio app — /pipeline endpoint
 │   └── mistral-7b/     # Archived Mistral-7B HF Space implementation

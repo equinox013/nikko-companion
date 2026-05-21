@@ -376,6 +376,101 @@ The pattern I need to stop is using bash to write anything longer than a few lin
 
 ---
 
+## 2026-05-17 (Session 2) — Safety: Content Moderation Pre-gate + OOS Filters
+
+### What we did
+
+- **Content moderation pre-gate** added to `orchestration/pipeline.py` — fires before STEP 0 (Scope Classifier), making it the first thing that runs on every message. Three tiers in priority order: CSAM-adjacent content, child attraction/paedophilia patterns, hate speech.
+- **CSAM-adjacent patterns** (`_CSAM_PATTERNS`): anime-convention terminology (`loli`, `shota`, `lolicon`, `shotacon`), explicit illegal CSAM naming, masturbation explicitly to CSAM/minor-coded material. Returns `_CSAM_RESPONSE` — terse, firm, zero empathy for the content itself.
+- **Hate speech patterns** (`_HATE_PATTERNS`): coded antisemitism, Islamophobia, white nationalism. Returns `_HATE_RESPONSE`. The filter is intentionally narrow — statements like "my boss is ageist" or "I hate immigrants" must NOT be blocked; only explicit hate advocacy.
+- **`_step_content_moderation()`** method on `NikkoPipeline` — modular, traceable (`trace.final_action = "content_moderation_csam"` / `"content_moderation_hate"`), returns a completed `PipelineResult` on match so the rest of the pipeline never runs.
+- **OOS filters added to `scope_classifier.py`**: current-affairs queries and physical health questions (diet, medication, symptoms) — common false positives that were routing into the emotional support pipeline.
+- REQ-XXX-CM1: content moderation MUST fire before any agent or LLM processing. REQ-XXX-CM2: CSAM-adjacent content MUST NOT receive an empathetic validation response. REQ-XXX-CM3: moderation block responses are static strings, never LLM-generated.
+
+### Decisions & justifications
+
+| Decision | Justification |
+|----------|--------------|
+| Moderation fires before Scope Classifier (pre-STEP 0) | No harmful content should reach any agent, including deterministic ones. A Scope Classifier pass on CSAM content is wasted processing and creates a log trail of harmful content passing through agents. Hard block is cleaner. |
+| Three separate pattern lists with priority order | CSAM → hate is the correct priority. A message matching both should return the CSAM response. Separate lists make priority explicit and auditable. |
+| Narrow hate filter — explicit advocacy only | The risk of false-positiving on genuine emotional expression ("I hate how my family makes me feel") outweighs the risk of missing coded hate speech in a mental health context. The LLM moderation pass (added 2026-05-21) handles edge cases the regex misses. |
+| Static responses for all moderation blocks | No LLM-generated content for harmful inputs. Responses are deterministic, reviewed, and cannot be steered by prompt injection. |
+
+### Where I went wrong
+
+The initial CSAM plural pattern was `\bloli\b` — singular only. Plural forms (`lolis`, `lolicons`, `shotas`, `shotacons`) were not matched. Caught and fixed in the same session, but only because I explicitly checked for variants after the fact. The correct habit is adversarial review of safety regex before committing — plural forms, compound words, and adjacent terminology should all be in the test set. Anyone probing the filter will naturally reach for the variants first.
+
+### Learnings
+
+- Content moderation belongs before the pipeline, not inside it. Once a message enters the agent graph it has already been logged and seen by the scope classifier. For CSAM-adjacent content the answer is a hard stop at the gate with no downstream processing.
+- Static moderation responses are a feature, not a limitation. LLM-generated responses to hate speech create a prompt-injection surface. Deterministic strings cannot be steered.
+- Safety regex requires adversarial testing: base form, plural, compound, abbreviation. The singular-only CSAM pattern was an obvious gap to anyone actively probing the system.
+
+---
+
+## 2026-05-21 — Phase 6 Active: Two-tier Moderation Gate + Scope Fixes + USM Personalisation
+
+### What we did
+
+**Workstream 1 — Two-tier moderation gate (hybrid regex + LLM)**
+
+- **Hybrid LLM analysis layer** added to `nikko_modal/app.py`: Qwen3-4B runs a combined moderation + scope pass (`_analyze_moderation_scope()`) for every message surviving the Render-side regex pre-gate. Two decisions in one LLM call — `moderation_block` and `scope_block` — each gated at 0.80 confidence.
+- **`MODERATION_BLOCK_SENTINEL`** and **`SCOPE_BLOCK_SENTINEL`**: string sentinels returned by `draft_generator.py` when Modal blocks a message. Intercepted in `pipeline.run()`, mapped to static `_HATE_RESPONSE` and `WARM_REDIRECT`. The pipeline never reaches signal detection or draft generation.
+- **`scope_ambiguous` wiring fixed** (G-HYBRID-01): was hardcoded `False` in `draft_generator.py` — the Modal LLM scope pass never received the actual AMBIGUOUS verdict from `ScopeClassifier`. Now correctly threaded from `ScopeClassifier` through `_pipeline_run_sync()` into the Modal POST payload as a weighting hint.
+- **HF Space fallback parity**: the full combined moderation + scope LLM pass ported to `hf_space/app.py` so the fallback path applies identical moderation logic.
+- **`agents/deterministic/`** directory created: snapshot copies of `scope_classifier.py`, `signal_agent.py`, and `support_strategy_agent.py` — the pure rule-based versions before LLM augmentation. Serves as a reference baseline and regression anchor.
+
+**Workstream 2 — Safety regex fixes**
+
+- **CSAM plurals**: `\bloli\b` → `\b(lolis?|lolicons?|shotas?|shotacons?)\b` — the singular-only pattern from 2026-05-17 was the obvious gap.
+- **Wanking compound pattern**: added `.{0,30}` to allow intervening words before the target verb/noun.
+- **`_CHILD_ATTRACTION_PATTERNS`**: added physical contact verb pattern (`want/need/like to touch/feel/fondle/grope a child/kid/minor`) and grooming-indicator pattern (`want to be alone with kids/a child`).
+- **Scope classifier arithmetic patterns**: two new patterns at weight 0.90 anchored on `what('s|is)` — catches `what's 1+1?` and natural-language arithmetic while avoiding false positives on mood ratings (`5/10`) and duration ranges (`5-10 minutes`).
+
+**Workstream 3 — Multi-turn context + USM personalisation**
+
+- **Multi-turn conversation history** wired end-to-end: `acp_schemas.py` gains `conversation_history: Optional[list]` on `ResponseContextPayload`; `pipeline.py` threads it through `run()`; `backend/main.py` accepts `conversationHistory` from the POST body (20-turn server cap); `draft_generator.py` builds a multi-turn messages list for ADP-A; `chat.jsx` sends last 10 turns per request. Session-scoped React state only — cleared on refresh.
+- **Smart USM truncation** (`context_prompt_builder.py`): `_smart_truncate_usm()` replaces naive `[:1200]` slice with a priority-ordered section parser — Name → Mood Diary (newest-first by date) → User Preferences → Helpful Interventions → Support Notes → Emotional Patterns. Truncation notice appended to model when budget exceeded.
+- **Memory name personalisation**: `makeEmptyMemoryMd()` writes a `## Name` section; `parseMemoryName()` extracts it on load; ADP-A instructed to address user by name naturally; topbar pill shows `Memory · [Name]`.
+- **5-step MemoryGenerateModal** (`memory.jsx`): Disclosure → Name gate (skip → password) → Style (Tone / Response length / Input style — pill selectors with CSS tooltips) → Support (don't-help checkboxes + free-text + life context textarea) → Password. `makeEmptyMemoryMd()` and `parseMemoryPrefs()` exported on `window`.
+- **ADP-A preference injection** (`context_prompt_builder.py`): `_parse_memory_prefs()` extracts `key: value` pairs from `## User Preferences`; `_TONE_INSTRUCTIONS` / `_LENGTH_INSTRUCTIONS` map them to prose injected as a `USER PREFERENCES` block. Suppressed at `distress_level ≥ 7` — empathy framing takes precedence.
+- **Memory banners** (`chat.jsx`): `MemBanner` — `loaded` variant (7s auto-dismiss, lock icon) and `hint` variant (after 3rd message with no file loaded; once per session via `hintShownRef`).
+- **Client-side input word cap** (`chat.jsx`): `applyInputCap()` reads `input_length` pref; caps `reqBody.text` at 150/300/600 words. Full message still shown in thread — only the backend payload is capped.
+- **Documentation audit**: corrected Phase 5-era GLOSSARY defect — "Client-side only (USM)" incorrectly stated the inference backend never receives USM content.
+
+### Decisions & justifications
+
+| Decision | Justification |
+|----------|--------------|
+| LLM moderation gate at 0.80 confidence | Below 0.80, a distressed person phrasing a message oddly must not be blocked. False negatives (edge-case content through) are less harmful than false positives (blocking a vulnerable user). The regex pre-gate handles high-confidence cases. |
+| Combined moderation + scope in a single LLM call | Two separate calls would double latency for every message. The decisions share context; one pass is sufficient. |
+| `scope_ambiguous` as a weighting hint, not an override | The LLM scope check cannot override the regex-based AMBIGUOUS verdict — that would create a path where the LLM alone decides to block content (violating REQ-200-SC3). It nudges the LLM toward tighter scrutiny on ambiguous messages only. |
+| Sentinels intercepted in `pipeline.run()`, not `draft_generator` | `draft_generator` has one responsibility: build the ADP-A prompt and return a draft string. Routing logic belongs in the orchestrator. |
+| Arithmetic patterns anchored on `what('s\|is)` | Without the anchor, `5/10` (mood rating) and `5-10 minutes` (duration range) false-positive. The anchor targets only question-form arithmetic. |
+| Priority-ordered USM truncation over first-N chars | First-N chars is wrong for a growing document where newest diary entries are at the bottom. The priority order reflects what ADP-A needs most per turn. |
+| 1200-char ADP-A USM budget | Enough for name + preferences + support notes without crowding strategy guidance and evidence. Above that, signal-to-noise inverts. |
+| Multi-turn history capped at 10 turns (frontend) / 20 turns (backend) | 10 turns covers a typical session. The 20-turn server-side cap is a belt-and-braces guard if the frontend cap ever fails. |
+| Tone preference suppressed at distress_level ≥ 7 | Stylistic preferences are a calm-state instruction. They do not override empathy framing in acute distress. |
+| `input_length` word cap on `reqBody.text` only | The displayed message is the user's record of what they typed. Silently truncating the display would be dishonest. Only the backend payload is capped. |
+
+### Where I went wrong
+
+**`scope_ambiguous` was hardcoded `False` since the Modal inference layer was introduced.** The entire point of threading the ScopeClassifier's AMBIGUOUS verdict into Modal was to give the LLM a signal that the regex was unsure. It was never actually wired — `draft_generator.py` always sent `False`. The LLM scope pass was running without its most important input for every ambiguous message. The fix was one line. The check I missed: verifying that every parameter a downstream system declares it needs is actually populated by the caller, not just present in the schema. Schema correctness and call-site correctness are separate verification steps.
+
+**First-N chars USM truncation shipped before I thought through the failure case.** A user with a long Mood Diary would have Preferences silently dropped. Caught before production, but only because I happened to reason through the edge case. Truncation of structured documents is never semantically neutral — the correct question is always "what is most important to preserve?" not "what fits first?"
+
+**GLOSSARY definition left stale since Phase 5.** "Client-side only (USM)" said the inference backend never receives USM content — incorrect since `memoryContext` was wired to the POST body. Caught this session during the doc audit. Security-model changes are an explicit GLOSSARY update trigger going forward.
+
+### Learnings
+
+- The hybrid regex + LLM moderation architecture is the right shape: regex handles high-confidence cases at zero latency; LLM handles coded and edge-case content with a conservative confidence gate. Neither alone is sufficient.
+- Wiring verification matters as much as schema design. A parameter can be correctly defined in every schema and still never populated by the caller. Verifying the data flows end-to-end with a real value — not just a default — is a separate step from writing the schema.
+- Safety regex needs adversarial testing before shipping: base form, plural, compound, abbreviation. The gap between `\bloli\b` and `\b(lolis?|lolicons?)\b` is trivial to fix and non-trivial to miss under production probing.
+- Canonical documentation must be updated at the same time as the implementation changes that affect it — not at the next documentation session.
+- Personalisation features live at the intersection of UX, backend prompt engineering, and security policy simultaneously. A word-cap decision is also a decision about what the user sees vs. what the model sees vs. what the server stores.
+
+---
+
 ## Template for future entries
 
 ```
