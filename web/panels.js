@@ -159,6 +159,7 @@ function MoodDiaryPanel({ entries, onSet, onClose, memoryContent, onMemoryUpdate
   const memInterventions = parseMemSection(memoryContent, "Helpful Interventions");
   const memSupportNotes = parseMemSection(memoryContent, "Support Notes");
   const hasMemSnap = !!(memInterventions || memSupportNotes);
+  const [memSnapOpen, setMemSnapOpen] = ps(true);
   const [editingMem, setEditingMem] = ps(false);
   const [editInterventions, setEditInterventions] = ps("");
   const [editSupportNotes, setEditSupportNotes] = ps("");
@@ -197,45 +198,66 @@ function MoodDiaryPanel({ entries, onSet, onClose, memoryContent, onMemoryUpdate
     onSet(selectedDay, null);
   };
   const charsLeft = JOURNAL_LIMIT - draftJournal.length;
-  return /* @__PURE__ */ React.createElement("aside", { className: "panel left", "aria-label": "Mood diary" }, /* @__PURE__ */ React.createElement("div", { className: "panel-head" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("h3", null, "Mood diary"), /* @__PURE__ */ React.createElement("div", { className: "meta" }, "Stays on your device")), /* @__PURE__ */ React.createElement("button", { className: "iconbtn", onClick: onClose, "aria-label": "Close mood diary" }, /* @__PURE__ */ React.createElement("svg", { viewBox: "0 0 16 16", fill: "none", stroke: "currentColor", strokeWidth: "1.5", strokeLinecap: "round" }, /* @__PURE__ */ React.createElement("path", { d: "m4 4 8 8M12 4l-8 8" })))), /* @__PURE__ */ React.createElement("div", { className: "panel-body mood-body" }, /* @__PURE__ */ React.createElement("div", { className: "mood-day-stamp" }, formatDay(selectedDay), selectedDay === todayISO() ? " \xB7 today" : ""), memoryContent && hasMemSnap && /* @__PURE__ */ React.createElement("details", { className: "mood-memory-snap", open: !editingMem || void 0 }, /* @__PURE__ */ React.createElement("summary", null, /* @__PURE__ */ React.createElement(
-    "svg",
+  return /* @__PURE__ */ React.createElement("aside", { className: "panel left", "aria-label": "Mood diary" }, /* @__PURE__ */ React.createElement("div", { className: "panel-head" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("h3", null, "Mood diary"), /* @__PURE__ */ React.createElement("div", { className: "meta" }, "Stays on your device")), /* @__PURE__ */ React.createElement("button", { className: "iconbtn", onClick: onClose, "aria-label": "Close mood diary" }, /* @__PURE__ */ React.createElement("svg", { viewBox: "0 0 16 16", fill: "none", stroke: "currentColor", strokeWidth: "1.5", strokeLinecap: "round" }, /* @__PURE__ */ React.createElement("path", { d: "m4 4 8 8M12 4l-8 8" })))), /* @__PURE__ */ React.createElement("div", { className: "panel-body mood-body" }, /* @__PURE__ */ React.createElement("div", { className: "mood-day-stamp" }, formatDay(selectedDay), selectedDay === todayISO() ? " \xB7 today" : ""), memoryContent && hasMemSnap && /* @__PURE__ */ React.createElement("div", { className: "mood-memory-snap" + (memSnapOpen ? " open" : "") }, /* @__PURE__ */ React.createElement(
+    "div",
     {
-      viewBox: "0 0 12 12",
-      width: "12",
-      height: "12",
-      fill: "none",
-      stroke: "currentColor",
-      strokeWidth: "1.4",
-      strokeLinecap: "round",
-      strokeLinejoin: "round",
-      "aria-hidden": "true"
-    },
-    /* @__PURE__ */ React.createElement("rect", { x: "2", y: "5.5", width: "8", height: "5.5", rx: "1" }),
-    /* @__PURE__ */ React.createElement("path", { d: "M4 5.5V4a2 2 0 0 1 4 0v1.5" }),
-    /* @__PURE__ */ React.createElement("path", { d: "M6 7.5v1.5" })
-  ), "From your memory file", onMemoryUpdate && /* @__PURE__ */ React.createElement(
-    "button",
-    {
-      className: "mood-mem-edit-btn",
-      onClick: (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        if (editingMem) {
-          setEditingMem(false);
-        } else {
-          startMemEdit();
+      className: "mood-memory-sum",
+      role: "button",
+      tabIndex: 0,
+      "aria-expanded": memSnapOpen,
+      onClick: () => {
+        if (!editingMem) setMemSnapOpen((o) => !o);
+      },
+      onKeyDown: (e) => {
+        if ((e.key === "Enter" || e.key === " ") && !editingMem) {
+          e.preventDefault();
+          setMemSnapOpen((o) => !o);
         }
       }
     },
-    editingMem ? "Cancel" : "Edit"
-  )), /* @__PURE__ */ React.createElement("div", { className: "mood-memory-body" }, !editingMem ? /* @__PURE__ */ React.createElement(React.Fragment, null, memInterventions && /* @__PURE__ */ React.createElement("div", { className: "mood-memory-block" }, /* @__PURE__ */ React.createElement("div", { className: "mood-memory-sublabel" }, "What's helped before"), memInterventions.split("\n").filter((l) => l.trim()).map((line, i) => /* @__PURE__ */ React.createElement("div", { key: i, className: "mood-mem-line" }, line))), memSupportNotes && /* @__PURE__ */ React.createElement("div", { className: "mood-memory-block" }, /* @__PURE__ */ React.createElement("div", { className: "mood-memory-sublabel" }, "Support notes"), memSupportNotes.split("\n").filter((l) => l.trim()).map((line, i) => /* @__PURE__ */ React.createElement("div", { key: i, className: "mood-mem-line" + (line.startsWith("-") ? " bullet" : "") }, line)))) : /* @__PURE__ */ React.createElement(React.Fragment, null, memInterventions !== void 0 && /* @__PURE__ */ React.createElement("div", { className: "mood-memory-block" }, /* @__PURE__ */ React.createElement("div", { className: "mood-memory-sublabel" }, "What's helped before"), /* @__PURE__ */ React.createElement(
+    /* @__PURE__ */ React.createElement(
+      "svg",
+      {
+        viewBox: "0 0 12 12",
+        width: "12",
+        height: "12",
+        fill: "none",
+        stroke: "currentColor",
+        strokeWidth: "1.4",
+        strokeLinecap: "round",
+        strokeLinejoin: "round",
+        "aria-hidden": "true"
+      },
+      /* @__PURE__ */ React.createElement("rect", { x: "2", y: "5.5", width: "8", height: "5.5", rx: "1" }),
+      /* @__PURE__ */ React.createElement("path", { d: "M4 5.5V4a2 2 0 0 1 4 0v1.5" }),
+      /* @__PURE__ */ React.createElement("path", { d: "M6 7.5v1.5" })
+    ),
+    /* @__PURE__ */ React.createElement("span", { style: { flex: 1 } }, "From your memory file"),
+    onMemoryUpdate && /* @__PURE__ */ React.createElement(
+      "button",
+      {
+        className: "mood-mem-edit-btn",
+        onClick: (e) => {
+          e.stopPropagation();
+          if (!memSnapOpen) setMemSnapOpen(true);
+          if (editingMem) {
+            setEditingMem(false);
+          } else {
+            startMemEdit();
+          }
+        }
+      },
+      editingMem ? "Cancel" : "Edit"
+    ),
+    /* @__PURE__ */ React.createElement("span", { className: "mood-mem-arrow", "aria-hidden": "true" }, memSnapOpen ? "\u25B4" : "\u25BE")
+  ), memSnapOpen && /* @__PURE__ */ React.createElement("div", { className: "mood-memory-body" }, !editingMem ? /* @__PURE__ */ React.createElement(React.Fragment, null, memInterventions && /* @__PURE__ */ React.createElement("div", { className: "mood-memory-block" }, /* @__PURE__ */ React.createElement("div", { className: "mood-memory-sublabel" }, "What's helped before"), memInterventions.split("\n").filter((l) => l.trim()).map((line, i) => /* @__PURE__ */ React.createElement("div", { key: i, className: "mood-mem-line" }, line))), memSupportNotes && /* @__PURE__ */ React.createElement("div", { className: "mood-memory-block" }, /* @__PURE__ */ React.createElement("div", { className: "mood-memory-sublabel" }, "Support notes"), memSupportNotes.split("\n").filter((l) => l.trim()).map((line, i) => /* @__PURE__ */ React.createElement("div", { key: i, className: "mood-mem-line" + (line.startsWith("-") ? " bullet" : "") }, line)))) : /* @__PURE__ */ React.createElement(React.Fragment, null, memInterventions !== void 0 && /* @__PURE__ */ React.createElement("div", { className: "mood-memory-block" }, /* @__PURE__ */ React.createElement("div", { className: "mood-memory-sublabel" }, "What's helped before"), /* @__PURE__ */ React.createElement(
     "textarea",
     {
       className: "mood-mem-edit-area",
       value: editInterventions,
       onChange: (e) => setEditInterventions(e.target.value),
       rows: 4,
-      placeholder: "e.g. 2026-05-21 \u2014 Breathing exercises helped during work stress"
+      placeholder: "e.g. 2026-05-21 \u2014 Breathing helped during work stress"
     }
   )), memSupportNotes !== void 0 && /* @__PURE__ */ React.createElement("div", { className: "mood-memory-block" }, /* @__PURE__ */ React.createElement("div", { className: "mood-memory-sublabel" }, "Support notes"), /* @__PURE__ */ React.createElement(
     "textarea",

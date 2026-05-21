@@ -829,6 +829,63 @@ body::before {
 }
 .safety-banner-expand:hover { opacity: 0.75; }
 
+/* ── Memory status banner ───────────────────────────────────────────── */
+/* Shown after a memory file is loaded ('loaded') or as a soft nudge    */
+/* to set one up ('hint'). Dismissed by the user or auto-fades.         */
+.mem-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid color-mix(in oklch, var(--accent) 35%, var(--line));
+  background: color-mix(in oklch, var(--accent) 7%, var(--surface));
+  font-size: 13px;
+  color: var(--ink);
+  animation: msg-in var(--t-med) both;
+}
+.mem-banner-icon {
+  width: 22px; height: 22px;
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--accent) 18%, transparent);
+  color: var(--accent);
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+  overflow: hidden;
+  margin-top: 1px;
+}
+.mem-banner-icon svg { width: 12px; height: 12px; }
+.mem-banner-body { flex: 1; min-width: 0; }
+.mem-banner-body strong { font-weight: 500; display: block; margin-bottom: 2px; }
+.mem-banner-body p { margin: 0; color: var(--ink-2); line-height: 1.5; }
+.mem-banner-action {
+  appearance: none; border: 0;
+  background: transparent;
+  color: var(--accent);
+  font-size: 12px;
+  font-family: var(--font-body);
+  cursor: pointer;
+  padding: 0;
+  margin-top: 4px;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  display: block;
+}
+.mem-banner-action:hover { opacity: 0.75; }
+.mem-banner .dismiss {
+  appearance: none;
+  border: 0; background: transparent;
+  color: var(--muted);
+  width: 22px; height: 22px;
+  border-radius: 4px;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.mem-banner .dismiss:hover { background: color-mix(in oklch, var(--ink) 6%, transparent); color: var(--ink); }
+.mem-banner .dismiss svg { width: 12px; height: 12px; }
+
 /* ── Technique check-in banner (SPEC-850 §9 — response-side popup) ── */
 /* Shown when Nikko's response recommends a named technique.            */
 /* Accent color matches memory UI; distinct from SafetyBanner (crisis). */
@@ -1835,8 +1892,8 @@ body::before {
   overflow: hidden;
 }
 
-/* The summary row — mimics .mood-section label sizing */
-.mood-memory-snap summary {
+/* The header row — controlled div replaces <summary> (avoids open-prop collapse bug) */
+.mood-memory-sum {
   display: flex;
   align-items: center;
   gap: 7px;
@@ -1849,23 +1906,19 @@ body::before {
   color: var(--accent-2);
   cursor: pointer;
   user-select: none;
-  list-style: none; /* hide the native triangle on Firefox */
 }
-.mood-memory-snap summary::-webkit-details-marker { display: none; } /* Chrome/Safari */
-.mood-memory-snap summary svg {
+.mood-memory-sum svg {
   width: 12px; height: 12px;
   flex-shrink: 0;
   color: var(--accent-2);
   opacity: 0.75;
 }
-.mood-memory-snap summary::after {
-  content: '▾';
-  margin-left: auto;
+/* Arrow character; toggled by JS via memSnapOpen state */
+.mood-mem-arrow {
   font-size: 10px;
   color: var(--muted);
-  transition: transform var(--t-fast);
+  flex-shrink: 0;
 }
-.mood-memory-snap:not([open]) summary::after { transform: rotate(-90deg); }
 
 /* Body padding when disclosure is open */
 .mood-memory-body {
@@ -2782,4 +2835,55 @@ body::before {
   cursor: pointer;
   font-size: 13.5px;
   color: var(--ink-2);
-  transition: border-color var(--t
+  transition: border-color var(--t-fast), background var(--t-fast);
+  user-select: none;
+}
+.check-item:hover { border-color: var(--accent); background: var(--bg-2); }
+.check-item.checked { border-color: color-mix(in oklch, var(--accent) 55%, var(--line)); color: var(--ink); }
+
+/* Custom checkbox box — the .check span acts as the visual checkbox */
+.check-item .check {
+  width: 18px; height: 18px;
+  min-width: 18px;
+  border: 1.5px solid var(--line);
+  border-radius: 4px;
+  background: var(--surface);
+  display: grid; place-items: center;
+  flex-shrink: 0;
+  transition: border-color var(--t-fast), background var(--t-fast);
+}
+/* Checkmark SVG — hidden until .checked is applied to the parent li */
+.check-item .check svg {
+  width: 10px; height: 10px;
+  opacity: 0;
+  transition: opacity var(--t-fast);
+  stroke: #fff;
+}
+.check-item.checked .check {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.check-item.checked .check svg { opacity: 1; }
+
+/* ── Modal textarea ─────────────────────────────────────────────── */
+.modal-textarea {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  background: var(--bg-3);
+  color: var(--ink);
+  border-radius: var(--r-md);
+  font-family: var(--font-body);
+  font-size: 14px;
+  line-height: 1.55;
+  resize: vertical;
+  min-height: 80px;
+  outline: none;
+  box-sizing: border-box;
+}
+.modal-textarea:focus { border-color: var(--accent); }
+
+/* ── Memory popover host ────────────────────────────────────────── */
+/* Scoping container for the memory button + popover. position:relative
+   is also set inline on the element for specificity safety. */
+.mem-pop-host { position: relative; }

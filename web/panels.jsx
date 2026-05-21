@@ -271,6 +271,8 @@ function MoodDiaryPanel({ entries, onSet, onClose, memoryContent, onMemoryUpdate
   const memInterventions = parseMemSection(memoryContent, 'Helpful Interventions');
   const memSupportNotes  = parseMemSection(memoryContent, 'Support Notes');
   const hasMemSnap = !!(memInterventions || memSupportNotes);
+  // Controls the open/closed state of the memory snapshot block.
+  const [memSnapOpen, setMemSnapOpen] = ps(true);
 
   // Edit mode state for the memory snapshot block.
   const [editingMem, setEditingMem] = ps(false);
@@ -331,10 +333,27 @@ function MoodDiaryPanel({ entries, onSet, onClose, memoryContent, onMemoryUpdate
           {formatDay(selectedDay)}{selectedDay === todayISO() ? ' · today' : ''}
         </div>
 
-        {/* Memory file snapshot — editable when onMemoryUpdate is provided */}
+        {/* Memory file snapshot — controlled div (not <details>) so we own the
+            open/close state and the Edit mode can't be accidentally collapsed
+            by the browser's native summary toggle behaviour. */}
         {memoryContent && hasMemSnap && (
-          <details className="mood-memory-snap" open={!editingMem || undefined}>
-            <summary>
+          <div className={'mood-memory-snap' + (memSnapOpen ? ' open' : '')}>
+            {/* Toggle/header row — clicking anywhere except the Edit button
+                toggles open/close. Locked during edit mode to prevent hiding
+                the textareas mid-edit. */}
+            <div
+              className="mood-memory-sum"
+              role="button"
+              tabIndex={0}
+              aria-expanded={memSnapOpen}
+              onClick={() => { if (!editingMem) setMemSnapOpen(o => !o); }}
+              onKeyDown={e => {
+                if ((e.key === 'Enter' || e.key === ' ') && !editingMem) {
+                  e.preventDefault();
+                  setMemSnapOpen(o => !o);
+                }
+              }}
+            >
               <svg viewBox="0 0 12 12" width="12" height="12" fill="none"
                    stroke="currentColor" strokeWidth="1.4"
                    strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -342,76 +361,81 @@ function MoodDiaryPanel({ entries, onSet, onClose, memoryContent, onMemoryUpdate
                 <path d="M4 5.5V4a2 2 0 0 1 4 0v1.5" />
                 <path d="M6 7.5v1.5" />
               </svg>
-              From your memory file
+              <span style={{flex:1}}>From your memory file</span>
               {onMemoryUpdate && (
                 <button
                   className="mood-mem-edit-btn"
                   onClick={e => {
-                    e.preventDefault();
                     e.stopPropagation();
+                    if (!memSnapOpen) setMemSnapOpen(true);
                     if (editingMem) { setEditingMem(false); } else { startMemEdit(); }
                   }}
                 >
                   {editingMem ? 'Cancel' : 'Edit'}
                 </button>
               )}
-            </summary>
-            <div className="mood-memory-body">
-              {!editingMem ? (
-                <>
-                  {memInterventions && (
-                    <div className="mood-memory-block">
-                      <div className="mood-memory-sublabel">What's helped before</div>
-                      {memInterventions.split('\n').filter(l => l.trim()).map((line, i) => (
-                        <div key={i} className="mood-mem-line">{line}</div>
-                      ))}
-                    </div>
-                  )}
-                  {memSupportNotes && (
-                    <div className="mood-memory-block">
-                      <div className="mood-memory-sublabel">Support notes</div>
-                      {memSupportNotes.split('\n').filter(l => l.trim()).map((line, i) => (
-                        <div key={i} className={'mood-mem-line' + (line.startsWith('-') ? ' bullet' : '')}>
-                          {line}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </>
-              ) : (
-                <>
-                  {memInterventions !== undefined && (
-                    <div className="mood-memory-block">
-                      <div className="mood-memory-sublabel">What's helped before</div>
-                      <textarea
-                        className="mood-mem-edit-area"
-                        value={editInterventions}
-                        onChange={e => setEditInterventions(e.target.value)}
-                        rows={4}
-                        placeholder="e.g. 2026-05-21 — Breathing exercises helped during work stress"
-                      />
-                    </div>
-                  )}
-                  {memSupportNotes !== undefined && (
-                    <div className="mood-memory-block">
-                      <div className="mood-memory-sublabel">Support notes</div>
-                      <textarea
-                        className="mood-mem-edit-area"
-                        value={editSupportNotes}
-                        onChange={e => setEditSupportNotes(e.target.value)}
-                        rows={4}
-                        placeholder="e.g. Things that don't help: Minimising..."
-                      />
-                    </div>
-                  )}
-                  <div className="mood-mem-edit-actions">
-                    <button className="btn-secondary" onClick={() => setEditingMem(false)}>Cancel</button>
-                    <button className="btn-primary" onClick={saveMemEdit}>Save & download</button>
-                  </div>
-                </>
-              )}
+              <span className="mood-mem-arrow" aria-hidden="true">
+                {memSnapOpen ? '\u25b4' : '\u25be'}
+              </span>
             </div>
-          </details>
+            {memSnapOpen && (
+              <div className="mood-memory-body">
+                {!editingMem ? (
+                  <>
+                    {memInterventions && (
+                      <div className="mood-memory-block">
+                        <div className="mood-memory-sublabel">What's helped before</div>
+                        {memInterventions.split('\n').filter(l => l.trim()).map((line, i) => (
+                          <div key={i} className="mood-mem-line">{line}</div>
+                        ))}
+                      </div>
+                    )}
+                    {memSupportNotes && (
+                      <div className="mood-memory-block">
+                        <div className="mood-memory-sublabel">Support notes</div>
+                        {memSupportNotes.split('\n').filter(l => l.trim()).map((line, i) => (
+                          <div key={i} className={'mood-mem-line' + (line.startsWith('-') ? ' bullet' : '')}>
+                            {line}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    {memInterventions !== undefined && (
+                      <div className="mood-memory-block">
+                        <div className="mood-memory-sublabel">What's helped before</div>
+                        <textarea
+                          className="mood-mem-edit-area"
+                          value={editInterventions}
+                          onChange={e => setEditInterventions(e.target.value)}
+                          rows={4}
+                          placeholder="e.g. 2026-05-21 — Breathing helped during work stress"
+                        />
+                      </div>
+                    )}
+                    {memSupportNotes !== undefined && (
+                      <div className="mood-memory-block">
+                        <div className="mood-memory-sublabel">Support notes</div>
+                        <textarea
+                          className="mood-mem-edit-area"
+                          value={editSupportNotes}
+                          onChange={e => setEditSupportNotes(e.target.value)}
+                          rows={4}
+                          placeholder="e.g. Things that don't help: Minimising..."
+                        />
+                      </div>
+                    )}
+                    <div className="mood-mem-edit-actions">
+                      <button className="btn-secondary" onClick={() => setEditingMem(false)}>Cancel</button>
+                      <button className="btn-primary" onClick={saveMemEdit}>Save & download</button>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
         )}
 
         <div className="mood-section">
