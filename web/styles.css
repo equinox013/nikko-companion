@@ -1824,6 +1824,93 @@ body::before {
   border-color: color-mix(in oklch, var(--accent-2) 40%, var(--line));
 }
 
+/* ── Memory file snapshot inside mood diary panel ────────────────── */
+/* Collapsible block that surfaces Helpful Interventions and Support Notes
+   from the user's loaded memory file so they have context while logging mood. */
+.mood-memory-snap {
+  background: color-mix(in oklch, var(--accent-2) 6%, var(--surface));
+  border: 1px solid color-mix(in oklch, var(--accent-2) 18%, var(--line));
+  border-radius: 10px;
+  margin-bottom: 14px;
+  overflow: hidden;
+}
+
+/* The summary row — mimics .mood-section label sizing */
+.mood-memory-snap summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 13px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--accent-2);
+  cursor: pointer;
+  user-select: none;
+  list-style: none; /* hide the native triangle on Firefox */
+}
+.mood-memory-snap summary::-webkit-details-marker { display: none; } /* Chrome/Safari */
+.mood-memory-snap summary svg {
+  width: 12px; height: 12px;
+  flex-shrink: 0;
+  color: var(--accent-2);
+  opacity: 0.75;
+}
+.mood-memory-snap summary::after {
+  content: '▾';
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--muted);
+  transition: transform var(--t-fast);
+}
+.mood-memory-snap:not([open]) summary::after { transform: rotate(-90deg); }
+
+/* Body padding when disclosure is open */
+.mood-memory-body {
+  padding: 0 13px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Individual sub-block (one per section: interventions / support notes) */
+.mood-memory-block {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+/* Sub-heading inside each block */
+.mood-memory-sublabel {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 2px;
+}
+
+/* Individual memory file line (entry or support note line) */
+.mood-mem-line {
+  font-size: 12.5px;
+  color: var(--ink-2);
+  line-height: 1.55;
+}
+/* Lines starting with '- ' (bullet items in support notes) get a slight indent */
+.mood-mem-line.bullet {
+  padding-left: 10px;
+  position: relative;
+}
+.mood-mem-line.bullet::before {
+  content: '·';
+  position: absolute;
+  left: 2px;
+  color: var(--muted);
+}
+
 /* ── Agent transparency ribbon (above each assistant message) ── */
 .agent-ribbon {
   display: flex; flex-wrap: wrap; align-items: baseline;
@@ -2681,74 +2768,4 @@ body::before {
   padding: 10px 12px;
   border: 1px solid var(--line);
   background: var(--bg-3);
-  color: var(--ink);
-  border-radius: var(--r-md);
-  font-family: var(--font-body);
-  font-size: 14px;
-  line-height: 1.55;
-  resize: vertical;
-  min-height: 80px;
-  outline: none;
-  box-sizing: border-box;
-}
-.modal-textarea:focus { border-color: var(--accent); }
-
-/* ── Memory banner (pending entries notification) ───────────────── */
-.mem-banner {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  padding: 12px 14px;
-  border-radius: 14px;
-  border: 1px solid color-mix(in oklch, var(--accent) 35%, var(--line));
-  background: color-mix(in oklch, var(--accent) 7%, var(--surface));
-  font-size: 13px;
-  color: var(--ink);
-  animation: msg-in var(--t-med) both;
-}
-.mem-banner-icon {
-  width: 22px; height: 22px;
-  border-radius: 999px;
-  background: color-mix(in oklch, var(--accent) 18%, transparent);
-  color: var(--accent);
-  display: grid; place-items: center;
-  flex-shrink: 0;
-  margin-top: 1px;
-}
-.mem-banner-icon svg { width: 12px; height: 12px; }
-.mem-banner-body { flex: 1; min-width: 0; }
-.mem-banner-body strong { font-weight: 500; display: block; margin-bottom: 2px; }
-.mem-banner-body p { margin: 0; color: var(--ink-2); line-height: 1.5; }
-.mem-banner-action {
-  appearance: none; border: 0;
-  background: transparent;
-  color: var(--accent);
-  font-size: 12px;
-  font-family: var(--font-body);
-  cursor: pointer;
-  padding: 0;
-  margin-top: 4px;
-  text-decoration: underline;
-  text-underline-offset: 2px;
-  display: block;
-}
-.mem-banner-action:hover { opacity: 0.75; }
-.mem-banner .dismiss {
-  appearance: none;
-  border: 0; background: transparent;
-  color: var(--muted);
-  width: 22px; height: 22px;
-  border-radius: 4px;
-  cursor: pointer;
-  display: grid; place-items: center;
-  flex-shrink: 0;
-}
-.mem-banner .dismiss:hover { background: color-mix(in oklch, var(--ink) 6%, transparent); color: var(--ink); }
-.mem-banner .dismiss svg { width: 12px; height: 12px; }
-
-/* ── Message glow (pending memory highlight) ─────────────────────── */
-@keyframes memGlow {
-  0%, 100% { box-shadow: 0 0 0 0 color-mix(in oklch, var(--accent) 0%, transparent); }
-  50%       { box-shadow: 0 0 0 5px color-mix(in oklch, var(--accent) 22%, transparent); }
-}
-.msg-glow .bubble { animation: memGlow 2.4s ease-in-out 3; }
+  c

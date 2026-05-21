@@ -1131,7 +1131,12 @@ function Chat({ theme, onToggleTheme }) {
         )}
 
         {leftTab === 'mood' && (
-          <MoodDiaryPanel entries={moodEntries} onSet={setMoodEntry} onClose={() => setLeftTab(null)} />
+          <MoodDiaryPanel
+            entries={moodEntries}
+            onSet={setMoodEntry}
+            onClose={() => setLeftTab(null)}
+            memoryContent={memContentRef.current}
+          />
         )}
 
         <div className="thread-wrap">

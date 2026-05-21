@@ -2,6 +2,21 @@
 
 const { useState: ps, useEffect: pe, useRef: pr } = React;
 
+// ── Memory section parser ────────────────────────────────────────────
+// Extracts the body of a named ## section from a Nikko memory Markdown string.
+// Strips HTML placeholder comments (<!-- ... -->) and trims whitespace.
+// Returns '' if the section is absent or contains only comments.
+function parseMemSection(md, section) {
+  if (!md) return '';
+  const re = new RegExp('^##\\s*' + section + '\\s*$', 'm');
+  const match = md.match(re);
+  if (!match) return '';
+  const start = match.index + match[0].length;
+  const next = md.indexOf('\n##', start);
+  const body = next === -1 ? md.slice(start) : md.slice(start, next);
+  return body.replace(/<!--[\s\S]*?-->/g, '').trim();
+}
+
 // ── APA 7 formatter ─────────────────────────────────────────────────
 // Produces a best-effort APA 7th edition reference string from a SourceItem
 // (the serialised EvidenceItem returned by the backend pipeline).
@@ -194,7 +209,9 @@ const MOOD_COLORS = ['#c95a5a','#d77452','#db8f4e','#d4a352','#c9b260','#a9b76a'
 const JOURNAL_LIMIT = 4000;
 const POMODORO_SECS = 10 * 60;
 
-function MoodDiaryPanel({ entries, onSet, onClose }) {
+// memoryContent: optional decrypted memory Markdown string from chat.jsx.
+// Surfaces Helpful Interventions + Support Notes as a read-only reference.
+function MoodDiaryPanel({ entries, onSet, onClose, memoryContent }) {
   const [selectedDay, setSelectedDay] = ps(todayISO());
   const e0 = entries[selectedDay] || { mood: 0, emotions: [], triggers: [], note: '', journal: '' };
   const [draftMood, setDraftMood] = ps(e0.mood || 0);
@@ -232,6 +249,12 @@ function MoodDiaryPanel({ entries, onSet, onClose }) {
   }, [running]);
   const mm = String(Math.floor(secsLeft / 60)).padStart(2, '0');
   const ss = String(secsLeft % 60).padStart(2, '0');
+
+  // Parse memory sections relevant to daily mood tracking.
+  // Returns '' when the section has only placeholder comments → snapshot hidden.
+  const memInterventions = parseMemSection(memoryContent, 'Helpful Interventions');
+  const memSupportNotes  = parseMemSection(memoryContent, 'Support Notes');
+  const hasMemSnap = !!(memInterventions || memSupportNotes);
 
   const days = Object.entries(entries).sort((a, b) => b[0].localeCompare(a[0]));
   const toggleIn = (arr, v) => arr.includes(v) ? arr.filter(x => x !== v) : [...arr, v];
@@ -272,6 +295,42 @@ function MoodDiaryPanel({ entries, onSet, onClose }) {
         <div className="mood-day-stamp">
           {formatDay(selectedDay)}{selectedDay === todayISO() ? ' · today' : ''}
         </div>
+
+        {/* Memory file snapshot: collapsible, only when content exists */}
+        {memoryContent && hasMemSnap && (
+          <details className="mood-memory-snap" open>
+            <summary>
+              <svg viewBox="0 0 12 12" fill="none" stroke="currentColor"
+                   strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"
+                   aria-hidden="true">
+                <rect x="2" y="5.5" width="8" height="5.5" rx="1" />
+                <path d="M4 5.5V4a2 2 0 0 1 4 0v1.5" />
+                <path d="M6 7.5v1.5" />
+              </svg>
+              From your memory file
+            </summary>
+            <div className="mood-memory-body">
+              {memInterventions && (
+                <div className="mood-memory-block">
+                  <div className="mood-memory-sublabel">What's helped before</div>
+                  {memInterventions.split('\n').filter(l => l.trim()).map((line, i) => (
+                    <div key={i} className="mood-mem-line">{line}</div>
+                  ))}
+                </div>
+              )}
+              {memSupportNotes && (
+                <div className="mood-memory-block">
+                  <div className="mood-memory-sublabel">Support notes</div>
+                  {memSupportNotes.split('\n').filter(l => l.trim()).map((line, i) => (
+                    <div key={i} className={'mood-mem-line' + (line.startsWith('-') ? ' bullet' : '')}>
+                      {line}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </details>
+        )}
 
         <div className="mood-section">
           <label>How is today, overall?</label>
