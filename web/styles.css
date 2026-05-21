@@ -2332,3 +2332,257 @@ body::before {
   0%   { transform: translateX(-120%); }
   100% { transform: translateX(320%); }
 }
+
+/* ── Personalisation pill selectors (memory modal) ──────────────── */
+.pill-group { display: flex; flex-direction: column; gap: 8px; margin-bottom: 18px; }
+.pill-group-label {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 2px;
+}
+.pill-row { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.opill-host { position: relative; }
+.opill {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: var(--bg-3);
+  border-radius: 999px;
+  padding: 7px 16px;
+  font-size: 13.5px;
+  font-family: var(--font-body);
+  color: var(--ink-2);
+  cursor: pointer;
+  transition: border-color var(--t-fast), background var(--t-fast), color var(--t-fast);
+  line-height: 1;
+}
+.opill:hover { border-color: color-mix(in oklch, var(--accent) 60%, var(--line)); color: var(--ink); }
+.opill.opill-active {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--bg);
+}
+/* Tooltip — appears above the pill on hover */
+.opill-tip {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 9px 12px;
+  font-size: 12.5px;
+  color: var(--ink-2);
+  line-height: 1.45;
+  width: 220px;
+  box-shadow: var(--shadow-card);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity var(--t-fast);
+  z-index: 300;
+  white-space: normal;
+  text-align: left;
+}
+/* Arrow */
+.opill-tip::after {
+  content: '';
+  position: absolute;
+  top: 100%; left: 50%;
+  transform: translateX(-50%);
+  border: 6px solid transparent;
+  border-top-color: var(--line);
+  margin-top: -1px;
+}
+.opill-tip::before {
+  content: '';
+  position: absolute;
+  top: 100%; left: 50%;
+  transform: translateX(-50%);
+  border: 6px solid transparent;
+  border-top-color: var(--surface);
+  z-index: 1;
+}
+.opill-host:hover .opill-tip { opacity: 1; }
+
+/* Inline warning when verbose input selected */
+.pill-warn {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+  font-style: italic;
+}
+
+/* ── Modal section layout ───────────────────────────────────────── */
+.modal-section { margin-bottom: 20px; }
+
+/* Gate choice — two clickable option cards stacked vertically */
+.modal-gate-choice {
+  display: flex; flex-direction: column; gap: 10px;
+  margin-top: 20px;
+}
+.modal-gate-label {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 14px 16px;
+  border: 1.5px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--bg-3);
+  cursor: pointer;
+  transition: border-color var(--t-fast), background var(--t-fast);
+}
+.modal-gate-label:hover {
+  border-color: var(--accent);
+  background: var(--bg-2);
+}
+.modal-gate-label strong {
+  display: block;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+  margin-bottom: 3px;
+}
+.modal-gate-icon {
+  font-size: 15px;
+  color: var(--accent);
+  margin-top: 2px;
+  flex-shrink: 0;
+  line-height: 1;
+}
+.modal-gate-hint {
+  font-size: 12.5px;
+  color: var(--muted);
+  line-height: 1.4;
+  font-weight: 400;
+}
+
+/* ── Don't-help checklist ───────────────────────────────────────── */
+/* Note: uses <li class="check-item"> + <span class="check"><svg/></span>
+   pattern — NOT input[type="checkbox"]. Checked state toggled via .checked
+   class on the <li> by React state. */
+.check-list {
+  display: flex; flex-direction: column; gap: 6px;
+  list-style: none; padding: 0; margin: 0 0 8px;
+}
+.check-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-md);
+  background: var(--bg-3);
+  cursor: pointer;
+  font-size: 13.5px;
+  color: var(--ink-2);
+  transition: border-color var(--t-fast), background var(--t-fast);
+  user-select: none;
+}
+.check-item:hover { border-color: var(--accent); background: var(--bg-2); }
+.check-item.checked { border-color: color-mix(in oklch, var(--accent) 55%, var(--line)); color: var(--ink); }
+
+/* Custom checkbox box — the .check span acts as the visual checkbox */
+.check-item .check {
+  width: 18px; height: 18px;
+  min-width: 18px;
+  border: 1.5px solid var(--line);
+  border-radius: 4px;
+  background: var(--surface);
+  display: grid; place-items: center;
+  flex-shrink: 0;
+  transition: border-color var(--t-fast), background var(--t-fast);
+}
+/* Checkmark SVG — hidden until .checked is applied to the parent li */
+.check-item .check svg {
+  width: 10px; height: 10px;
+  opacity: 0;
+  transition: opacity var(--t-fast);
+  stroke: #fff;
+}
+.check-item.checked .check {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.check-item.checked .check svg { opacity: 1; }
+
+/* ── Modal textarea ─────────────────────────────────────────────── */
+.modal-textarea {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  background: var(--bg-3);
+  color: var(--ink);
+  border-radius: var(--r-md);
+  font-family: var(--font-body);
+  font-size: 14px;
+  line-height: 1.55;
+  resize: vertical;
+  min-height: 80px;
+  outline: none;
+  box-sizing: border-box;
+}
+.modal-textarea:focus { border-color: var(--accent); }
+
+/* ── Memory banner (pending entries notification) ───────────────── */
+.mem-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid color-mix(in oklch, var(--accent) 35%, var(--line));
+  background: color-mix(in oklch, var(--accent) 7%, var(--surface));
+  font-size: 13px;
+  color: var(--ink);
+  animation: msg-in var(--t-med) both;
+}
+.mem-banner-icon {
+  width: 22px; height: 22px;
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--accent) 18%, transparent);
+  color: var(--accent);
+  display: grid; place-items: center;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+.mem-banner-icon svg { width: 12px; height: 12px; }
+.mem-banner-body { flex: 1; min-width: 0; }
+.mem-banner-body strong { font-weight: 500; display: block; margin-bottom: 2px; }
+.mem-banner-body p { margin: 0; color: var(--ink-2); line-height: 1.5; }
+.mem-banner-action {
+  appearance: none; border: 0;
+  background: transparent;
+  color: var(--accent);
+  font-size: 12px;
+  font-family: var(--font-body);
+  cursor: pointer;
+  padding: 0;
+  margin-top: 4px;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  display: block;
+}
+.mem-banner-action:hover { opacity: 0.75; }
+.mem-banner .dismiss {
+  appearance: none;
+  border: 0; background: transparent;
+  color: var(--muted);
+  width: 22px; height: 22px;
+  border-radius: 4px;
+  cursor: pointer;
+  display: grid; place-items: center;
+  flex-shrink: 0;
+}
+.mem-banner .dismiss:hover { background: color-mix(in oklch, var(--ink) 6%, transparent); color: var(--ink); }
+.mem-banner .dismiss svg { width: 12px; height: 12px; }
+
+/* ── Message glow (pending memory highlight) ─────────────────────── */
+@keyframes memGlow {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in oklch, var(--accent) 0%, transparent); }
+  50%       { box-shadow: 0 0 0 5px color-mix(in oklch, var(--accent) 22%, transparent); }
+}
+.msg-glow .bubble { animation: memGlow 2.4s ease-in-out 3; }
