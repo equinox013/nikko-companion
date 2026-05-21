@@ -453,7 +453,11 @@ _TOPIC_KEYWORDS: dict[TopicTag, list[str]] = {
 # ---------------------------------------------------------------------------
 
 # If Phase 1 returns fewer than this many sanctioned results, trigger Phase 2.
-MIN_SANCTIONED_RESULTS: int = 2
+# Set to 0 to disable Phase 2 entirely (Director directive: block all non-sanctioned
+# sources at the WebSearchAdapter layer; PubMed adapter is unaffected — it uses
+# the NCBI API independently of DuckDuckGo).
+# Phase 1 already validates every URL via _is_sanctioned() before returning items.
+MIN_SANCTIONED_RESULTS: int = 0
 
 # Maximum sanctioned domains included in a single DDG site: query.
 # Keeping this ≤ 6 ensures the query string stays within DDG limits and

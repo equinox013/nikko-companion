@@ -129,18 +129,68 @@ class HFSpaceFullGenerator:
         # this list — a Phase 5 enhancement (USM memory integration, REQ-850-070).
         messages = [{"role": "user", "content": user_msg}]
 
+        # Build system prompts — adp_a_system is constructed once and reused
+        # both in the payload and as the source for base_strategy_text extraction.
+        adp_a_system = build_adp_a_system(context)
+
+        # ── Rule-engine signal summary (lightweight, for Modal analysis preamble) ──
+        # Carries only the fields Qwen3-4B needs to add nuance — not a full
+        # SignalPayload. Risk indicators are always [] here: active/acute risk
+        # already fired the CRISIS path in NikkoPipeline before reaching generate().
+        sig = context.signals
+        rule_signal: dict | None = None
+        if sig:
+            rule_signal = {
+                "distress_level":        sig.distress_level.value,
+                "confidence":            round(sig.confidence, 3),
+                "behavioral_indicators": list(sig.behavioral_indicators),
+                "support_needs":         list(sig.support_needs),
+            }
+
+        # ── Base strategy text (RESPONSE GUIDANCE block for Modal to refine) ──
+        # Built from context.strategy — mirrors what build_adp_a_system() injects.
+        # Modal uses this as the "before" state for strategy enrichment.
+        base_strategy_text = ""
+        if context.strategy:
+            s = context.strategy
+            base_strategy_text = (
+                f"Tone: {s.tone_guidance}\n"
+                f"Framing: {s.framing_strategy}"
+            )
+            if s.response_constraints:
+                constraints = "; ".join(s.response_constraints)
+                base_strategy_text += f"\nConstraints: {constraints}"
+
+        # ── scope_ambiguous ──────────────────────────────────────────────────────
+        # Set True when the ScopeClassifier returned AMBIGUOUS to trigger the
+        # Modal LLM scope resolution pass (Pass 0a). Currently always False —
+        # the ScopeClassifier result is not yet threaded into ResponseContextPayload.
+        # TODO: add scope_decision field to ResponseContextPayload (or pipeline
+        #       context) to wire this up; log the gap in GAPS.md.
+        scope_ambiguous = False
+
         payload = {
-            "messages":      messages,
-            "system":        build_adp_a_system(context),   # RAG evidence injected here
-            "safety_system": build_adp_b_system(),
-            "eval_system":   build_adp_c_system(context),
-            "token":         self._token,
+            "messages":           messages,
+            "system":             adp_a_system,             # RAG evidence injected here
+            "safety_system":      build_adp_b_system(),
+            "eval_system":        build_adp_c_system(context),
+            "token":              self._token,
+            # Analysis preamble params — enriches ADP-A response with LLM nuance.
+            # Modal defaults run_analysis=True; Qwen3-4B is always loaded there.
+            "user_text":          user_msg,
+            "run_analysis":       True,
+            "scope_ambiguous":    scope_ambiguous,
+            "rule_signal":        rule_signal,
+            "base_strategy_text": base_strategy_text,
         }
 
         logger.info(
-            "HFSpaceFullGenerator: calling pipeline endpoint | mode=%s evidence_items=%d",
+            "HFSpaceFullGenerator: calling pipeline | mode=%s evidence_items=%d "
+            "distress=%s confidence=%.2f",
             context.mode.value,
             len(context.synthesized_evidence.citations) if context.synthesized_evidence else 0,
+            sig.distress_level.value if sig else "unknown",
+            sig.confidence if sig else 0.0,
         )
 
         # Build ordered list of URLs to try: primary first, fallback second (if set).
@@ -229,6 +279,24 @@ class HFSpaceFullGenerator:
             return ADPB_CRISIS_SENTINEL
 
         text = result.get("text", "")
+
+        # Log analysis enrichment if present — useful for Phase 6 evaluation audit.
+        # Hashes of user text are NOT logged here (SPEC-800 PII scrubbing).
+        _enh_sig  = result.get("enhanced_signal")
+        _enh_strat = result.get("enhanced_strategy")
+        if _enh_sig:
+            logger.info(
+                "HFSpaceFullGenerator: signal enrichment | tone='%s' nudge=%s conf_adj=%+.2f",
+                (_enh_sig.get("tone_note") or "")[:80],
+                _enh_sig.get("distress_nudge"),
+                _enh_sig.get("confidence_adjustment", 0.0),
+            )
+        if _enh_strat:
+            logger.info(
+                "HFSpaceFullGenerator: strategy enrichment | tone='%s'",
+                (_enh_strat.get("tone_refinement") or "")[:80],
+            )
+
         logger.info(
             "HFSpaceFullGenerator: /pipeline done | verdict=%s regen=%s elapsed=%.1fs chars=%d",
             result.get("verdict"),
