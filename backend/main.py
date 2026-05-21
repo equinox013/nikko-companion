@@ -206,7 +206,12 @@ class SSEChunk(BaseModel):
     # USM write-back (SPEC-850 §9, step 2 — Proposal).
     # Non-None only on the final normal chunk when a memory candidate is detected.
     # Never set on crisis or out-of-scope chunks (REQ-850-084).
-    memory_proposal: dict | None  = None
+    memory_proposal:     dict | None  = None
+    # USM technique check-in (SPEC-850 §9 — post-recommendation prompt).
+    # Non-None when the assistant's response recommends a named technique,
+    # prompting a frontend popup asking if the user wants to track it.
+    # Never set on crisis or out-of-scope chunks (REQ-850-084).
+    technique_recommended: dict | None = None
 
 # ── Emotion mapping ───────────────────────────────────────────────────────────
 
@@ -229,10 +234,12 @@ def _mode_to_emotion(mode: OperationalMode | None, is_crisis: bool = False) -> s
 # ── USM memory candidate detection (SPEC-850 §9, step 2) ─────────────────────
 
 # Affirmation patterns that signal a user has found something helpful.
-# Deliberately conservative — false negatives are fine; false positives
-# would propose spurious memory entries (worse UX than missing a real one).
+# Covers both past-tense confirmations ("that helped") and present-tense
+# statements ("breathing really helps me", "I find this helpful").
+# Still conservative — false negatives preferred over spurious proposals.
 _AFFIRMATION_RE = re.compile(
     r"\b("
+    # Past-tense: user confirming something worked
     r"that (really |actually |really actually )?(helped|worked|made (?:a |the )difference)"
     r"|it (really |actually )?(helped|worked)"
     r"|that (technique|exercise|method|approach|strategy|tip) ?(really |actually )?worked"
@@ -240,6 +247,11 @@ _AFFIRMATION_RE = re.compile(
     r"|i('ll| will| should| want to) try(ing)? (that|this)"
     r"|that('s| is) (helpful|useful|good to know|exactly what i needed)"
     r"|going to (try|use|do) that"
+    # Present-tense: user stating something helps / is helpful
+    r"|(?:really |definitely |actually |so )?help(?:s|ed)? (?:a lot|so much|me|with|calm)"
+    r"|find(?:s|ing)? (?:it |this |that )?(?:really |so |very )?helpful"
+    r"|feel(?:s)? (?:like |that )?(?:\w+ ){0,5}help(?:s|ed)?"
+    r"|(?:really |definitely )?work(?:s|ed)? (?:well|for me|really well)"
     r")",
     re.IGNORECASE,
 )
@@ -305,6 +317,82 @@ def _detect_memory_candidate(
         "entry":   entry,
         "raw":     tech_match.group(0) if tech_match else None,
     }
+
+
+# ── USM technique recommendation detection (SPEC-850 §9 — response-side) ────
+
+# Matches recommendation language in the assistant's output ("try X", "practice Y").
+# Anchored to the same technique vocabulary as _TECHNIQUE_RE but scans Nikko's text.
+_RESPONSE_RECOMMEND_RE = re.compile(
+    r"\b(?:try|practice|use|consider|give\s+(?:it|this|that)\s+a\s+try|experiment\s+with)\b"
+    r"[^.!?\n]{0,100}"
+    r"\b(box\s+breath(?:ing)?|4[-–]7[-–]8(?:\s+breath(?:ing)?)?|breath(?:ing)?(?:\s+exercise)?s?|"
+    r"deep\s+breath(?:ing)?|grounding(?:\s+exercise|\s+technique)?s?|"
+    r"5[-–]4[-–]3[-–]2[-–]1|body\s+scan|progressive\s+muscle\s+relaxation|PMR|"
+    r"mindfulness(?:\s+meditation)?|meditati(?:on|ng)|journal(?:l?ing)?|thought\s+record|"
+    r"cognitive\s+refram(?:ing|e)|behavioural?\s+activation|worry\s+time|"
+    r"self[-\s]compassion(?:\s+exercise)?)\b",
+    re.IGNORECASE,
+)
+
+# Ordered lookup: first match wins. Each entry is (pattern, display_name, memory_entry).
+# Entry is first-person per REQ-850-021 — framed as "I tried X" since the user
+# is clicking Accept to confirm they want to remember the technique.
+_TECHNIQUE_CANONICAL = [
+    (re.compile(r"box\s+breath",         re.I), "box breathing",           "I tried box breathing to help calm anxious feelings."),
+    (re.compile(r"4[-–]7[-–]8",          re.I), "4-7-8 breathing",         "I tried 4-7-8 breathing as a relaxation technique."),
+    (re.compile(r"grounding",            re.I), "grounding",               "I tried a grounding exercise to stay present."),
+    (re.compile(r"5[-–]4[-–]3[-–]2[-–]1", re.I), "5-4-3-2-1 grounding",  "I tried the 5-4-3-2-1 grounding technique."),
+    (re.compile(r"body\s+scan",          re.I), "body scan",               "I tried a body scan meditation to release tension."),
+    (re.compile(r"progressive\s+muscle|PMR", re.I), "PMR",                 "I tried progressive muscle relaxation."),
+    (re.compile(r"mindfulness",          re.I), "mindfulness",             "I tried mindfulness practice to manage stress."),
+    (re.compile(r"meditati",             re.I), "meditation",              "I tried meditation as a calming technique."),
+    (re.compile(r"journal",              re.I), "journalling",             "I tried journalling to process difficult feelings."),
+    (re.compile(r"thought\s+record",     re.I), "thought records",         "I tried thought records to challenge unhelpful thinking."),
+    (re.compile(r"cognitive\s+refram",   re.I), "cognitive reframing",     "I tried cognitive reframing to shift my perspective."),
+    (re.compile(r"behavioural?\s+activ", re.I), "behavioural activation",  "I tried behavioural activation to improve my mood."),
+    (re.compile(r"worry\s+time",         re.I), "worry time",              "I tried the worry time technique to contain anxious thoughts."),
+    (re.compile(r"self[-\s]compassion",  re.I), "self-compassion",         "I tried a self-compassion exercise."),
+    (re.compile(r"breath",              re.I), "breathing exercises",      "I tried breathing exercises to manage stress."),
+]
+
+
+def _detect_technique_in_response(
+    response_text: str,
+    mode: "OperationalMode | None",
+) -> "dict | None":
+    """
+    Scan the ADP-A response for a technique recommendation (SPEC-850 §9).
+
+    Returns a technique_recommended dict when Nikko explicitly suggests the user
+    try a named technique, triggering a frontend popup banner. The popup asks
+    whether the user wants to track it in their memory file — replacing the need
+    to type specific affirmation phrases after the fact.
+
+    Only called for non-crisis, non-out-of-scope turns (REQ-850-084).
+
+    Returns:
+        None — no recommendation detected
+        {
+            "technique": <display name, e.g. "box breathing">,
+            "section":   "What Helps Me",
+            "entry":     <first-person memory entry, REQ-850-021>,
+            "raw":       <canonical key for deduplication>,
+        }
+    """
+    if not _RESPONSE_RECOMMEND_RE.search(response_text):
+        return None
+
+    for pattern, raw_key, entry in _TECHNIQUE_CANONICAL:
+        if pattern.search(response_text):
+            return {
+                "technique": raw_key,
+                "section":   "What Helps Me",
+                "entry":     entry,
+                "raw":       raw_key,
+            }
+
+    return None
 
 
 # ── Pipeline to SSE bridge ────────────────────────────────────────────────────
@@ -501,6 +589,17 @@ async def _pipeline(request: MessageRequest) -> AsyncGenerator[SSEChunk, None]:
     # called for crisis or out-of-scope paths (REQ-850-084).
     proposal = _detect_memory_candidate(request.text.strip(), result.mode)
 
+    # Detect whether the assistant's response recommends a named technique,
+    # triggering a frontend check-in popup (SPEC-850 §9 — response-side).
+    # This is the primary trigger path — fires when Nikko suggests something,
+    # not waiting for the user to type affirmation phrases afterwards.
+    # Suppressed when memory_proposal already fired (user already affirmed).
+    technique_rec = (
+        _detect_technique_in_response(text, result.mode)
+        if not proposal
+        else None
+    )
+
     yield SSEChunk(
         text=text,
         emotion=_mode_to_emotion(result.mode),
@@ -508,6 +607,7 @@ async def _pipeline(request: MessageRequest) -> AsyncGenerator[SSEChunk, None]:
         sources=_citations_to_sources(result),
         trace=_result_to_trace(result),
         memory_proposal=proposal,
+        technique_recommended=technique_rec,
     )
 
 

@@ -210,6 +210,41 @@ function MemBanner({ type, onDismiss, onOpenLoad }) {
   );
 }
 
+// ── Technique check-in banner (SPEC-850 §9 — response-side prompt) ──
+// Shown as a popup in the composer area when Nikko's response recommends a
+// named technique. Asks the user if they want to track it in their memory file.
+// Primary trigger path — does not require the user to type specific phrases.
+// REQ-850-011: user must explicitly Accept before anything is written.
+// REQ-850-092: visually distinct from both SafetyBanner and MemoryProposalCard.
+function TechniqueCheckInBanner({ technique, onAdd, onDismiss }) {
+  return (
+    <div className="technique-checkin-banner" role="status" aria-live="polite">
+      <span className="technique-checkin-icon" aria-hidden="true">
+        <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5"
+             strokeLinecap="round" strokeLinejoin="round">
+          <rect x="2.5" y="6" width="9" height="6.5" rx="1.2" />
+          <path d="M4.5 6V4a2.5 2.5 0 0 1 5 0v2" />
+          <path d="M7 8.5v2" />
+        </svg>
+      </span>
+      <div className="technique-checkin-body">
+        <strong>Worth remembering?</strong>
+        <p>If {technique} helps, I can add it to your memory file.</p>
+      </div>
+      <div className="technique-checkin-actions">
+        <button className="technique-checkin-yes" onClick={onAdd}
+                aria-label={`Add ${technique} to memory file`}>
+          Add to memory
+        </button>
+        <button className="technique-checkin-no" onClick={onDismiss}
+                aria-label="Dismiss suggestion">
+          Not now
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ── Memory proposal card (SPEC-850 §9, step 2 — Proposal) ─────────
 // Shown in the composer area when the backend detects an intervention affirmation.
 // The user must explicitly Accept or Decline — nothing is written otherwise.
@@ -426,6 +461,13 @@ function Chat({ theme, onToggleTheme }) {
   // REQ-850-093: session-end warning fires when this array is non-empty.
   const [pendingEntries, setPendingEntries] = useState([]);
 
+  // Technique check-in banner — shown when Nikko's response recommends a named
+  // technique and the user has an encrypted memory file loaded.
+  // Shape: { technique: string, section: string, entry: string } | null.
+  // "Add to memory" converts this to a pendingEntry (shows proposal card).
+  // "Not now" clears it with no side effects.
+  const [techniqueCheckIn, setTechniqueCheckIn] = useState(null);
+
   // Memory notification banner — two variants: 'loaded' (7s auto-dismiss) and
   // 'hint' (persists until dismissed; shown once per session after 3 user msgs).
   const [memBanner, setMemBanner] = useState(null);   // null | 'loaded' | 'hint'
@@ -615,6 +657,15 @@ function Chat({ theme, onToggleTheme }) {
     }
   }, [pendingEntries, memName]);
 
+  // Convert a technique check-in acceptance into a pending entry.
+  // Shows the proposal card so the user sees exactly what will be written
+  // before the final Accept triggers the download (REQ-850-011).
+  const onCheckInAdd = useCallback(() => {
+    if (!techniqueCheckIn) return;
+    setPendingEntries(prev => [...prev, { ...techniqueCheckIn, ts: Date.now() }]);
+    setTechniqueCheckIn(null);
+  }, [techniqueCheckIn]);
+
   // Warn on tab close when there are unsaved pending entries (REQ-850-093).
   // The browser shows a generic "Leave site?" dialog — we can't customise the text.
   useEffect(() => {
@@ -767,6 +818,15 @@ function Chat({ theme, onToggleTheme }) {
                     ...data.memory_proposal,
                     ts: Date.now(),
                   }]);
+                }
+
+                // Technique check-in: backend detected Nikko recommended a named
+                // technique in this response. Show a popup banner asking the user
+                // if they want to track it — only when encrypted file is loaded.
+                // Suppressed if memory_proposal already fired for this turn.
+                if (data.technique_recommended && !data.memory_proposal
+                    && memContentRef.current && sessionKeyRef.current) {
+                  setTechniqueCheckIn(data.technique_recommended);
                 }
               } else {
                 // Empty text chunk = emotion-state signal only (e.g. "think").
@@ -1113,6 +1173,17 @@ function Chat({ theme, onToggleTheme }) {
 
           <div className="composer-wrap">
             <div className="composer-inner">
+              {/* Technique check-in banner — shown when Nikko recommended a
+                  technique in this response. Popup style like SafetyBanner.
+                  "Add to memory" converts to a proposal card for final confirm.
+                  Only visible when encrypted memory file is loaded. */}
+              {techniqueCheckIn && memContentRef.current && sessionKeyRef.current && (
+                <TechniqueCheckInBanner
+                  technique={techniqueCheckIn.technique}
+                  onAdd={onCheckInAdd}
+                  onDismiss={() => setTechniqueCheckIn(null)}
+                />
+              )}
               {/* Memory proposal cards — one per pending write-back entry.
                   Shown in arrival order; each has Accept / Decline.
                   Accept: saves that single entry and downloads updated file.
