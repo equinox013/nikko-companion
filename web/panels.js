@@ -9,6 +9,15 @@ function parseMemSection(md, section) {
   const body = next === -1 ? md.slice(start) : md.slice(start, next);
   return body.replace(/<!--[\s\S]*?-->/g, "").trim();
 }
+function replaceMemSection(md, section, newBody) {
+  const re = new RegExp("^##\\s*" + section + "\\s*$", "m");
+  const match = md.match(re);
+  if (!match) return md;
+  const start = match.index + match[0].length;
+  const next = md.indexOf("\n##", start);
+  const after = next === -1 ? "" : md.slice(next);
+  return md.slice(0, start) + "\n" + (newBody || "").trim() + "\n" + after;
+}
 function formatAuthors(authors) {
   if (!authors || authors.length === 0) return null;
   if (authors.length === 1) return authors[0];
@@ -108,7 +117,7 @@ const TRIGGER_PRIMARY = 6;
 const MOOD_COLORS = ["#c95a5a", "#d77452", "#db8f4e", "#d4a352", "#c9b260", "#a9b76a", "#88b378", "#6aab83", "#4f9c8c", "#3d8a8e"];
 const JOURNAL_LIMIT = 4e3;
 const POMODORO_SECS = 10 * 60;
-function MoodDiaryPanel({ entries, onSet, onClose, memoryContent }) {
+function MoodDiaryPanel({ entries, onSet, onClose, memoryContent, onMemoryUpdate }) {
   const [selectedDay, setSelectedDay] = ps(todayISO());
   const e0 = entries[selectedDay] || { mood: 0, emotions: [], triggers: [], note: "", journal: "" };
   const [draftMood, setDraftMood] = ps(e0.mood || 0);
@@ -150,6 +159,22 @@ function MoodDiaryPanel({ entries, onSet, onClose, memoryContent }) {
   const memInterventions = parseMemSection(memoryContent, "Helpful Interventions");
   const memSupportNotes = parseMemSection(memoryContent, "Support Notes");
   const hasMemSnap = !!(memInterventions || memSupportNotes);
+  const [editingMem, setEditingMem] = ps(false);
+  const [editInterventions, setEditInterventions] = ps("");
+  const [editSupportNotes, setEditSupportNotes] = ps("");
+  const startMemEdit = () => {
+    setEditInterventions(memInterventions);
+    setEditSupportNotes(memSupportNotes);
+    setEditingMem(true);
+  };
+  const saveMemEdit = () => {
+    if (!onMemoryUpdate || !memoryContent) return;
+    let updated = memoryContent;
+    updated = replaceMemSection(updated, "Helpful Interventions", editInterventions);
+    updated = replaceMemSection(updated, "Support Notes", editSupportNotes);
+    onMemoryUpdate(updated);
+    setEditingMem(false);
+  };
   const days = Object.entries(entries).sort((a, b) => b[0].localeCompare(a[0]));
   const toggleIn = (arr, v) => arr.includes(v) ? arr.filter((x) => x !== v) : [...arr, v];
   const isEmpty = draftMood === 0 && draftEmotions.length === 0 && draftTriggers.length === 0 && !draftNote.trim() && !draftJournal.trim();
@@ -172,10 +197,12 @@ function MoodDiaryPanel({ entries, onSet, onClose, memoryContent }) {
     onSet(selectedDay, null);
   };
   const charsLeft = JOURNAL_LIMIT - draftJournal.length;
-  return /* @__PURE__ */ React.createElement("aside", { className: "panel left", "aria-label": "Mood diary" }, /* @__PURE__ */ React.createElement("div", { className: "panel-head" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("h3", null, "Mood diary"), /* @__PURE__ */ React.createElement("div", { className: "meta" }, "Stays on your device")), /* @__PURE__ */ React.createElement("button", { className: "iconbtn", onClick: onClose, "aria-label": "Close mood diary" }, /* @__PURE__ */ React.createElement("svg", { viewBox: "0 0 16 16", fill: "none", stroke: "currentColor", strokeWidth: "1.5", strokeLinecap: "round" }, /* @__PURE__ */ React.createElement("path", { d: "m4 4 8 8M12 4l-8 8" })))), /* @__PURE__ */ React.createElement("div", { className: "panel-body mood-body" }, /* @__PURE__ */ React.createElement("div", { className: "mood-day-stamp" }, formatDay(selectedDay), selectedDay === todayISO() ? " \xB7 today" : ""), memoryContent && hasMemSnap && /* @__PURE__ */ React.createElement("details", { className: "mood-memory-snap", open: true }, /* @__PURE__ */ React.createElement("summary", null, /* @__PURE__ */ React.createElement(
+  return /* @__PURE__ */ React.createElement("aside", { className: "panel left", "aria-label": "Mood diary" }, /* @__PURE__ */ React.createElement("div", { className: "panel-head" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("h3", null, "Mood diary"), /* @__PURE__ */ React.createElement("div", { className: "meta" }, "Stays on your device")), /* @__PURE__ */ React.createElement("button", { className: "iconbtn", onClick: onClose, "aria-label": "Close mood diary" }, /* @__PURE__ */ React.createElement("svg", { viewBox: "0 0 16 16", fill: "none", stroke: "currentColor", strokeWidth: "1.5", strokeLinecap: "round" }, /* @__PURE__ */ React.createElement("path", { d: "m4 4 8 8M12 4l-8 8" })))), /* @__PURE__ */ React.createElement("div", { className: "panel-body mood-body" }, /* @__PURE__ */ React.createElement("div", { className: "mood-day-stamp" }, formatDay(selectedDay), selectedDay === todayISO() ? " \xB7 today" : ""), memoryContent && hasMemSnap && /* @__PURE__ */ React.createElement("details", { className: "mood-memory-snap", open: !editingMem || void 0 }, /* @__PURE__ */ React.createElement("summary", null, /* @__PURE__ */ React.createElement(
     "svg",
     {
       viewBox: "0 0 12 12",
+      width: "12",
+      height: "12",
       fill: "none",
       stroke: "currentColor",
       strokeWidth: "1.4",
@@ -186,7 +213,40 @@ function MoodDiaryPanel({ entries, onSet, onClose, memoryContent }) {
     /* @__PURE__ */ React.createElement("rect", { x: "2", y: "5.5", width: "8", height: "5.5", rx: "1" }),
     /* @__PURE__ */ React.createElement("path", { d: "M4 5.5V4a2 2 0 0 1 4 0v1.5" }),
     /* @__PURE__ */ React.createElement("path", { d: "M6 7.5v1.5" })
-  ), "From your memory file"), /* @__PURE__ */ React.createElement("div", { className: "mood-memory-body" }, memInterventions && /* @__PURE__ */ React.createElement("div", { className: "mood-memory-block" }, /* @__PURE__ */ React.createElement("div", { className: "mood-memory-sublabel" }, "What's helped before"), memInterventions.split("\n").filter((l) => l.trim()).map((line, i) => /* @__PURE__ */ React.createElement("div", { key: i, className: "mood-mem-line" }, line))), memSupportNotes && /* @__PURE__ */ React.createElement("div", { className: "mood-memory-block" }, /* @__PURE__ */ React.createElement("div", { className: "mood-memory-sublabel" }, "Support notes"), memSupportNotes.split("\n").filter((l) => l.trim()).map((line, i) => /* @__PURE__ */ React.createElement("div", { key: i, className: "mood-mem-line" + (line.startsWith("-") ? " bullet" : "") }, line))))), /* @__PURE__ */ React.createElement("div", { className: "mood-section" }, /* @__PURE__ */ React.createElement("label", null, "How is today, overall?"), /* @__PURE__ */ React.createElement("div", { className: "mood-rating-row" }, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => /* @__PURE__ */ React.createElement(
+  ), "From your memory file", onMemoryUpdate && /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      className: "mood-mem-edit-btn",
+      onClick: (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (editingMem) {
+          setEditingMem(false);
+        } else {
+          startMemEdit();
+        }
+      }
+    },
+    editingMem ? "Cancel" : "Edit"
+  )), /* @__PURE__ */ React.createElement("div", { className: "mood-memory-body" }, !editingMem ? /* @__PURE__ */ React.createElement(React.Fragment, null, memInterventions && /* @__PURE__ */ React.createElement("div", { className: "mood-memory-block" }, /* @__PURE__ */ React.createElement("div", { className: "mood-memory-sublabel" }, "What's helped before"), memInterventions.split("\n").filter((l) => l.trim()).map((line, i) => /* @__PURE__ */ React.createElement("div", { key: i, className: "mood-mem-line" }, line))), memSupportNotes && /* @__PURE__ */ React.createElement("div", { className: "mood-memory-block" }, /* @__PURE__ */ React.createElement("div", { className: "mood-memory-sublabel" }, "Support notes"), memSupportNotes.split("\n").filter((l) => l.trim()).map((line, i) => /* @__PURE__ */ React.createElement("div", { key: i, className: "mood-mem-line" + (line.startsWith("-") ? " bullet" : "") }, line)))) : /* @__PURE__ */ React.createElement(React.Fragment, null, memInterventions !== void 0 && /* @__PURE__ */ React.createElement("div", { className: "mood-memory-block" }, /* @__PURE__ */ React.createElement("div", { className: "mood-memory-sublabel" }, "What's helped before"), /* @__PURE__ */ React.createElement(
+    "textarea",
+    {
+      className: "mood-mem-edit-area",
+      value: editInterventions,
+      onChange: (e) => setEditInterventions(e.target.value),
+      rows: 4,
+      placeholder: "e.g. 2026-05-21 \u2014 Breathing exercises helped during work stress"
+    }
+  )), memSupportNotes !== void 0 && /* @__PURE__ */ React.createElement("div", { className: "mood-memory-block" }, /* @__PURE__ */ React.createElement("div", { className: "mood-memory-sublabel" }, "Support notes"), /* @__PURE__ */ React.createElement(
+    "textarea",
+    {
+      className: "mood-mem-edit-area",
+      value: editSupportNotes,
+      onChange: (e) => setEditSupportNotes(e.target.value),
+      rows: 4,
+      placeholder: "e.g. Things that don't help: Minimising..."
+    }
+  )), /* @__PURE__ */ React.createElement("div", { className: "mood-mem-edit-actions" }, /* @__PURE__ */ React.createElement("button", { className: "btn-secondary", onClick: () => setEditingMem(false) }, "Cancel"), /* @__PURE__ */ React.createElement("button", { className: "btn-primary", onClick: saveMemEdit }, "Save & download"))))), /* @__PURE__ */ React.createElement("div", { className: "mood-section" }, /* @__PURE__ */ React.createElement("label", null, "How is today, overall?"), /* @__PURE__ */ React.createElement("div", { className: "mood-rating-row" }, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => /* @__PURE__ */ React.createElement(
     "button",
     {
       key: n,

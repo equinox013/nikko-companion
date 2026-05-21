@@ -278,6 +278,7 @@ function Chat({ theme, onToggleTheme }) {
   const memContentRef = useRef(null);
   const sessionKeyRef = useRef(null);
   const [memPop, setMemPop] = useState(false);
+  const [memContentVersion, setMemContentVersion] = useState(0);
   const [pendingEntries, setPendingEntries] = useState([]);
   const [pendingBootstrapEntry, setPendingBootstrapEntry] = useState(null);
   const [techniqueCheckIn, setTechniqueCheckIn] = useState(null);
@@ -406,6 +407,18 @@ function Chat({ theme, onToggleTheme }) {
       console.error("[Nikko USM] Re-encryption failed:", err);
     }
   }, [pendingEntries, memName]);
+  const onMemoryRewrite = useCallback(async (updatedMd) => {
+    if (!sessionKeyRef.current) return;
+    try {
+      const enc = await encryptMemoryWithKey(updatedMd, sessionKeyRef.current);
+      const baseName = (memName || "nikko-memory").replace(/\s+/g, "-");
+      downloadFile(baseName, enc);
+      memContentRef.current = updatedMd;
+      setMemContentVersion((v) => v + 1);
+    } catch (err) {
+      console.error("[Nikko USM] Memory rewrite failed:", err);
+    }
+  }, [memName]);
   const onCheckInAdd = useCallback(() => {
     if (!techniqueCheckIn) return;
     if (memContentRef.current && sessionKeyRef.current) {
@@ -659,7 +672,8 @@ function Chat({ theme, onToggleTheme }) {
       entries: moodEntries,
       onSet: setMoodEntry,
       onClose: () => setLeftTab(null),
-      memoryContent: memContentRef.current
+      memoryContent: memContentRef.current,
+      onMemoryUpdate: sessionKeyRef.current ? onMemoryRewrite : null
     }
   ), /* @__PURE__ */ React.createElement("div", { className: "thread-wrap" }, /* @__PURE__ */ React.createElement(
     "div",

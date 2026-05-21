@@ -461,6 +461,10 @@ function Chat({ theme, onToggleTheme }) {
   // REQ-850-033: key lives only in JS heap for the tab lifetime; never persisted.
   const sessionKeyRef = useRef(null);
   const [memPop, setMemPop] = useState(false);     // popover
+  // memContentVersion increments whenever memContentRef is rewritten via
+  // onMemoryRewrite, forcing Chat to re-render so MoodDiaryPanel receives
+  // the updated content (refs don't trigger re-renders by themselves).
+  const [memContentVersion, setMemContentVersion] = useState(0);
 
   // Pending write-back entries — approved by user, not yet saved/encrypted.
   // Each entry: { section: string, entry: string, ts: number (Date.now()) }.
@@ -677,6 +681,26 @@ function Chat({ theme, onToggleTheme }) {
       console.error('[Nikko USM] Re-encryption failed:', err);
     }
   }, [pendingEntries, memName]);
+
+  // ── onMemoryRewrite: direct free-form edit of the decrypted memory file ──
+  // Called from MoodDiaryPanel's edit mode. Takes a full updated Markdown
+  // string, re-encrypts with the in-memory session key (no password re-entry),
+  // downloads the updated file, and updates memContentRef so subsequent
+  // /api/message calls carry the new content.
+  // Only callable when sessionKeyRef.current is set (encrypted file loaded).
+  const onMemoryRewrite = useCallback(async (updatedMd) => {
+    if (!sessionKeyRef.current) return;
+    try {
+      const enc = await encryptMemoryWithKey(updatedMd, sessionKeyRef.current);
+      const baseName = (memName || 'nikko-memory').replace(/\s+/g, '-');
+      downloadFile(baseName, enc);
+      memContentRef.current = updatedMd;
+      // Bump version so Chat re-renders and MoodDiaryPanel gets new content.
+      setMemContentVersion(v => v + 1);
+    } catch (err) {
+      console.error('[Nikko USM] Memory rewrite failed:', err);
+    }
+  }, [memName]);
 
   // Convert a technique check-in acceptance into a pending entry (file loaded)
   // or open the generate modal with the entry pre-populated (bootstrap path).
@@ -1136,6 +1160,7 @@ function Chat({ theme, onToggleTheme }) {
             onSet={setMoodEntry}
             onClose={() => setLeftTab(null)}
             memoryContent={memContentRef.current}
+            onMemoryUpdate={sessionKeyRef.current ? onMemoryRewrite : null}
           />
         )}
 

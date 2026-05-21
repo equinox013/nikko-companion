@@ -17,6 +17,20 @@ function parseMemSection(md, section) {
   return body.replace(/<!--[\s\S]*?-->/g, '').trim();
 }
 
+// ── Memory section replacer ────────────────────────────────────────
+// Takes the full memory Markdown, finds the named section, and replaces its
+// body with newBody. Used by the mood-diary edit mode to apply user edits
+// before re-encrypting and downloading the updated file.
+function replaceMemSection(md, section, newBody) {
+  const re = new RegExp('^##\\s*' + section + '\\s*$', 'm');
+  const match = md.match(re);
+  if (!match) return md;
+  const start = match.index + match[0].length;
+  const next = md.indexOf('\n##', start);
+  const after = next === -1 ? '' : md.slice(next);
+  return md.slice(0, start) + '\n' + (newBody || '').trim() + '\n' + after;
+}
+
 // ── APA 7 formatter ─────────────────────────────────────────────────
 // Produces a best-effort APA 7th edition reference string from a SourceItem
 // (the serialised EvidenceItem returned by the backend pipeline).
@@ -210,8 +224,10 @@ const JOURNAL_LIMIT = 4000;
 const POMODORO_SECS = 10 * 60;
 
 // memoryContent: optional decrypted memory Markdown string from chat.jsx.
-// Surfaces Helpful Interventions + Support Notes as a read-only reference.
-function MoodDiaryPanel({ entries, onSet, onClose, memoryContent }) {
+// onMemoryUpdate(updatedMd): callback that re-encrypts + downloads the updated
+// file; provided by chat.jsx only when a session key is available (i.e. an
+// encrypted file was loaded this session). Null for plaintext .md files.
+function MoodDiaryPanel({ entries, onSet, onClose, memoryContent, onMemoryUpdate }) {
   const [selectedDay, setSelectedDay] = ps(todayISO());
   const e0 = entries[selectedDay] || { mood: 0, emotions: [], triggers: [], note: '', journal: '' };
   const [draftMood, setDraftMood] = ps(e0.mood || 0);
@@ -256,6 +272,25 @@ function MoodDiaryPanel({ entries, onSet, onClose, memoryContent }) {
   const memSupportNotes  = parseMemSection(memoryContent, 'Support Notes');
   const hasMemSnap = !!(memInterventions || memSupportNotes);
 
+  // Edit mode state for the memory snapshot block.
+  const [editingMem, setEditingMem] = ps(false);
+  const [editInterventions, setEditInterventions] = ps('');
+  const [editSupportNotes, setEditSupportNotes] = ps('');
+
+  const startMemEdit = () => {
+    setEditInterventions(memInterventions);
+    setEditSupportNotes(memSupportNotes);
+    setEditingMem(true);
+  };
+  const saveMemEdit = () => {
+    if (!onMemoryUpdate || !memoryContent) return;
+    let updated = memoryContent;
+    updated = replaceMemSection(updated, 'Helpful Interventions', editInterventions);
+    updated = replaceMemSection(updated, 'Support Notes', editSupportNotes);
+    onMemoryUpdate(updated);
+    setEditingMem(false);
+  };
+
   const days = Object.entries(entries).sort((a, b) => b[0].localeCompare(a[0]));
   const toggleIn = (arr, v) => arr.includes(v) ? arr.filter(x => x !== v) : [...arr, v];
   const isEmpty = draftMood === 0 && draftEmotions.length === 0 && draftTriggers.length === 0
@@ -296,37 +331,84 @@ function MoodDiaryPanel({ entries, onSet, onClose, memoryContent }) {
           {formatDay(selectedDay)}{selectedDay === todayISO() ? ' · today' : ''}
         </div>
 
-        {/* Memory file snapshot: collapsible, only when content exists */}
+        {/* Memory file snapshot — editable when onMemoryUpdate is provided */}
         {memoryContent && hasMemSnap && (
-          <details className="mood-memory-snap" open>
+          <details className="mood-memory-snap" open={!editingMem || undefined}>
             <summary>
-              <svg viewBox="0 0 12 12" fill="none" stroke="currentColor"
-                   strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"
-                   aria-hidden="true">
+              <svg viewBox="0 0 12 12" width="12" height="12" fill="none"
+                   stroke="currentColor" strokeWidth="1.4"
+                   strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <rect x="2" y="5.5" width="8" height="5.5" rx="1" />
                 <path d="M4 5.5V4a2 2 0 0 1 4 0v1.5" />
                 <path d="M6 7.5v1.5" />
               </svg>
               From your memory file
+              {onMemoryUpdate && (
+                <button
+                  className="mood-mem-edit-btn"
+                  onClick={e => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (editingMem) { setEditingMem(false); } else { startMemEdit(); }
+                  }}
+                >
+                  {editingMem ? 'Cancel' : 'Edit'}
+                </button>
+              )}
             </summary>
             <div className="mood-memory-body">
-              {memInterventions && (
-                <div className="mood-memory-block">
-                  <div className="mood-memory-sublabel">What's helped before</div>
-                  {memInterventions.split('\n').filter(l => l.trim()).map((line, i) => (
-                    <div key={i} className="mood-mem-line">{line}</div>
-                  ))}
-                </div>
-              )}
-              {memSupportNotes && (
-                <div className="mood-memory-block">
-                  <div className="mood-memory-sublabel">Support notes</div>
-                  {memSupportNotes.split('\n').filter(l => l.trim()).map((line, i) => (
-                    <div key={i} className={'mood-mem-line' + (line.startsWith('-') ? ' bullet' : '')}>
-                      {line}
+              {!editingMem ? (
+                <>
+                  {memInterventions && (
+                    <div className="mood-memory-block">
+                      <div className="mood-memory-sublabel">What's helped before</div>
+                      {memInterventions.split('\n').filter(l => l.trim()).map((line, i) => (
+                        <div key={i} className="mood-mem-line">{line}</div>
+                      ))}
                     </div>
-                  ))}
-                </div>
+                  )}
+                  {memSupportNotes && (
+                    <div className="mood-memory-block">
+                      <div className="mood-memory-sublabel">Support notes</div>
+                      {memSupportNotes.split('\n').filter(l => l.trim()).map((line, i) => (
+                        <div key={i} className={'mood-mem-line' + (line.startsWith('-') ? ' bullet' : '')}>
+                          {line}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </>
+              ) : (
+                <>
+                  {memInterventions !== undefined && (
+                    <div className="mood-memory-block">
+                      <div className="mood-memory-sublabel">What's helped before</div>
+                      <textarea
+                        className="mood-mem-edit-area"
+                        value={editInterventions}
+                        onChange={e => setEditInterventions(e.target.value)}
+                        rows={4}
+                        placeholder="e.g. 2026-05-21 — Breathing exercises helped during work stress"
+                      />
+                    </div>
+                  )}
+                  {memSupportNotes !== undefined && (
+                    <div className="mood-memory-block">
+                      <div className="mood-memory-sublabel">Support notes</div>
+                      <textarea
+                        className="mood-mem-edit-area"
+                        value={editSupportNotes}
+                        onChange={e => setEditSupportNotes(e.target.value)}
+                        rows={4}
+                        placeholder="e.g. Things that don't help: Minimising..."
+                      />
+                    </div>
+                  )}
+                  <div className="mood-mem-edit-actions">
+                    <button className="btn-secondary" onClick={() => setEditingMem(false)}>Cancel</button>
+                    <button className="btn-primary" onClick={saveMemEdit}>Save & download</button>
+                  </div>
+                </>
               )}
             </div>
           </details>

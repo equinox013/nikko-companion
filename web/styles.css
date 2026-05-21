@@ -1911,6 +1911,56 @@ body::before {
   color: var(--muted);
 }
 
+/* ── Memory snapshot edit mode ──────────────────────────────────────
+   Edit button sits in the summary row; textareas appear in-place. */
+.mood-mem-edit-btn {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent-2);
+  cursor: pointer;
+  padding: 0 4px;
+  border-radius: 4px;
+  margin-left: auto;
+  flex-shrink: 0;
+  opacity: 0.7;
+  transition: opacity var(--t-fast);
+}
+.mood-mem-edit-btn:hover { opacity: 1; }
+
+.mood-mem-edit-area {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-family: var(--font-body);
+  font-size: 12.5px;
+  color: var(--ink);
+  line-height: 1.55;
+  resize: vertical;
+  min-height: 72px;
+  transition: border-color var(--t-fast);
+}
+.mood-mem-edit-area:focus {
+  outline: none;
+  border-color: var(--accent-2);
+}
+.mood-mem-edit-area::placeholder { color: var(--faint); }
+
+.mood-mem-edit-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+
 /* ── Agent transparency ribbon (above each assistant message) ── */
 .agent-ribbon {
   display: flex; flex-wrap: wrap; align-items: baseline;
@@ -2732,40 +2782,4 @@ body::before {
   cursor: pointer;
   font-size: 13.5px;
   color: var(--ink-2);
-  transition: border-color var(--t-fast), background var(--t-fast);
-  user-select: none;
-}
-.check-item:hover { border-color: var(--accent); background: var(--bg-2); }
-.check-item.checked { border-color: color-mix(in oklch, var(--accent) 55%, var(--line)); color: var(--ink); }
-
-/* Custom checkbox box — the .check span acts as the visual checkbox */
-.check-item .check {
-  width: 18px; height: 18px;
-  min-width: 18px;
-  border: 1.5px solid var(--line);
-  border-radius: 4px;
-  background: var(--surface);
-  display: grid; place-items: center;
-  flex-shrink: 0;
-  transition: border-color var(--t-fast), background var(--t-fast);
-}
-/* Checkmark SVG — hidden until .checked is applied to the parent li */
-.check-item .check svg {
-  width: 10px; height: 10px;
-  opacity: 0;
-  transition: opacity var(--t-fast);
-  stroke: #fff;
-}
-.check-item.checked .check {
-  background: var(--accent);
-  border-color: var(--accent);
-}
-.check-item.checked .check svg { opacity: 1; }
-
-/* ── Modal textarea ─────────────────────────────────────────────── */
-.modal-textarea {
-  width: 100%;
-  padding: 10px 12px;
-  border: 1px solid var(--line);
-  background: var(--bg-3);
-  c
+  transition: border-color var(--t
