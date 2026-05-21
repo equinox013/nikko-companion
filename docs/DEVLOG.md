@@ -328,6 +328,54 @@ The pattern I need to stop is using bash to write anything longer than a few lin
 
 ---
 
+## 2026-05-21 — Phase 6 Active: USM Personalisation System + Multi-turn History
+
+### What we did
+
+- **Multi-turn conversation history:** Wired end-to-end across the full stack. `acp_schemas.py` gained `conversation_history: Optional[list]` on `ResponseContextPayload`; `orchestration/pipeline.py` threads it through `run()`; `backend/main.py` accepts `conversationHistory` from the POST body with a server-side cap at 20 turns; `backend/draft_generator.py` builds a proper multi-turn messages list for ADP-A (Qwen3-4B); `web/chat.jsx` sends the last 10 turns per request. All session-scoped React state — cleared on refresh, never persisted to any server.
+
+- **Smart USM truncation** (`backend/context_prompt_builder.py`): replaced dumb first-N-chars truncation with `_smart_truncate_usm()` — priority-ordered 1200-char budget: Name → Mood Diary (newest-first by date) → User Preferences → Helpful Interventions → Support Notes → Emotional Patterns. Truncation notice appended to model when budget is exceeded.
+
+- **Memory file Name field** (`web/memory.jsx`, `web/chat.jsx`): added `## Name` section to the memory file template; `parseMemoryName()` exported on `window`; `chat.jsx` reads name on file load, shows a personalised welcome-back message, and displays a name pill in the topbar for the session.
+
+- **5-step MemoryGenerateModal** (`web/memory.jsx`): full replacement of the previous 2-step modal. Steps: (1) Disclosure, (2) Name gate (skip path jumps to password), (3) Style screen — Tone, Response length, Input style, all pill selectors with CSS hover tooltips, (4) Support screen — don't-help checkboxes + free-text + current life context textarea, (5) Password. `makeEmptyMemoryMd()` generates a structured file from these choices. `parseMemoryPrefs()` exported on `window`.
+
+- **ADP-A preference injection** (`backend/context_prompt_builder.py`): `_parse_memory_prefs()` extracts `key: value` pairs from `## User Preferences`; `_TONE_INSTRUCTIONS` / `_LENGTH_INSTRUCTIONS` dicts map those values to prose injected into ADP-A's system prompt as a `USER PREFERENCES` block on every turn where a memory file is loaded. Caveat: when `distress_level ≥ 7`, tone preference is overridden by empathy framing — Comfort Mode takes precedence.
+
+- **Memory banners** (`web/chat.jsx`): `MemBanner` component with two variants — `loaded` (7s auto-dismiss, lock icon, fires on successful file load) and `hint` (fires after the user's 3rd message if no file is loaded; once per session, gated by `hintShownRef`).
+
+- **Client-side input word cap** (`web/chat.jsx`): `applyInputCap()` reads `input_length` from live memory prefs; caps `reqBody.text` at 150 / 300 / 600 words for Concise / Standard / Verbose. Full message still shown in the thread — only the backend payload is capped.
+
+- **Documentation audit:** corrected a Phase 5-era GLOSSARY defect where "Client-side only (USM)" incorrectly stated the inference backend never receives USM content. Updated to accurately reflect the security model: encrypt/decrypt is client-side; decrypted content is transmitted over HTTPS in-flight per turn but is never written to persistent storage on any server.
+
+### Decisions & justifications
+
+| Decision | Justification |
+|----------|--------------|
+| Priority-ordered USM truncation rather than first-N chars | The most valuable USM context (Name, most recent Mood Diary entry, core Preferences) was getting preserved by luck of file position. First-N chars is fine for a static document; it's wrong for a user's growing memory file where the latest diary entry is at the bottom. The priority order reflects what ADP-A actually needs most per turn. |
+| 1200-char ADP-A USM budget | ADP-A (Qwen3-4B) context window is finite. 1200 chars carries enough name + preference + support notes to meaningfully personalise without crowding out strategy guidance and evidence. Above that, the signal-to-noise ratio inverts. |
+| Multi-turn history capped at 10 turns (frontend) / 20 turns (backend) | 10 turns is enough context for a typical conversational session. 20-turn server-side hard cap prevents context window explosion if the frontend cap ever fails. Two separate enforcement points; belt and braces. |
+| Tone preference suppressed at distress_level ≥ 7 | A user in high-distress who previously configured "Practical" tone should still receive empathetic framing from ADP-A. Stylistic preferences are a calm-state instruction — they do not override safety or empathy constraints in acute distress. |
+| Skip path in MemoryGenerateModal (name-gate → password) | Not every user wants to configure tone, support preferences, and context. The skip path produces a valid memory file with just a name and password — usable immediately without forcing completion of optional screens. |
+| `input_length` word cap applied only to `reqBody.text`, not the displayed message | The displayed message is the user's record of what they wrote. Silently truncating the display would be dishonest and confusing. Only the backend payload is capped — the user always sees what they typed. |
+
+### Where I went wrong
+
+**I left a GLOSSARY definition stale since Phase 5 without catching it.** The "Client-side only (USM)" entry said "the inference backend never receives USM content" — which was accurate before Phase 5 integration and became incorrect the moment `memoryContext` was wired to the POST body. The README USM section I wrote today correctly described the actual security model; the GLOSSARY still had the old description. If I'd cross-referenced the GLOSSARY during the Phase 5 documentation pass, this would have been caught then. The defect wasn't harmful — the security model is still strong (no persistent storage on any server, encryption key never transmitted) — but the discrepancy between two canonical documents is exactly the kind of thing that causes confusion months later when someone reads both.
+
+**The fix:** whenever the security model changes — even partially — the GLOSSARY USM section is an explicit required update, not a nice-to-have. It's a canonical source; README descriptions derived from it will diverge if the source isn't kept current.
+
+**I didn't initially design the USM truncation with a priority order.** The first implementation was first-N chars. I caught this before deploying but only because I happened to think through the failure case — what happens when a user has a long Mood Diary and the Preferences section gets cut off. The fix was quick; the lesson is that truncation of structured documents is never semantically neutral. First-N chars truncation always embeds an assumption that the most important content comes first. For a growing document with a temporal component (newest diary entries appended at the bottom), that assumption is wrong by design.
+
+### Learnings
+
+- Personalisation features live at the intersection of UX, backend prompt engineering, and security policy simultaneously. A decision about word caps is also a decision about what the user sees vs. what the model sees vs. what the server stores. I had to hold all three concerns at once for every choice in this session.
+- Priority-ordered truncation is more work than first-N chars but is the only semantically correct approach for structured personal documents. The 30 minutes of implementation time buys correctness that matters as the user's file grows.
+- Canonical documentation (GLOSSARY, SPEC files) needs to be updated at the same time as the implementation changes that affect them — not at the next documentation session. The Phase 5 GLOSSARY defect was a direct consequence of splitting implementation and documentation into separate sessions.
+- Multi-turn history in a zero-retention system requires explicit thought about what "session" means. The decision to clear history on refresh (sessionStorage semantics) and cap at 10 turns on the frontend is a product decision with privacy implications, not just a UX choice. That decision should be traceable to a REQ-ID, which it currently isn't — logging as a minor gap.
+
+---
+
 ## Template for future entries
 
 ```

@@ -222,6 +222,14 @@ On app load, the frontend polls `GET /health` on the Render backend every 3 seco
 
 The primary chat flow uses **Server-Sent Events (SSE)** — a unidirectional HTTP stream. The frontend reads it with `fetch()` + `ReadableStream` rather than `EventSource` because `EventSource` does not support POST requests.
 
+The request body includes:
+
+| Field | Description |
+|-------|-------------|
+| `text` | User message text (word-capped client-side per USM input preference) |
+| `conversationHistory` | Last 10 turns as `[{role, content}]` — session-scoped only, never persisted |
+| `memoryContext` | Decrypted USM file content (if loaded); passed to ADP-A for personalisation |
+
 SSE event sequence per turn:
 
 ```
@@ -257,6 +265,50 @@ The overlay correctly labels the adapters:
 
 ---
 
+## User Sovereign Memory (USM) & Personalisation
+
+Nikko supports an optional, fully client-side memory system. No plaintext ever leaves the user's device.
+
+### How it works
+
+1. **Generate** — a 5-step modal (Disclosure → Name → Style → Support → Password) collects personalisation preferences and produces a structured Markdown file.
+2. **Encrypt** — the file is AES-GCM encrypted client-side using the Web Crypto API and downloaded as `.nikko-mem.enc`. The server never receives the plaintext or the key.
+3. **Load** — on a future session, the user re-uploads the file, enters their password, and the decrypted content is held in a `useRef` for the session lifetime. A lock-icon banner confirms the file is active.
+4. **Inject** — on each message, the decrypted content is sent as `memoryContext` in the POST body. The backend truncates it to 1200 chars using priority ordering (`_smart_truncate_usm()`) and injects a `USER PREFERENCES` block into the ADP-A system prompt.
+
+The session ends, the ref is cleared. Nothing is written to server storage at any point.
+
+### Personalisation options (Style screen)
+
+| Setting | Options |
+|---------|---------|
+| Tone | Understanding · Balanced · Practical |
+| Response length | Brief · Standard · Detailed |
+| Input style (word cap) | Concise (150w) · Standard (300w) · Verbose (600w) |
+
+### ADP-A preference injection
+
+`_parse_memory_prefs()` in `context_prompt_builder.py` reads key-value pairs from `## User Preferences` and maps them to prose via `_TONE_INSTRUCTIONS` and `_LENGTH_INSTRUCTIONS` dicts. This block is injected into ADP-A's system prompt on every turn where a memory file is loaded. One exception: when `distress_level ≥ 7`, tone preference is suppressed — Comfort Mode empathy framing takes precedence and will not be overridden by a stylistic choice.
+
+### Smart USM truncation
+
+When the memory file exceeds the 1200-char ADP-A budget, `_smart_truncate_usm()` applies a priority order: Name → Mood Diary (newest-first by date) → User Preferences → Helpful Interventions → Support Notes → Emotional Patterns. A truncation notice is appended so the model knows the file was cut.
+
+### Multi-turn conversation history
+
+The frontend sends the last 10 turns as `conversationHistory` in every POST request. The backend caps at 20 turns server-side. `draft_generator.py` assembles a proper multi-turn messages list for ADP-A so Nikko can reference what was said earlier in the same session. All history is session-scoped React state — cleared on page refresh, never persisted to any server.
+
+### Memory banners
+
+- **Loaded banner** — appears on successful file load; auto-dismisses after 7s; shows a lock icon confirming encryption status.
+- **Hint banner** — appears after the user's 3rd message if no memory file is loaded; fires once per session only.
+
+### Memory write-back (planned, Phase 6+)
+
+Nikko currently reads the memory file but cannot contribute to it. Sections like `## Helpful Interventions` and `## Emotional Patterns` are populated by the user manually. A future pass will add lightweight intervention detection in `pipeline.py` (regex/keyword on user message), surface a suggestion card in the UI, and — with a `passwordRef` held for the session — re-encrypt the updated file client-side on confirmation. Server still never sees plaintext; SPEC-800 zero-retention is unaffected.
+
+---
+
 ## Repository Structure
 
 ```
@@ -280,18 +332,21 @@ nikko-companion/
 │   ├── app.py          # FastAPI + Gradio app — /pipeline endpoint
 │   └── mistral-7b/     # Archived Mistral-7B HF Space implementation
 ├── backend/            # Render orchestration API
-│   └── main.py         # FastAPI — /health + /api/message SSE endpoint
+│   ├── main.py         # FastAPI — /health + /api/message SSE endpoint; conversationHistory cap
+│   ├── draft_generator.py      # Multi-turn messages builder for ADP-A
+│   └── context_prompt_builder.py  # USM truncation + ADP-A preference injection
 └── web/                # React SPA
     ├── Nikko.html      # Entry point
     ├── nikko.jsx       # Root app + theme
-    ├── chat.jsx        # Message thread, SSE handler, ThinkingBubble, composer
+    ├── chat.jsx        # Message thread, SSE handler, ThinkingBubble, composer,
+    │                   # multi-turn history, USM banners, input word cap
     ├── agent-debug.jsx # Pipeline trace overlay (NikkoAgentLog store + AdapterCards)
     ├── agent-debug.js  # Compiled output — regenerated via esbuild
     ├── avatar.jsx      # Emotional state visualisation (calm/listen/think/speak/care)
     ├── gate.jsx        # Consent gate + onboarding
-    ├── memory.jsx      # USM file encryption (client-side, device-only)
+    ├── memory.jsx      # USM file encryption + 5-step MemoryGenerateModal
     ├── panels.jsx      # Mood diary, sources panel
-    ├── nikko-data.jsx  # Hardcoded fallback patterns (replaced in Phase 5)
+    ├── nikko-data.jsx  # Hardcoded fallback patterns (offline safety net)
     └── styles.css      # Light/dark theme, animations
 ```
 
