@@ -35,6 +35,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from typing import AsyncGenerator
@@ -202,6 +203,10 @@ class SSEChunk(BaseModel):
     sources:     list[SourceItem] = Field(default_factory=list)  # dynamic sources panel
     safetyFlags: list[str]        = Field(default_factory=list)
     trace:       dict | None      = None   # pipeline trace for debug panel
+    # USM write-back (SPEC-850 §9, step 2 — Proposal).
+    # Non-None only on the final normal chunk when a memory candidate is detected.
+    # Never set on crisis or out-of-scope chunks (REQ-850-084).
+    memory_proposal: dict | None  = None
 
 # ── Emotion mapping ───────────────────────────────────────────────────────────
 
@@ -220,6 +225,87 @@ def _mode_to_emotion(mode: OperationalMode | None, is_crisis: bool = False) -> s
     if mode == OperationalMode.GUIDANCE:
         return "speak"
     return "speak"  # Comfort Mode default
+
+# ── USM memory candidate detection (SPEC-850 §9, step 2) ─────────────────────
+
+# Affirmation patterns that signal a user has found something helpful.
+# Deliberately conservative — false negatives are fine; false positives
+# would propose spurious memory entries (worse UX than missing a real one).
+_AFFIRMATION_RE = re.compile(
+    r"\b("
+    r"that (really |actually |really actually )?(helped|worked|made (?:a |the )difference)"
+    r"|it (really |actually )?(helped|worked)"
+    r"|that (technique|exercise|method|approach|strategy|tip) ?(really |actually )?worked"
+    r"|felt (better|calmer|less anxious) ?(after|when|from)"
+    r"|i('ll| will| should| want to) try(ing)? (that|this)"
+    r"|that('s| is) (helpful|useful|good to know|exactly what i needed)"
+    r"|going to (try|use|do) that"
+    r")",
+    re.IGNORECASE,
+)
+
+# Intervention keywords — used to name what the user found helpful in the proposal.
+_TECHNIQUE_RE = re.compile(
+    r"\b("
+    r"breath(ing|e)( exercise| technique)?s?"
+    r"|grounding( exercise| technique| method)?s?"
+    r"|box breath(ing)?"
+    r"|4-7-8"
+    r"|meditation"
+    r"|mindfulness"
+    r"|body scan"
+    r"|progressive (muscle )?relaxation"
+    r"|journaling"
+    r"|self.compassion"
+    r"|cognitive (reframe|restructur)"
+    r"|thought record"
+    r"|behavioural activation"
+    r"|distraction technique"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def _detect_memory_candidate(
+    user_text: str,
+    mode: "OperationalMode | None",
+) -> "dict | None":
+    """
+    Lightweight pattern check for USM write-back proposals (SPEC-850 §9, step 2).
+
+    Returns a proposal dict if the turn looks like the user affirming a helpful
+    intervention; None otherwise. The frontend shows this as a proposal card
+    with Accept/Decline — the user must confirm before anything is written
+    (REQ-850-011).
+
+    Only called for non-crisis, non-out-of-scope turns (REQ-850-084).
+
+    Returns:
+        None — no candidate detected
+        {
+            "section": "Helpful Interventions",
+            "entry":   "Breathing exercise — user found this helpful.",
+            "raw":     <matched technique name or None>
+        }
+    """
+    if not _AFFIRMATION_RE.search(user_text):
+        return None
+
+    # Try to name the specific technique from context.
+    tech_match = _TECHNIQUE_RE.search(user_text)
+    if tech_match:
+        technique = tech_match.group(0).strip().capitalize()
+        entry = f"{technique} — user found this helpful."
+    else:
+        # Generic fallback — still worth proposing; user can edit before accepting.
+        entry = "User found a technique or approach helpful (details in session)."
+
+    return {
+        "section": "Helpful Interventions",
+        "entry":   entry,
+        "raw":     tech_match.group(0) if tech_match else None,
+    }
+
 
 # ── Pipeline to SSE bridge ────────────────────────────────────────────────────
 
@@ -409,12 +495,19 @@ async def _pipeline(request: MessageRequest) -> AsyncGenerator[SSEChunk, None]:
     if result.trace and result.trace.evidence_used:
         sources_used = result.trace.evidence_used
 
+    # Detect whether the user's turn contains an intervention affirmation
+    # suitable for a USM write-back proposal (SPEC-850 §9, step 2).
+    # Only runs on non-crisis turns — _detect_memory_candidate is never
+    # called for crisis or out-of-scope paths (REQ-850-084).
+    proposal = _detect_memory_candidate(request.text.strip(), result.mode)
+
     yield SSEChunk(
         text=text,
         emotion=_mode_to_emotion(result.mode),
         sourcesUsed=sources_used,
         sources=_citations_to_sources(result),
         trace=_result_to_trace(result),
+        memory_proposal=proposal,
     )
 
 

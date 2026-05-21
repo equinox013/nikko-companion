@@ -828,6 +828,92 @@ body::before {
 }
 .safety-banner-expand:hover { opacity: 0.75; }
 
+/* ── Memory proposal card (SPEC-850 §9, step 2) ───────────────────── */
+/* Shown above the composer when the backend proposes a write-back entry. */
+/* REQ-850-092: visually distinct from the support response; clearly labelled. */
+.mem-proposal-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  background: color-mix(in oklch, var(--accent) 6%, var(--surface));
+  border: 1px solid color-mix(in oklch, var(--accent) 30%, transparent);
+  border-radius: var(--r-lg);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.mem-proposal-icon {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  background: color-mix(in oklch, var(--accent) 12%, var(--surface));
+  border-radius: 50%;
+  color: var(--accent);
+}
+.mem-proposal-icon svg { width: 14px; height: 14px; }
+.mem-proposal-body { flex: 1; min-width: 0; }
+.mem-proposal-label {
+  font-weight: 500;
+  font-size: 12px;
+  color: var(--accent);
+  margin-bottom: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.mem-proposal-entry { color: var(--ink); line-height: 1.5; }
+.mem-proposal-section {
+  font-weight: 500;
+  color: var(--ink-2);
+}
+.mem-proposal-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.mem-proposal-accept,
+.mem-proposal-decline {
+  appearance: none;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  line-height: 1.4;
+  white-space: nowrap;
+  transition: background 0.12s, border-color 0.12s;
+}
+.mem-proposal-accept {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.mem-proposal-accept:hover {
+  opacity: 0.88;
+}
+.mem-proposal-decline {
+  background: var(--surface);
+  color: var(--ink-2);
+}
+.mem-proposal-decline:hover {
+  background: var(--bg-3);
+  color: var(--ink);
+  border-color: var(--line);
+}
+
+/* Save memory topbar button — accent outline style to stand out */
+.ghostbtn.mem-save-btn {
+  border-color: color-mix(in oklch, var(--accent) 40%, transparent);
+  color: var(--accent);
+}
+.ghostbtn.mem-save-btn:hover {
+  background: color-mix(in oklch, var(--accent) 8%, transparent);
+  border-color: var(--accent);
+}
+
 .composer {
   position: relative;
   display: flex;

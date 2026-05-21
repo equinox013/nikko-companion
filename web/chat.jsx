@@ -210,6 +210,40 @@ function MemBanner({ type, onDismiss, onOpenLoad }) {
   );
 }
 
+// ── Memory proposal card (SPEC-850 §9, step 2 — Proposal) ─────────
+// Shown in the composer area when the backend detects an intervention affirmation.
+// The user must explicitly Accept or Decline — nothing is written otherwise.
+// REQ-850-011: two-step proposal + confirmation. REQ-850-092: visually distinct.
+function MemoryProposalCard({ proposal, onAccept, onDecline }) {
+  return (
+    <div className="mem-proposal-card" role="complementary" aria-label="Memory suggestion">
+      <div className="mem-proposal-icon" aria-hidden="true">
+        <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="2.5" y="6" width="9" height="6.5" rx="1.2" />
+          <path d="M4.5 6V4a2.5 2.5 0 0 1 5 0v2" />
+          <path d="M7 8.5v2" />
+        </svg>
+      </div>
+      <div className="mem-proposal-body">
+        <div className="mem-proposal-label">Add to memory?</div>
+        <div className="mem-proposal-entry">
+          <span className="mem-proposal-section">{proposal.section}</span>
+          {' — '}
+          {proposal.entry}
+        </div>
+      </div>
+      <div className="mem-proposal-actions">
+        <button className="mem-proposal-accept" onClick={onAccept} aria-label="Accept and add to memory">
+          Accept
+        </button>
+        <button className="mem-proposal-decline" onClick={onDecline} aria-label="Decline memory suggestion">
+          Decline
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ── Quick exit ─────────────────────────────────────────────────────
 function quickExit() {
   try {
@@ -368,49 +402,35 @@ function Chat({ theme, onToggleTheme }) {
     setTutorialOpen(false);
   };
 
-  // USM memory state
-  // memLoaded / memName are persisted to sessionStorage so the "Memory active"
-  // indicator survives page reloads within the same tab.  The decrypted content
-  // is NOT stored anywhere persistent — it lives only in memContentRef for the
-  // duration of the in-memory session (SPEC-800 zero-retention).
+  // USM memory state — all session-scoped only (SPEC-800 zero-retention).
+  // Nothing here persists across page refreshes; the indicator resets to false
+  // on reload so it accurately reflects whether content is actually loaded.
   const [memOpen, setMemOpen] = useState(false);   // generate modal
   const [loadOpen, setLoadOpen] = useState(false); // load modal
-  const [memLoaded, setMemLoaded] = useState(() => {
-    try { return sessionStorage.getItem('nikko.mem.loaded') === '1'; } catch (e) { return false; }
-  });
-  // memName = the filename (persisted to sessionStorage so the pill survives reload).
-  // memUserName = the name extracted from the ## Name section of the memory file.
-  //   Not persisted — requires re-loading the file (SPEC-800 zero-retention).
-  const [memName, setMemName] = useState(() => {
-    try { return sessionStorage.getItem('nikko.mem.name') || ''; } catch (e) { return ''; }
-  });
+  const [memLoaded, setMemLoaded] = useState(false);
+  // memName = the filename shown in the pill. memUserName = name from ## Name section.
+  const [memName, setMemName] = useState('');
   const [memUserName, setMemUserName] = useState('');  // parsed from ## Name section
   // [CONCEPT] useRef holds the decrypted memory content across renders without
   // triggering a re-render on change.  We don't need the component to re-render
   // when content changes — we only need it available at send time.
   const memContentRef = useRef(null);
+  // sessionKeyRef holds {key: CryptoKey, salt: Uint8Array} returned by
+  // decryptMemoryKeepKey() so we can re-encrypt without re-asking for the password.
+  // REQ-850-033: key lives only in JS heap for the tab lifetime; never persisted.
+  const sessionKeyRef = useRef(null);
   const [memPop, setMemPop] = useState(false);     // popover
+
+  // Pending write-back entries — approved by user, not yet saved/encrypted.
+  // Each entry: { section: string, entry: string, ts: number (Date.now()) }.
+  // REQ-850-093: session-end warning fires when this array is non-empty.
+  const [pendingEntries, setPendingEntries] = useState([]);
 
   // Memory notification banner — two variants: 'loaded' (7s auto-dismiss) and
   // 'hint' (persists until dismissed; shown once per session after 3 user msgs).
   const [memBanner, setMemBanner] = useState(null);   // null | 'loaded' | 'hint'
   const memBannerAutoRef = useRef(null);               // auto-dismiss timer for 'loaded'
   const hintShownRef = useRef(false);                  // true once hint has been shown
-
-  // Persist memLoaded / memName to sessionStorage whenever they change.
-  // This restores the visual indicator after a page reload within the same tab.
-  // Content is intentionally NOT persisted — user must re-load the file.
-  useEffect(() => {
-    try {
-      if (memLoaded) {
-        sessionStorage.setItem('nikko.mem.loaded', '1');
-        sessionStorage.setItem('nikko.mem.name', memName || '');
-      } else {
-        sessionStorage.removeItem('nikko.mem.loaded');
-        sessionStorage.removeItem('nikko.mem.name');
-      }
-    } catch (e) {}
-  }, [memLoaded, memName]);
 
   // Close memory popover on outside click
   useEffect(() => {
@@ -441,9 +461,14 @@ function Chat({ theme, onToggleTheme }) {
   // Signature: (md, name) — md is the decrypted Markdown content, name is the
   // filename.  Content stored in-memory only (SPEC-800); indicator flag + name
   // persisted to sessionStorage so the topbar pill survives page reload.
-  const onMemoryLoaded = useCallback((md, name) => {
+  // onMemoryLoaded(md, name, sessionKey?)
+  // sessionKey = { key: CryptoKey, salt: Uint8Array } from decryptMemoryKeepKey().
+  // null for plaintext .md files (no encryption path available).
+  const onMemoryLoaded = useCallback((md, name, sessionKey = null) => {
     // Store decrypted content in ref — available at send time, not in React state.
     memContentRef.current = md || null;
+    // Store session key for write-back re-encryption (REQ-850-033).
+    sessionKeyRef.current = sessionKey;
     setMemLoaded(true);
     setMemName(name);
 
@@ -550,6 +575,54 @@ function Chat({ theme, onToggleTheme }) {
     // a partial input (avoids the model inferring the user stopped mid-thought).
     return words.slice(0, cap).join(' ') + ' [message truncated per user preference]';
   }, []);
+
+  // ── saveMemoryUpdates: re-encrypt and download updated memory file ──
+  // Called when the user clicks Accept on a proposal card or the topbar Save button.
+  // Re-uses the session key from decryptMemoryKeepKey — no password re-entry needed
+  // (REQ-850-033). Each save generates a fresh IV (REQ-850-031).
+  //
+  // entries: array of { section, entry } to apply, or null to use all pendingEntries.
+  const saveMemoryUpdates = useCallback(async (entries = null) => {
+    if (!memContentRef.current || !sessionKeyRef.current) return;
+    const toApply = entries || pendingEntries;
+    if (!toApply.length) return;
+
+    let updated = memContentRef.current;
+    for (const e of toApply) {
+      // applyMemoryEntry is exported from memory.jsx and available on window.
+      if (typeof applyMemoryEntry === 'function') {
+        updated = applyMemoryEntry(updated, e.section, e.entry);
+      }
+    }
+
+    try {
+      // encryptMemoryWithKey reuses session key + new random IV (REQ-850-031).
+      const enc = await encryptMemoryWithKey(updated, sessionKeyRef.current);
+      // Derive a clean filename — strip the path, keep the base name.
+      const baseName = (memName || 'nikko-memory').replace(/\s+/g, '-');
+      downloadFile(baseName, enc);
+      // Update in-memory content ref to the updated plaintext.
+      memContentRef.current = updated;
+      // Clear only the saved entries from pending.
+      if (entries) {
+        const savedTs = new Set(entries.map(e => e.ts));
+        setPendingEntries(prev => prev.filter(e => !savedTs.has(e.ts)));
+      } else {
+        setPendingEntries([]);
+      }
+    } catch (err) {
+      console.error('[Nikko USM] Re-encryption failed:', err);
+    }
+  }, [pendingEntries, memName]);
+
+  // Warn on tab close when there are unsaved pending entries (REQ-850-093).
+  // The browser shows a generic "Leave site?" dialog — we can't customise the text.
+  useEffect(() => {
+    if (!pendingEntries.length) return;
+    const handler = (e) => { e.preventDefault(); e.returnValue = ''; };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, [pendingEntries.length]);
 
   // ── streamReply: POST /api/message → SSE → char-by-char animation ──
   // [REQ-FIS-001] Primary chat endpoint. Streams SSE from the Render backend
@@ -682,6 +755,18 @@ function Chat({ theme, onToggleTheme }) {
                   // Also cache them so the Sources tab button can show them
                   // even if the user hasn't clicked the per-message badge.
                   lastResponseSourcesRef.current = data.sources;
+                }
+
+                // USM write-back: check for a memory_proposal from the backend.
+                // Only surface when the file is loaded AND we have a session key
+                // (encrypted file) — no key = no write-back path (REQ-850-040).
+                // The proposal card is shown in the thread; user must explicitly
+                // Accept before anything is written (REQ-850-011).
+                if (data.memory_proposal && memContentRef.current && sessionKeyRef.current) {
+                  setPendingEntries(prev => [...prev, {
+                    ...data.memory_proposal,
+                    ts: Date.now(),
+                  }]);
                 }
               } else {
                 // Empty text chunk = emotion-state signal only (e.g. "think").
@@ -840,9 +925,9 @@ function Chat({ theme, onToggleTheme }) {
             {memPop && (
               <div className="popover" role="dialog" aria-label="Personal memory">
                 <h4>Personal memory</h4>
-                <div className={'status' + (memLoaded ? ' on' : '')}>
+                <div className={'status' + (memContentRef.current ? ' on' : '')}>
                   <span className="dot" />
-                  {memLoaded
+                  {memContentRef.current
                     ? (memName ? 'Loaded · ' + (memName.length > 24 ? memName.slice(0, 22) + '…' : memName) : 'Loaded')
                     : 'No memory file loaded'}
                 </div>
@@ -893,6 +978,26 @@ function Chat({ theme, onToggleTheme }) {
               <path d="M8 9.5c0-1.5 2-1.5 2-3a2 2 0 0 0-4 0" />
             </svg>
           </button>
+
+          {/* Topbar save button — appears when pending write-back entries exist.
+              REQ-850-093: session-end warning fires via beforeunload; this button
+              gives the user an explicit in-session save path at any time. */}
+          {pendingEntries.length > 0 && (
+            <>
+              <div className="divider" />
+              <button
+                className="ghostbtn mem-save-btn"
+                onClick={() => saveMemoryUpdates()}
+                title={`Save ${pendingEntries.length} pending memory update${pendingEntries.length !== 1 ? 's' : ''}`}
+              >
+                <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ width: 13, height: 13, marginRight: 5, verticalAlign: '-2px' }}>
+                  <path d="M2.5 9V11a1 1 0 0 0 1 1h7a1 1 0 0 0 1-1V9" />
+                  <path d="M7 1.5v8" /><path d="M4.5 6.5 7 9l2.5-2.5" />
+                </svg>
+                Save memory ({pendingEntries.length})
+              </button>
+            </>
+          )}
 
           <div className="divider" />
 
@@ -1008,6 +1113,18 @@ function Chat({ theme, onToggleTheme }) {
 
           <div className="composer-wrap">
             <div className="composer-inner">
+              {/* Memory proposal cards — one per pending write-back entry.
+                  Shown in arrival order; each has Accept / Decline.
+                  Accept: saves that single entry and downloads updated file.
+                  Decline: removes from pending without writing anything. */}
+              {pendingEntries.map((entry) => (
+                <MemoryProposalCard
+                  key={entry.ts}
+                  proposal={entry}
+                  onAccept={() => saveMemoryUpdates([entry])}
+                  onDecline={() => setPendingEntries(prev => prev.filter(e => e.ts !== entry.ts))}
+                />
+              ))}
               {memBanner && (
                 <MemBanner
                   type={memBanner}
@@ -1052,7 +1169,7 @@ function Chat({ theme, onToggleTheme }) {
         <MemoryLoadModal
           open={loadOpen}
           onClose={() => setLoadOpen(false)}
-          onLoaded={(md, name) => { setLoadOpen(false); onMemoryLoaded(md, name); }}
+          onLoaded={(md, name, sessionKey) => { setLoadOpen(false); onMemoryLoaded(md, name, sessionKey); }}
         />
       )}
 

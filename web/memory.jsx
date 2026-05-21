@@ -225,6 +225,115 @@ async function decryptMemory(fileText, password) {
   }
 }
 
+/**
+ * Like decryptMemory, but also returns the session key so the caller can
+ * re-encrypt later without asking for the password again.
+ *
+ * REQ-850-033: the derived key MUST NOT be stored beyond the active session.
+ * Here we store only a non-extractable CryptoKey object in a React ref — it
+ * lives in JS heap, never touches disk, and is cleared when the tab closes.
+ *
+ * Returns: { md: string, sessionKey: { key: CryptoKey, salt: Uint8Array } }
+ */
+async function decryptMemoryKeepKey(fileText, password) {
+  const line = fileText.split('\n').find(l => l.trim().startsWith('{'));
+  if (!line) throw new Error('Not a valid Nikko encrypted memory file.');
+  let payload;
+  try { payload = JSON.parse(line); }
+  catch (e) { throw new Error('Could not parse memory file payload.'); }
+  if (payload.magic !== NIKKO_MEM_FILE_MAGIC) {
+    throw new Error('Missing Nikko magic marker — this does not appear to be a Nikko memory file.');
+  }
+  const salt = b64decode(payload.salt);
+  const iv   = b64decode(payload.iv);
+  const ct   = b64decode(payload.ct);
+  const key  = await deriveKey(password, salt);  // non-extractable by Web Crypto default
+  let pt;
+  try {
+    pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ct);
+  } catch (e) {
+    throw new Error('Decryption failed. Wrong password, or the file has been tampered with.');
+  }
+  const md = new TextDecoder().decode(pt);
+  // Return the key + original salt so we can re-encrypt without re-deriving.
+  return { md, sessionKey: { key, salt } };
+}
+
+/**
+ * Re-encrypt an updated plaintext using a session key (no password re-entry).
+ * Always generates a fresh random IV per operation (REQ-850-031).
+ * The salt is reused from the original file — this is correct because PBKDF2
+ * salt binds to the key derivation, not to individual ciphertext blobs.
+ *
+ * sessionKey: { key: CryptoKey, salt: Uint8Array }  (from decryptMemoryKeepKey)
+ * Returns: encrypted file string (same envelope format as encryptMemory)
+ */
+async function encryptMemoryWithKey(plaintext, sessionKey) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));  // fresh IV every time
+  const ct = await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv },
+    sessionKey.key,
+    new TextEncoder().encode(plaintext)
+  );
+  const payload = {
+    magic:  NIKKO_MEM_FILE_MAGIC,
+    kdf:    'PBKDF2-SHA256',
+    iter:   310000,
+    cipher: 'AES-256-GCM',
+    salt:   b64encode(sessionKey.salt),   // original salt preserved
+    iv:     b64encode(iv),
+    ct:     b64encode(ct),
+  };
+  return `# Nikko Encrypted Memory (do not edit)
+# Algorithm: AES-256-GCM · Key: PBKDF2-SHA256 (310,000 iters)
+# Open this file only with Nikko.
+${JSON.stringify(payload)}
+`;
+}
+
+/**
+ * Append a single approved entry to a named section of the memory Markdown.
+ * Entry format: "YYYY-MM-DD — <text>" appended as a new line in the section.
+ *
+ * REQ-850-021: All content is written in descriptive language supplied by the
+ * system. REQ-850-053: entries separated by blank line, max 200 chars each.
+ *
+ * md       : current plaintext memory file content
+ * section  : exact section header string, e.g. "Helpful Interventions"
+ * entry    : the text to append (will be clamped to 200 chars)
+ * Returns  : updated md string
+ */
+function applyMemoryEntry(md, section, entry) {
+  const today = new Date().toISOString().slice(0, 10);
+  // Clamp entry to 200 chars per REQ-850-053 (context injection size control).
+  const safeEntry = entry.slice(0, 200);
+  const dateLine = `${today} — ${safeEntry}`;
+
+  // Locate the section header and find the next ## boundary (or EOF).
+  const sectionRe = new RegExp(`(^##\\s*${section}\\s*$)`, 'm');
+  const match = md.match(sectionRe);
+  if (!match) {
+    // Section not found — append a new section at end of file.
+    return md.trimEnd() + `\n\n## ${section}\n${dateLine}\n`;
+  }
+
+  // Find the insert position: end of this section (before next ## or EOF).
+  const sectionStart = match.index + match[0].length;
+  const nextSection = md.indexOf('\n##', sectionStart);
+  const insertAt = nextSection === -1 ? md.length : nextSection;
+
+  // Strip trailing placeholder comment if present so the real entry comes first.
+  const sectionBody = md.slice(sectionStart, insertAt);
+  const bodyWithoutPlaceholder = sectionBody.replace(/\n?<!-- [^>]* -->/g, '');
+
+  return (
+    md.slice(0, sectionStart) +
+    bodyWithoutPlaceholder.trimEnd() +
+    `\n\n${dateLine}\n` +
+    md.slice(insertAt)
+  );
+}
+
 // Validate plaintext .md is a Nikko memory file
 function isValidMemoryMd(text) {
   return text.trimStart().startsWith(NIKKO_MEM_HEADER);
@@ -552,9 +661,21 @@ function MemoryLoadModal({ open, onClose, onLoaded }) {
     setBusy(true); setErr('');
     try {
       const isEnc = file.name.toLowerCase().endsWith('.enc');
-      const md = isEnc ? await decryptMemory(fileText, pw) : fileText;
+      let md, sessionKey;
+      if (isEnc) {
+        // Use decryptMemoryKeepKey so the caller gets a session key for re-encryption
+        // without needing to re-prompt for the password (REQ-850-033).
+        const result = await decryptMemoryKeepKey(fileText, pw);
+        md = result.md;
+        sessionKey = result.sessionKey;
+      } else {
+        // Plaintext .md — no session key (no re-encryption path for unencrypted files)
+        md = fileText;
+        sessionKey = null;
+      }
       if (!isValidMemoryMd(md)) throw new Error('Decrypted content is not a Nikko memory file.');
-      onLoaded(md, file.name);
+      // Pass sessionKey through onLoaded so chat.jsx can store it for write-back.
+      onLoaded(md, file.name, sessionKey);
       onClose();
     } catch (e) {
       setErr(e.message || 'Could not load the file.');
@@ -616,5 +737,7 @@ Object.assign(window, {
   NIKKO_MEM_HEADER, NIKKO_MEM_EXT, NIKKO_MEM_FILE_MAGIC,
   makeEmptyMemoryMd, encryptMemory, decryptMemory, isValidMemoryMd, downloadFile,
   parseMemoryName, parseMemoryPrefs,
+  // New write-back helpers (SPEC-850 §9 steps 3 + 6):
+  decryptMemoryKeepKey, encryptMemoryWithKey, applyMemoryEntry,
   MemoryGenerateModal, MemoryLoadModal,
 });
