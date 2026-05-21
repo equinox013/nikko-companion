@@ -223,6 +223,20 @@ const MOOD_COLORS = ['#c95a5a','#d77452','#db8f4e','#d4a352','#c9b260','#a9b76a'
 const JOURNAL_LIMIT = 4000;
 const POMODORO_SECS = 10 * 60;
 
+// ── Diary entry formatter ─────────────────────────────────────────────
+// Converts a single diary entry object to the line format used in the
+// ## Mood Diary section of the memory file:
+//   YYYY-MM-DD | mood: N | emotions: x, y | triggers: a, b
+//   note: optional free text
+function formatDiaryEntry(iso, entry) {
+  const parts = [`${iso} | mood: ${entry.mood || '—'}`];
+  if (entry.emotions && entry.emotions.length) parts.push(`emotions: ${entry.emotions.join(', ')}`);
+  if (entry.triggers && entry.triggers.length) parts.push(`triggers: ${entry.triggers.join(', ')}`);
+  let line = parts.join(' | ');
+  if (entry.note && entry.note.trim()) line += `\nnote: ${entry.note.trim()}`;
+  return line;
+}
+
 // memoryContent: optional decrypted memory Markdown string from chat.jsx.
 // onMemoryUpdate(updatedMd): callback that re-encrypts + downloads the updated
 // file; provided by chat.jsx only when a session key is available (i.e. an
@@ -271,10 +285,7 @@ function MoodDiaryPanel({ entries, onSet, onClose, memoryContent, onMemoryUpdate
   const memInterventions = parseMemSection(memoryContent, 'Helpful Interventions');
   const memSupportNotes  = parseMemSection(memoryContent, 'Support Notes');
   const hasMemSnap = !!(memInterventions || memSupportNotes);
-  // Controls the open/closed state of the memory snapshot block.
-  const [memSnapOpen, setMemSnapOpen] = ps(true);
-
-  // Edit mode state for the memory snapshot block.
+  // Edit mode state for the memory snapshot block (Helpful Interventions / Support Notes).
   const [editingMem, setEditingMem] = ps(false);
   const [editInterventions, setEditInterventions] = ps('');
   const [editSupportNotes, setEditSupportNotes] = ps('');
@@ -284,29 +295,54 @@ function MoodDiaryPanel({ entries, onSet, onClose, memoryContent, onMemoryUpdate
     setEditSupportNotes(memSupportNotes);
     setEditingMem(true);
   };
-  const saveMemEdit = () => {
-    if (!onMemoryUpdate || !memoryContent) return;
-    let updated = memoryContent;
-    updated = replaceMemSection(updated, 'Helpful Interventions', editInterventions);
-    updated = replaceMemSection(updated, 'Support Notes', editSupportNotes);
-    onMemoryUpdate(updated);
-    setEditingMem(false);
-  };
 
   const days = Object.entries(entries).sort((a, b) => b[0].localeCompare(a[0]));
   const toggleIn = (arr, v) => arr.includes(v) ? arr.filter(x => x !== v) : [...arr, v];
   const isEmpty = draftMood === 0 && draftEmotions.length === 0 && draftTriggers.length === 0
                 && !draftNote.trim() && !draftJournal.trim();
 
+  // Whether save is actionable: a diary entry has data, OR the user is in memory
+  // edit mode (so Save commits the edited Helpful Interventions / Support Notes).
+  const canSave = !isEmpty || (editingMem && !!memoryContent && !!onMemoryUpdate);
+
+  // Single save action: commits diary entry to React state AND, if a memory
+  // file is loaded, writes the full diary history + any memory section edits
+  // to the file in one re-encrypt + download cycle.
   const save = () => {
-    if (isEmpty) return;
-    onSet(selectedDay, {
-      mood: draftMood,
+    if (!canSave) return;
+
+    // 1. Persist diary entry to React state.
+    const entry = {
+      mood:     draftMood,
       emotions: draftEmotions,
       triggers: draftTriggers,
-      note: draftNote.trim(),
-      journal: draftJournal.trim(),
-    });
+      note:     draftNote.trim(),
+      journal:  draftJournal.trim(),
+    };
+    if (!isEmpty) onSet(selectedDay, entry);
+
+    // 2. If a memory file is loaded, update it.
+    if (onMemoryUpdate && memoryContent) {
+      let updated = memoryContent;
+
+      // Write all current diary entries (including this new one) to ## Mood Diary.
+      if (!isEmpty) {
+        const allEntries = { ...entries, [selectedDay]: entry };
+        const sorted = Object.entries(allEntries).sort((a, b) => b[0].localeCompare(a[0]));
+        const diaryBody = sorted.map(([iso, e]) => formatDiaryEntry(iso, e)).join('\n\n');
+        updated = replaceMemSection(updated, 'Mood Diary', diaryBody);
+      }
+
+      // If in memory edit mode, also write the edited sections.
+      if (editingMem) {
+        updated = replaceMemSection(updated, 'Helpful Interventions', editInterventions);
+        updated = replaceMemSection(updated, 'Support Notes', editSupportNotes);
+        setEditingMem(false);
+      }
+
+      // Only trigger re-encrypt + download if anything actually changed.
+      if (updated !== memoryContent) onMemoryUpdate(updated);
+    }
   };
   const clearDay = () => {
     setDraftMood(0); setDraftEmotions([]); setDraftTriggers([]);
@@ -333,124 +369,6 @@ function MoodDiaryPanel({ entries, onSet, onClose, memoryContent, onMemoryUpdate
           {formatDay(selectedDay)}{selectedDay === todayISO() ? ' · today' : ''}
         </div>
 
-        {/* Memory file snapshot — controlled div (not <details>) so we own the
-            open/close state and the Edit mode can't be accidentally collapsed
-            by the browser's native summary toggle behaviour.
-            Show whenever a memory file is loaded, even if both sections are
-            empty (new files start with placeholder comments only). Without this
-            guard the Edit button is unreachable on a freshly-generated file. */}
-        {memoryContent && (
-          <div className={'mood-memory-snap' + (memSnapOpen ? ' open' : '')}>
-            {/* Toggle/header row — clicking anywhere except the Edit button
-                toggles open/close. Locked during edit mode to prevent hiding
-                the textareas mid-edit. */}
-            <div
-              className="mood-memory-sum"
-              role="button"
-              tabIndex={0}
-              aria-expanded={memSnapOpen}
-              onClick={() => { if (!editingMem) setMemSnapOpen(o => !o); }}
-              onKeyDown={e => {
-                if ((e.key === 'Enter' || e.key === ' ') && !editingMem) {
-                  e.preventDefault();
-                  setMemSnapOpen(o => !o);
-                }
-              }}
-            >
-              <svg viewBox="0 0 12 12" width="12" height="12" fill="none"
-                   stroke="currentColor" strokeWidth="1.4"
-                   strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <rect x="2" y="5.5" width="8" height="5.5" rx="1" />
-                <path d="M4 5.5V4a2 2 0 0 1 4 0v1.5" />
-                <path d="M6 7.5v1.5" />
-              </svg>
-              <span style={{flex:1}}>From your memory file</span>
-              {onMemoryUpdate && (
-                <button
-                  className="mood-mem-edit-btn"
-                  onClick={e => {
-                    e.stopPropagation();
-                    if (!memSnapOpen) setMemSnapOpen(true);
-                    if (editingMem) { setEditingMem(false); } else { startMemEdit(); }
-                  }}
-                >
-                  {editingMem ? 'Cancel' : 'Edit'}
-                </button>
-              )}
-              <span className="mood-mem-arrow" aria-hidden="true">
-                {memSnapOpen ? '\u25b4' : '\u25be'}
-              </span>
-            </div>
-            {memSnapOpen && (
-              <div className="mood-memory-body">
-                {!editingMem ? (
-                  <>
-                    {/* Empty-state: file loaded but sections have no real content
-                        (new file starts with <!-- placeholder --> comments only).
-                        Without this the user has no way to discover the Edit button. */}
-                    {!hasMemSnap && (
-                      <div className="mood-mem-empty">
-                        Nothing recorded yet —{' '}
-                        {onMemoryUpdate
-                          ? <><strong>Edit</strong> to add what's helped before.</>
-                          : 'load an encrypted file to edit this section.'}
-                      </div>
-                    )}
-                    {memInterventions && (
-                      <div className="mood-memory-block">
-                        <div className="mood-memory-sublabel">What's helped before</div>
-                        {memInterventions.split('\n').filter(l => l.trim()).map((line, i) => (
-                          <div key={i} className="mood-mem-line">{line}</div>
-                        ))}
-                      </div>
-                    )}
-                    {memSupportNotes && (
-                      <div className="mood-memory-block">
-                        <div className="mood-memory-sublabel">Support notes</div>
-                        {memSupportNotes.split('\n').filter(l => l.trim()).map((line, i) => (
-                          <div key={i} className={'mood-mem-line' + (line.startsWith('-') ? ' bullet' : '')}>
-                            {line}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </>
-                ) : (
-                  <>
-                    {memInterventions !== undefined && (
-                      <div className="mood-memory-block">
-                        <div className="mood-memory-sublabel">What's helped before</div>
-                        <textarea
-                          className="mood-mem-edit-area"
-                          value={editInterventions}
-                          onChange={e => setEditInterventions(e.target.value)}
-                          rows={4}
-                          placeholder="e.g. 2026-05-21 — Breathing helped during work stress"
-                        />
-                      </div>
-                    )}
-                    {memSupportNotes !== undefined && (
-                      <div className="mood-memory-block">
-                        <div className="mood-memory-sublabel">Support notes</div>
-                        <textarea
-                          className="mood-mem-edit-area"
-                          value={editSupportNotes}
-                          onChange={e => setEditSupportNotes(e.target.value)}
-                          rows={4}
-                          placeholder="e.g. Things that don't help: Minimising..."
-                        />
-                      </div>
-                    )}
-                    <div className="mood-mem-edit-actions">
-                      <button className="btn-secondary" onClick={() => setEditingMem(false)}>Cancel</button>
-                      <button className="btn-primary" onClick={saveMemEdit}>Save & download</button>
-                    </div>
-                  </>
-                )}
-              </div>
-            )}
-          </div>
-        )}
 
         <div className="mood-section">
           <label>How is today, overall?</label>
@@ -568,9 +486,88 @@ function MoodDiaryPanel({ entries, onSet, onClose, memoryContent, onMemoryUpdate
           </div>
         )}
 
+        {/* Memory file reference — flat section above Save button.
+            Shows when a memory file is loaded. In read mode: renders the
+            Helpful Interventions and Support Notes sections for reference.
+            In edit mode: exposes textareas; changes are committed via Save. */}
+        {memoryContent && (
+          <div className="mood-mem-section">
+            <div className="mood-mem-section-head">
+              <span className="mood-mem-section-label">From your memory file</span>
+              {onMemoryUpdate && (
+                <button
+                  className="mood-mem-edit-btn"
+                  onClick={() => editingMem ? setEditingMem(false) : startMemEdit()}
+                >
+                  {editingMem ? 'Cancel' : 'Edit'}
+                </button>
+              )}
+            </div>
+            {!editingMem ? (
+              <>
+                {!hasMemSnap && (
+                  <div className="mood-mem-empty">
+                    Nothing recorded yet —{' '}
+                    {onMemoryUpdate
+                      ? <><strong>Edit</strong> to add what's helped before.</>
+                      : 'load an encrypted file to edit this section.'}
+                  </div>
+                )}
+                {memInterventions && (
+                  <div className="mood-memory-block">
+                    <div className="mood-memory-sublabel">What's helped before</div>
+                    {memInterventions.split('\n').filter(l => l.trim()).map((line, i) => (
+                      <div key={i} className="mood-mem-line">{line}</div>
+                    ))}
+                  </div>
+                )}
+                {memSupportNotes && (
+                  <div className="mood-memory-block">
+                    <div className="mood-memory-sublabel">Support notes</div>
+                    {memSupportNotes.split('\n').filter(l => l.trim()).map((line, i) => (
+                      <div key={i} className={'mood-mem-line' + (line.startsWith('-') ? ' bullet' : '')}>
+                        {line}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            ) : (
+              <>
+                <div className="mood-memory-block">
+                  <div className="mood-memory-sublabel">What's helped before</div>
+                  <textarea
+                    className="mood-mem-edit-area"
+                    value={editInterventions}
+                    onChange={e => setEditInterventions(e.target.value)}
+                    rows={3}
+                    placeholder="e.g. 2026-05-21 — Breathing helped during work stress"
+                  />
+                </div>
+                <div className="mood-memory-block">
+                  <div className="mood-memory-sublabel">Support notes</div>
+                  <textarea
+                    className="mood-mem-edit-area"
+                    value={editSupportNotes}
+                    onChange={e => setEditSupportNotes(e.target.value)}
+                    rows={3}
+                    placeholder="e.g. Things that don't help: Minimising..."
+                  />
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
         <div className="mood-actions">
           <button className="btn-secondary" onClick={clearDay}>Clear day</button>
-          <button className="btn-primary" onClick={save} disabled={isEmpty}>Save</button>
+          <button
+            className="btn-primary"
+            onClick={save}
+            disabled={!canSave}
+          >
+            {editingMem && !isEmpty ? 'Save & sync' : editingMem ? 'Save memory' : 'Save'}
+          </button>
         </div>
 
         {days.length > 0 && <div className="mood-divider" />}
@@ -596,10 +593,10 @@ function MoodDiaryPanel({ entries, onSet, onClose, memoryContent, onMemoryUpdate
                 {e.note
                   ? e.note
                   : (e.emotions && e.emotions.length
-                      ? e.emotions.slice(0, 3).join(' · ')
-                      : (e.journal ? 'reflection saved' : '—'))}
+                      ? e.emotions.slice(0, 3).join(' \u00b7 ')
+                      : (e.journal ? 'reflection saved' : '\u2014'))}
               </span>
-              <span className="mood-row-score">{e.mood ? e.mood : '—'}</span>
+              <span className="mood-row-score">{e.mood ? e.mood : '\u2014'}</span>
             </button>
           ))}
         </div>
@@ -608,11 +605,11 @@ function MoodDiaryPanel({ entries, onSet, onClose, memoryContent, onMemoryUpdate
   );
 }
 
-// ── Tutorial overlay ────────────────────────────────────────────────
+// \u2500\u2500 Tutorial overlay \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 const TUTORIAL_STEPS = [
   {
-    title: "Welcome — is this your first time?",
-    body: "Nikko is a quiet place to think out loud. Take 30 seconds to see what's here, or skip ahead any time.",
+    title: "Welcome \u2014 is this your first time?",
+    body: "Nikko is a quiet place to think out loud. Take 30 seconds to see what\u2019s here, or skip ahead any time.",
     features: null,
   },
   {
@@ -621,13 +618,13 @@ const TUTORIAL_STEPS = [
     features: [
       { ico: 'mem',   title: 'Personal Memory', body: 'Optional encrypted memory file you keep on your device. Top-right.' },
       { ico: 'src',   title: 'Sources tab',     body: 'Right side. Anything Nikko cites links to a source with a summary and APA 7 reference.' },
-      { ico: 'mood',  title: 'Mood diary',      body: 'Left side. A 1–5 scale and an optional note per day. Stored locally.' },
+      { ico: 'mood',  title: 'Mood diary',      body: 'Left side. A 1\u20135 scale and an optional note per day. Stored locally.' },
       { ico: 'exit',  title: 'Quick exit',      body: 'Top-right. One tap clears this session and navigates away.' },
     ],
   },
   {
     title: "A few principles",
-    body: "Nikko is a research preview. It's non-diagnostic, doesn't replace a clinician, and won't pretend to remember you between sessions unless you provide your own memory file.",
+    body: "Nikko is a research preview. It\u2019s non-diagnostic, doesn\u2019t replace a clinician, and won\u2019t pretend to remember you between sessions unless you provide your own memory file.",
     features: null,
   },
 ];

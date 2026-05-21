@@ -1948,6 +1948,29 @@ body::before {
   margin-bottom: 2px;
 }
 
+/* Flat memory file reference section — shown above the Save button when a file
+   is loaded. No collapse toggle; user scrolls to it within the panel body. */
+.mood-mem-section {
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+  margin-top: 4px;
+  margin-bottom: 6px;
+}
+.mood-mem-section-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.mood-mem-section-label {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+  flex: 1;
+}
+
 /* Empty-state shown when memory file is loaded but both sections contain only
    placeholder comments (new file). Keeps the block visible so Edit is reachable. */
 .mood-mem-empty {
@@ -2643,260 +2666,169 @@ body::before {
 .cold-start-active {
   min-width: 260px;
 }
-.cold-start-notice {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 2px;
-  padding: 7px 10px;
-  border-radius: 8px;
-  background: var(--surface-2, rgba(120,120,120,0.08));
-  border: 1px solid var(--border, rgba(120,120,120,0.15));
-  animation: tLabelFade 0.5s ease;
-}
-.cold-start-notice svg {
-  flex-shrink: 0;
-  width: 11px;
-  height: 11px;
-  color: var(--ink-2, #888);
-  opacity: 0.7;
-}
-.cold-start-text {
-  flex: 1;
-  font-size: 0.72rem;
-  color: var(--ink-2, #888);
-  line-height: 1.35;
-}
-.cold-start-elapsed {
-  font-size: 0.68rem;
-  font-variant-numeric: tabular-nums;
-  color: var(--ink-3, #aaa);
-  white-space: nowrap;
-  min-width: 24px;
-  text-align: right;
-}
-/* Indeterminate shimmer bar — visual proof something is in flight */
-.cold-start-bar {
-  width: 100%;
-  height: 3px;
-  border-radius: 2px;
-  overflow: hidden;
-  background: var(--border, rgba(120,120,120,0.12));
-  margin-top: 4px;
-  animation: tLabelFade 0.5s ease;
-}
-.cold-start-bar-fill {
-  height: 100%;
-  width: 40%;
-  border-radius: 2px;
-  background: var(--accent, #7c6af7);
-  opacity: 0.55;
-  animation: coldShimmer 2s ease-in-out infinite;
-}
-@keyframes coldShimmer {
-  0%   { transform: translateX(-120%); }
-  100% { transform: translateX(320%); }
+
+/* ═══════════════════════════════════════════════════════════════════
+   RESPONSIVE — MOBILE BOTTOM SHEETS (≤600px)
+   Panels slide up from the bottom instead of floating on the sides.
+   Side tab-float buttons are replaced by a fixed bottom tab bar.
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* Hidden at desktop — shown only in the mobile media query below */
+.mobile-tabbar { display: none; }
+.sheet-backdrop { display: none; }
+
+@media (max-width: 600px) {
+  /* ── Side panel → bottom sheet ─────────────────────────────────── */
+  .chat.floating .panel.left,
+  .chat.floating .panel.right {
+    /* Override the fixed side-card positioning */
+    top: auto !important;
+    bottom: 0 !important;
+    left: 0 !important;
+    right: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    height: 82vh;
+    border-radius: 18px 18px 0 0;
+    border: 1px solid var(--line-soft);
+    border-bottom: 0;
+    /* Slide-up entrance animation */
+    animation: sheet-up 0.28s cubic-bezier(0.4, 0, 0.2, 1) both;
+    z-index: 50;
+    /* Safe-area padding for phones with home indicator */
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  /* Drag handle pill above the panel header */
+  .chat.floating .panel.left .panel-head,
+  .chat.floating .panel.right .panel-head {
+    position: relative;
+    padding-top: 22px;
+  }
+  .chat.floating .panel.left .panel-head::before,
+  .chat.floating .panel.right .panel-head::before {
+    content: '';
+    position: absolute;
+    top: 8px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 36px;
+    height: 4px;
+    background: var(--line);
+    border-radius: 2px;
+  }
+
+  /* ── Backdrop ──────────────────────────────────────────────────── */
+  .sheet-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 45;
+    background: rgba(0, 0, 0, 0.28);
+    backdrop-filter: blur(2px);
+    -webkit-backdrop-filter: blur(2px);
+    animation: fade-in 0.2s ease both;
+    cursor: pointer;
+  }
+
+  /* ── Side tab-float → hidden (replaced by mobile tabbar) ──────── */
+  .tab-float { display: none !important; }
+
+  /* ── Mobile bottom tab bar ─────────────────────────────────────── */
+  .mobile-tabbar {
+    display: flex;
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 40;
+    background: color-mix(in oklch, var(--surface) 96%, transparent);
+    border-top: 1px solid var(--line-soft);
+    backdrop-filter: blur(20px) saturate(140%);
+    -webkit-backdrop-filter: blur(20px) saturate(140%);
+    /* Safe-area inset for phones with home indicator */
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  .mobile-tabbar .mtab {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    padding: 10px 0 12px;
+    border: none;
+    background: transparent;
+    color: var(--muted);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: color var(--t-fast);
+    -webkit-tap-highlight-color: transparent;
+  }
+  .mobile-tabbar .mtab svg {
+    width: 20px;
+    height: 20px;
+  }
+  .mobile-tabbar .mtab.active { color: var(--accent-2); }
+  .mobile-tabbar .mtab.sources.active { color: var(--sun); }
+
+  /* ── Composer: lift above the tab bar ─────────────────────────── */
+  .chat.floating .composer-wrap {
+    bottom: calc(52px + env(safe-area-inset-bottom, 0px) + 8px);
+    left: 10px;
+    right: 10px;
+  }
+  /* Extra thread padding for composer + tabbar stack */
+  .chat.floating .thread {
+    padding-bottom: 240px;
+  }
+
+  /* ── Topbar: tighter on mobile ─────────────────────────────────── */
+  .topbar.floating {
+    top: 8px;
+    left: 8px;
+    right: 8px;
+  }
+  .pillbar .brand-mini .wordmark { font-size: 16px; }
 }
 
-/* ── Personalisation pill selectors (memory modal) ──────────────── */
-.pill-group { display: flex; flex-direction: column; gap: 8px; margin-bottom: 18px; }
-.pill-group-label {
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--muted);
-  margin-bottom: 2px;
-}
-.pill-row { display: flex; gap: 8px; flex-wrap: wrap; }
-
-.opill-host { position: relative; }
-.opill {
-  appearance: none;
-  border: 1px solid var(--line);
-  background: var(--bg-3);
-  border-radius: 999px;
-  padding: 7px 16px;
-  font-size: 13.5px;
-  font-family: var(--font-body);
-  color: var(--ink-2);
-  cursor: pointer;
-  transition: border-color var(--t-fast), background var(--t-fast), color var(--t-fast);
-  line-height: 1;
-}
-.opill:hover { border-color: color-mix(in oklch, var(--accent) 60%, var(--line)); color: var(--ink); }
-.opill.opill-active {
-  background: var(--ink);
-  border-color: var(--ink);
-  color: var(--bg);
-}
-/* Tooltip — appears above the pill on hover */
-.opill-tip {
-  position: absolute;
-  bottom: calc(100% + 10px);
-  /* Left-aligned to the pill so the tooltip never overflows the modal's left
-     edge. 220px is well within the modal content width (~484px) for any pill
-     position. Previously centered (left:50% translateX(-50%)) which caused
-     overflow-x clipping when the modal's overflow-y:auto forced overflow-x:auto. */
-  left: 0;
-  transform: none;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 9px 12px;
-  font-size: 12.5px;
-  color: var(--ink-2);
-  line-height: 1.45;
-  width: 220px;
-  box-shadow: var(--shadow-card);
-  pointer-events: none;
-  opacity: 0;
-  transition: opacity var(--t-fast);
-  z-index: 300;
-  white-space: normal;
-  text-align: left;
-}
-/* Arrow */
-.opill-tip::after {
-  content: '';
-  position: absolute;
-  top: 100%; left: 50%;
-  transform: translateX(-50%);
-  border: 6px solid transparent;
-  border-top-color: var(--line);
-  margin-top: -1px;
-}
-.opill-tip::before {
-  content: '';
-  position: absolute;
-  top: 100%; left: 50%;
-  transform: translateX(-50%);
-  border: 6px solid transparent;
-  border-top-color: var(--surface);
-  z-index: 1;
-}
-.opill-host:hover .opill-tip { opacity: 1; }
-
-/* Inline warning when verbose input selected */
-.pill-warn {
-  margin: 8px 0 0;
-  font-size: 12px;
-  color: var(--muted);
-  font-style: italic;
+/* ── Slide-up keyframe (reused by bottom sheets) ─────────────────── */
+@keyframes sheet-up {
+  from { transform: translateY(100%); }
+  to   { transform: translateY(0); }
 }
 
-/* ── Modal section layout ───────────────────────────────────────── */
-.modal-section { margin-bottom: 20px; }
+/* ═══════════════════════════════════════════════════════════════════
+   RESPONSIVE — PHONE SIZING (≤480px)
+   Font sizes, padding, gate card, modals, touch targets.
+   ═══════════════════════════════════════════════════════════════════ */
+@media (max-width: 480px) {
+  /* Gate card */
+  .gate-card {
+    padding: 28px 20px 22px;
+    border-radius: 20px 20px 0 0;
+    border-bottom: 0;
+  }
+  .gate-title { font-size: 28px; }
+  .gate { align-items: flex-end; padding: 0; }
 
-/* Gate choice — two clickable option cards stacked vertically */
-.modal-gate-choice {
-  display: flex; flex-direction: column; gap: 10px;
-  margin-top: 20px;
-}
-.modal-gate-label {
-  display: flex;
-  align-items: flex-start;
-  gap: 14px;
-  padding: 14px 16px;
-  border: 1.5px solid var(--line);
-  border-radius: var(--r-md);
-  background: var(--bg-3);
-  cursor: pointer;
-  transition: border-color var(--t-fast), background var(--t-fast);
-}
-.modal-gate-label:hover {
-  border-color: var(--accent);
-  background: var(--bg-2);
-}
-.modal-gate-label strong {
-  display: block;
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--ink);
-  margin-bottom: 3px;
-}
-.modal-gate-icon {
-  font-size: 15px;
-  color: var(--accent);
-  margin-top: 2px;
-  flex-shrink: 0;
-  line-height: 1;
-}
-.modal-gate-hint {
-  font-size: 12.5px;
-  color: var(--muted);
-  line-height: 1.4;
-  font-weight: 400;
-}
+  /* Modals — full-width bottom sheet */
+  .modal-veil { align-items: flex-end; padding: 0; }
+  .modal {
+    width: 100%;
+    max-height: 95vh;
+    border-radius: 20px 20px 0 0;
+    border-bottom: 0;
+    padding: 24px 20px 0;
+  }
 
-/* ── Don't-help checklist ───────────────────────────────────────── */
-/* Note: uses <li class="check-item"> + <span class="check"><svg/></span>
-   pattern — NOT input[type="checkbox"]. Checked state toggled via .checked
-   class on the <li> by React state. */
-.check-list {
-  display: flex; flex-direction: column; gap: 6px;
-  list-style: none; padding: 0; margin: 0 0 8px;
-}
-.check-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 9px 12px;
-  border: 1px solid var(--line-soft);
-  border-radius: var(--r-md);
-  background: var(--bg-3);
-  cursor: pointer;
-  font-size: 13.5px;
-  color: var(--ink-2);
-  transition: border-color var(--t-fast), background var(--t-fast);
-  user-select: none;
-}
-.check-item:hover { border-color: var(--accent); background: var(--bg-2); }
-.check-item.checked { border-color: color-mix(in oklch, var(--accent) 55%, var(--line)); color: var(--ink); }
+  /* Mood diary — larger touch targets */
+  .mood-chip { padding: 7px 13px; font-size: 13px; min-height: 36px; }
+  .pip { min-width: 28px; height: 28px; font-size: 12px; }
 
-/* Custom checkbox box — the .check span acts as the visual checkbox */
-.check-item .check {
-  width: 18px; height: 18px;
-  min-width: 18px;
-  border: 1.5px solid var(--line);
-  border-radius: 4px;
-  background: var(--surface);
-  display: grid; place-items: center;
-  flex-shrink: 0;
-  transition: border-color var(--t-fast), background var(--t-fast);
+  /* Topbar pills — hide non-essential on very narrow screens */
+  /* Hide research-preview pill on very narrow phones — wraps awkwardly */
+  .pillbar .research-pill { display: none; }
 }
-/* Checkmark SVG — hidden until .checked is applied to the parent li */
-.check-item .check svg {
-  width: 10px; height: 10px;
-  opacity: 0;
-  transition: opacity var(--t-fast);
-  stroke: #fff;
-}
-.check-item.checked .check {
-  background: var(--accent);
-  border-color: var(--accent);
-}
-.check-item.checked .check svg { opacity: 1; }
-
-/* ── Modal textarea ─────────────────────────────────────────────── */
-.modal-textarea {
-  width: 100%;
-  padding: 10px 12px;
-  border: 1px solid var(--line);
-  background: var(--bg-3);
-  color: var(--ink);
-  border-radius: var(--r-md);
-  font-family: var(--font-body);
-  font-size: 14px;
-  line-height: 1.55;
-  resize: vertical;
-  min-height: 80px;
-  outline: none;
-  box-sizing: border-box;
-}
-.modal-textarea:focus { border-color: var(--accent); }
-
-/* ── Memory popover host ────────────────────────────────────────── */
-/* Scoping container for the memory button + popover. position:relative
-   is also set inline on the element for specificity safety. */
-.mem-pop-host { position: relative; }

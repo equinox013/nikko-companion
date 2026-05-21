@@ -583,17 +583,11 @@ function Chat({ theme, onToggleTheme }) {
   // an unmounted component if the user somehow navigates away.
   useEffect(() => () => clearTimeout(memBannerAutoRef.current), []);
 
-  // Mood diary state — sessionStorage so it doesn't outlive the tab,
-  // honouring SPEC-800 zero-retention. (Memory file is the durable channel.)
-  const [moodEntries, setMoodEntries] = useState(() => {
-    try {
-      const raw = sessionStorage.getItem('nikko.mood');
-      return raw ? JSON.parse(raw) : {};
-    } catch (e) { return {}; }
-  });
-  useEffect(() => {
-    try { sessionStorage.setItem('nikko.mood', JSON.stringify(moodEntries)); } catch (e) {}
-  }, [moodEntries]);
+  // Mood diary state — pure React state, no storage backend.
+  // [SPEC-800] Zero-retention: entries exist only for the current page load and
+  // are gone on refresh or tab close. The ## Mood Diary section of the memory
+  // file is the only durable channel (written explicitly via syncDiaryToMemory).
+  const [moodEntries, setMoodEntries] = useState({});
   const setMoodEntry = (iso, val) => {
     setMoodEntries(prev => {
       const next = { ...prev };
@@ -985,7 +979,7 @@ function Chat({ theme, onToggleTheme }) {
             <span className="wordmark">Nikko</span>
           </div>
           <div className="divider" />
-          <div className="tip-host">
+          <div className="tip-host research-pill">
             <span className="pill linklike" tabIndex={0}>
               <span className="dot" />Research preview
             </span>
@@ -1286,6 +1280,62 @@ function Chat({ theme, onToggleTheme }) {
             dynamicSources={dynamicSources}
           />
         )}
+
+        {/* ── Mobile bottom sheet backdrop ─────────────────────────
+            Visible only on ≤600px via CSS. Tapping it closes whichever
+            panel is open — acts as the dismiss gesture for the sheet. */}
+        {(leftTab || rightTab) && (
+          <div
+            className="sheet-backdrop"
+            onClick={() => { setLeftTab(null); setRightTab(null); }}
+            aria-hidden="true"
+          />
+        )}
+
+        {/* ── Mobile bottom tab bar ────────────────────────────────
+            Hidden on desktop via CSS (display:none). Replaces the
+            .tab-float side buttons on narrow viewports with a native-
+            style tab bar. Mood and Sources tabs toggle their sheets;
+            opening one auto-closes the other. */}
+        <nav className="mobile-tabbar" aria-label="Panels">
+          <button
+            className={'mtab' + (leftTab === 'mood' ? ' active' : '')}
+            aria-pressed={leftTab === 'mood'}
+            aria-label="Mood diary"
+            onClick={() => {
+              setLeftTab(v => v === 'mood' ? null : 'mood');
+              setRightTab(null);
+            }}
+          >
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="2.5" y="3.5" width="11" height="10" rx="1.5" />
+              <path d="M2.5 6h11M5 2.5v3M11 2.5v3" />
+            </svg>
+            Mood
+          </button>
+          <button
+            className={'mtab sources' + (rightTab === 'sources' ? ' active' : '')}
+            aria-pressed={rightTab === 'sources'}
+            aria-label="Sources"
+            onClick={() => {
+              if (rightTab !== 'sources') {
+                if (lastResponseSourcesRef.current.length > 0) {
+                  setDynamicSources(lastResponseSourcesRef.current);
+                }
+                setRightTab('sources');
+              } else {
+                setRightTab(null);
+              }
+              setLeftTab(null);
+            }}
+          >
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M3 2.5h7l2.5 2.5v8.5H3z" />
+              <path d="M3 5.5h6M3 8h7M3 10.5h5" />
+            </svg>
+            Sources
+          </button>
+        </nav>
       </main>
 
       {/* Memory modals */}
@@ -1311,5 +1361,3 @@ function Chat({ theme, onToggleTheme }) {
     </div>
   );
 }
-
-Object.assign(window, { Chat });
