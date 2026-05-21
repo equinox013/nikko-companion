@@ -152,11 +152,16 @@ def build_adp_a_system(context: ResponseContextPayload) -> str:
                 f"\n    {abstract}"
             )
 
-        # Grounding instruction — prevents fabrication of additional citations.
+        # Grounding instruction — mandatory citation + anti-fabrication.
+        # Previous wording ("when your response draws on...") was optional framing;
+        # Qwen3-4B treated it as a suggestion and ignored the evidence entirely.
+        # "MUST" + explicit failure condition gives the model a clear directive.
         parts.append(
-            "\nWhen your response draws on the above evidence, reference it naturally "
-            "(e.g. 'research suggests...', 'studies have shown...'). "
-            "Do NOT cite sources not listed above. Do NOT fabricate journal names or statistics."
+            "\nYou MUST ground your response in the evidence provided above. "
+            "Reference at least one source naturally in your reply "
+            "(e.g. 'research suggests...', 'according to Beyond Blue...', 'studies indicate...'). "
+            "Do NOT cite sources not listed above. Do NOT fabricate journal names or statistics. "
+            "A response that does not reference the evidence will be rejected by the evaluator."
         )
 
         if ev.grey_literature_used:
@@ -206,29 +211,47 @@ def build_adp_b_system() -> str:
 def build_adp_c_system(context: ResponseContextPayload) -> str:
     """
     Build the ADP-C evaluator system prompt.
-    Adds an evidence-grounding check in Guidance Mode to catch fabricated citations.
+
+    In Guidance Mode with evidence present, the check is two-part:
+      1. Absence: response MUST reference at least one retrieved source.
+         A response that ignores the evidence entirely must be REGENERATE.
+      2. Fabrication: response must NOT invent citations beyond the provided base.
+
+    Previously only fabrication was checked — absence was not caught, so ADP-C
+    approved responses that silently ignored injected evidence. Fixed 2026-05-21.
     """
+    # Base verdict instruction — shared across all modes.
     base = (
         "You are a response quality evaluator for a mental health support app. "
         "Given a user message and a proposed assistant response, output a JSON object: "
-        '"verdict": "APPROVE" if the response is empathetic, safe, and appropriate. '
-        '"verdict": "REGENERATE" if the response is harmful, dismissive, clinically '
-        "inappropriate, overly advice-heavy in Comfort Mode, or fails to cite evidence "
-        "correctly in Guidance Mode. "
-        '"reason": one sentence explanation. '
+        "verdict: APPROVE if the response is empathetic, safe, and appropriate. "
+        "verdict: REGENERATE if the response is harmful, dismissive, clinically "
+        "inappropriate, overly advice-heavy in Comfort Mode, or fails to ground "
+        "its response in evidence in Guidance Mode. "
+        "reason: one sentence explanation. "
         "Output ONLY the JSON object."
     )
 
-    # In Guidance Mode, append evidence-grounding check.
+    # Guidance Mode: check both evidence ABSENCE and FABRICATION.
+    # Previous version only caught fabrication — a response citing nothing
+    # passed through undetected. Now ADP-C explicitly requires at least one
+    # source to be referenced and rejects if none are. (Fixed 2026-05-21)
     if (
         context.mode == OperationalMode.GUIDANCE
         and context.synthesized_evidence
         and context.synthesized_evidence.citations
     ):
+        source_names = ", ".join(
+            c.source_name for c in context.synthesized_evidence.citations[:5]
+        )
         base += (
-            " Additionally check: does the response reference evidence appropriately "
-            "without fabricating citations beyond the provided evidence base? "
-            "If the response invents journal names or statistics, verdict must be REGENERATE."
+            " Additionally, evidence was retrieved from: " + source_names + ". "
+            "Check TWO things: "
+            "(1) Does the response reference at least one of these sources naturally? "
+            "If the response makes NO reference to the retrieved evidence, "
+            "verdict MUST be REGENERATE. "
+            "(2) Does the response fabricate citations not in the provided list? "
+            "If so, verdict MUST be REGENERATE."
         )
 
     return base

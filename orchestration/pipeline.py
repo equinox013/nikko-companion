@@ -324,16 +324,25 @@ if not _LOCAL_LLM:
 # showing a truncated version of the file) we fall through to the stub.
 # This lets the pipeline run end-to-end in Phase 3 without requiring all
 # agents to be syntactically correct in the Linux sandbox.
+#
+# IMPORTANT: ScopeClassifier is pure regex — no LLM, no GPU, no torch.
+# It MUST be imported unconditionally regardless of NIKKO_LOCAL_LLM.
+# Previously it was gated behind _LOCAL_LLM alongside the LLM-backed agents,
+# which caused the stub (always IN_SCOPE) to run on Render where
+# NIKKO_LOCAL_LLM=false — meaning scope filtering never ran in production.
+# Fixed 2026-05-21 (REQ-200-SC1).
+
+# ── ScopeClassifier — always imported, no LLM dependency ─────────────────────
+try:
+    from agents.scope_classifier import ScopeClassifier as _ScopeClassifier
+    _HAVE_SCOPE_CLASSIFIER = True
+except (SyntaxError, ImportError) as _exc:
+    _HAVE_SCOPE_CLASSIFIER = False
+    logger.warning("ScopeClassifier unavailable (%s) — using stub (all messages pass through).", _exc)
+
+# ── LLM-backed agents — only loaded when NIKKO_LOCAL_LLM=true ────────────────
 # When NIKKO_LOCAL_LLM=false the real agents are never imported regardless.
-
 if _LOCAL_LLM:
-    try:
-        from agents.scope_classifier import ScopeClassifier as _ScopeClassifier
-        _HAVE_SCOPE_CLASSIFIER = True
-    except (SyntaxError, ImportError):
-        _HAVE_SCOPE_CLASSIFIER = False
-        logger.warning("ScopeClassifier unavailable (FUSE truncation) — using stub.")
-
     try:
         from agents.signal_agent import SignalAgent as _SignalAgent
         _HAVE_SIGNAL_AGENT = True
@@ -348,9 +357,8 @@ if _LOCAL_LLM:
         _HAVE_STRATEGY_AGENT = False
         logger.warning("SupportStrategyAgent unavailable (FUSE truncation) — using stub.")
 else:
-    _HAVE_SCOPE_CLASSIFIER = False
-    _HAVE_SIGNAL_AGENT     = False
-    _HAVE_STRATEGY_AGENT   = False
+    _HAVE_SIGNAL_AGENT   = False
+    _HAVE_STRATEGY_AGENT = False
 
 
 class _StubScopeClassifier:
