@@ -133,7 +133,16 @@ function Composer({ onSend, disabled }) {
   };
   return (
     <div>
-      <div className="composer">
+      <div
+        className="composer"
+        onClick={(e) => {
+          // Forward clicks on the composer padding/background to the textarea
+          // so the user can tap anywhere in the row to start typing.
+          // Exclude the send button so clicking it doesn't steal focus mid-submit.
+          if (e.target.closest('.send')) return;
+          ref.current?.focus();
+        }}
+      >
         <textarea
           ref={ref}
           value={val}
@@ -153,6 +162,50 @@ function Composer({ onSend, disabled }) {
         <span><span className="kbd">Enter</span> to send · <span className="kbd">Shift</span>+<span className="kbd">Enter</span> for newline · type <span className="kbd">/help</span> for the tutorial</span>
         <span>Cleared on refresh</span>
       </div>
+    </div>
+  );
+}
+
+// ── Memory notification banner ────────────────────────────────────
+// Two variants:
+//   'loaded' — shown for 7s after the user loads a memory file.
+//              Confirms Nikko now has the context; auto-dismisses.
+//   'hint'   — shown after the 3rd user message when no memory is
+//              loaded. Surfaces the option without being intrusive.
+//              Never shown more than once per session.
+function MemBanner({ type, onDismiss, onOpenLoad }) {
+  return (
+    <div className="mem-banner" role="status" aria-live="polite">
+      <span className="mem-banner-icon" aria-hidden="true">
+        {type === 'loaded' ? (
+          // Lock icon — memory is secure and active
+          <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="2" y="5.5" width="8" height="5.5" rx="1" />
+            <path d="M4 5.5V4a2 2 0 0 1 4 0v1.5" />
+            <path d="M6 7.5v1.5" />
+          </svg>
+        ) : (
+          // Info icon — gentle nudge, not an alert
+          <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="6" cy="6" r="4.5" />
+            <path d="M6 5v3" />
+            <circle cx="6" cy="3.5" r="0.4" fill="currentColor" stroke="none" />
+          </svg>
+        )}
+      </span>
+      <div className="mem-banner-body">
+        {type === 'loaded'
+          ? "Memory loaded — I'll keep your context in mind."
+          : 'Give Nikko a memory file for a more personal experience.'}
+      </div>
+      {type === 'hint' && (
+        <button className="mem-banner-action" onClick={onOpenLoad}>Set up</button>
+      )}
+      <button className="dismiss" onClick={onDismiss} aria-label="Dismiss banner">
+        <svg viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+          <path d="m2.5 2.5 5 5M7.5 2.5l-5 5" />
+        </svg>
+      </button>
     </div>
   );
 }
@@ -338,6 +391,12 @@ function Chat({ theme, onToggleTheme }) {
   const memContentRef = useRef(null);
   const [memPop, setMemPop] = useState(false);     // popover
 
+  // Memory notification banner — two variants: 'loaded' (7s auto-dismiss) and
+  // 'hint' (persists until dismissed; shown once per session after 3 user msgs).
+  const [memBanner, setMemBanner] = useState(null);   // null | 'loaded' | 'hint'
+  const memBannerAutoRef = useRef(null);               // auto-dismiss timer for 'loaded'
+  const hintShownRef = useRef(false);                  // true once hint has been shown
+
   // Persist memLoaded / memName to sessionStorage whenever they change.
   // This restores the visual indicator after a page reload within the same tab.
   // Content is intentionally NOT persisted — user must re-load the file.
@@ -408,7 +467,29 @@ function Chat({ theme, onToggleTheme }) {
       text: `${greeting} Your memory file is loaded — I'll keep what's there in mind, but the live conversation is what I'll really listen to. You're in charge of what stays.`
     }]);
     setTimeout(scrollToBottom, 30);
+
+    // Show the memory-loaded banner for 7s, then auto-dismiss.
+    // Cancel any prior auto-dismiss timer (e.g. if user loads a second file).
+    clearTimeout(memBannerAutoRef.current);
+    setMemBanner('loaded');
+    memBannerAutoRef.current = setTimeout(() => setMemBanner(null), 7000);
   }, [scrollToBottom]);
+
+  // Hint banner: after the 3rd user message, if no memory is loaded and the
+  // hint hasn't been shown yet this session, surface the 'hint' banner once.
+  // Uses hintShownRef (not state) to avoid the effect re-triggering on re-renders.
+  useEffect(() => {
+    if (memLoaded || hintShownRef.current || memBanner) return;
+    const userCount = messages.filter(m => m.role === 'user').length;
+    if (userCount >= 3) {
+      hintShownRef.current = true;
+      setMemBanner('hint');
+    }
+  }, [messages, memLoaded, memBanner]);
+
+  // Clean up the auto-dismiss timer on unmount so it doesn't fire into
+  // an unmounted component if the user somehow navigates away.
+  useEffect(() => () => clearTimeout(memBannerAutoRef.current), []);
 
   // Mood diary state — sessionStorage so it doesn't outlive the tab,
   // honouring SPEC-800 zero-retention. (Memory file is the durable channel.)
@@ -444,6 +525,32 @@ function Chat({ theme, onToggleTheme }) {
     setRightTab('sources');
   }, []);
 
+  // ── Input word cap: honour input_length preference from memory file ──
+  // The user can declare their typing style in their memory file:
+  //   concise  → cap at ~150 words (fast typists; short messages)
+  //   standard → cap at ~300 words (default)
+  //   verbose  → cap at ~600 words (ramblers; important detail at the end)
+  //
+  // Truncation is applied to the payload sent to the backend only — the
+  // full message is still shown in the chat thread so the UX isn't jarring.
+  // Words are split on whitespace (not tokenised) — a rough but fast proxy.
+  const INPUT_WORD_CAPS = { concise: 150, standard: 300, verbose: 600 };
+  const DEFAULT_WORD_CAP = 300;
+
+  const applyInputCap = useCallback((text) => {
+    // Read prefs from live memory content (null if no file loaded).
+    const md = memContentRef.current;
+    if (!md) return text;
+    const prefs = (typeof parseMemoryPrefs === 'function') ? parseMemoryPrefs(md) : {};
+    const capKey = prefs.input_length || 'standard';
+    const cap = INPUT_WORD_CAPS[capKey] !== undefined ? INPUT_WORD_CAPS[capKey] : DEFAULT_WORD_CAP;
+    const words = text.split(/\s+/);
+    if (words.length <= cap) return text;
+    // Truncate to cap words — keep a trailing note so ADP-A knows it's seeing
+    // a partial input (avoids the model inferring the user stopped mid-thought).
+    return words.slice(0, cap).join(' ') + ' [message truncated per user preference]';
+  }, []);
+
   // ── streamReply: POST /api/message → SSE → char-by-char animation ──
   // [REQ-FIS-001] Primary chat endpoint. Streams SSE from the Render backend
   // (which orchestrates ADP-B → ADP-A → ADP-C on the HF Space).
@@ -472,7 +579,12 @@ function Chat({ theme, onToggleTheme }) {
       // Build request body — include memory context when a file is loaded.
       // memContentRef.current is null if no file is loaded or after a page
       // reload (SPEC-800: content is never persisted client-side across tabs).
-      const reqBody = { text: userText, contextID };
+      //
+      // Apply the word cap from the user's input_length preference before
+      // sending.  The thread shows the original; only the backend payload is
+      // capped.  This keeps latency low for users who prefer concise reads.
+      const cappedText = applyInputCap(userText);
+      const reqBody = { text: cappedText, contextID };
       if (memContentRef.current) {
         // Cap at 8000 chars client-side to match backend MessageRequest limit.
         reqBody.memoryContext = memContentRef.current.slice(0, 8000);
@@ -630,7 +742,7 @@ function Chat({ theme, onToggleTheme }) {
     setMessages(prev => prev.map(m => m.id === id ? { ...m, streaming: false } : m));
     setStreaming(false);
     setCurrentEmotion('calm');
-  }, [scrollToBottom, contextID]);
+  }, [scrollToBottom, contextID, applyInputCap]);
 
   const onSend = useCallback((text) => {
     // /help command — reopens the tutorial without sending a message.
@@ -829,7 +941,11 @@ function Chat({ theme, onToggleTheme }) {
         )}
 
         <div className="thread-wrap">
-          <div className="thread" ref={threadRef}>
+          <div
+            className="thread"
+            ref={threadRef}
+            style={safetyVisible ? { paddingBottom: '290px' } : undefined}
+          >
             <div className="thread-inner">
               <div className="session-stamp">Today · session begins</div>
               {messages.map((m, idx) => {
@@ -846,7 +962,7 @@ function Chat({ theme, onToggleTheme }) {
                       <NikkoAvatar emotion={m.emotion || 'calm'} size={42} />
                     </div>
                     <div className="body">
-                      {m.id === lastCompletedAssistantId && <AgentRibbon traceId={m.traceId} />}
+
                       {m.text === '' && m.streaming ? (
                         <ThinkingBubble coldStart={isColdStart} />
                       ) : (
@@ -892,6 +1008,19 @@ function Chat({ theme, onToggleTheme }) {
 
           <div className="composer-wrap">
             <div className="composer-inner">
+              {memBanner && (
+                <MemBanner
+                  type={memBanner}
+                  onDismiss={() => {
+                    clearTimeout(memBannerAutoRef.current);
+                    setMemBanner(null);
+                  }}
+                  onOpenLoad={() => {
+                    setMemBanner(null);
+                    setLoadOpen(true);
+                  }}
+                />
+              )}
               {safetyVisible && <SafetyBanner onDismiss={() => setSafetyVisible(false)} />}
               <Composer onSend={onSend} disabled={streaming} />
               {/* G-UI-01: persistent AI disclaimer — always visible per REQ-300-164 */}

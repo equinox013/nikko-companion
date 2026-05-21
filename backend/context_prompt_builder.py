@@ -194,6 +194,64 @@ _ADP_B_SYSTEM = (
 
 # ── Public builders ───────────────────────────────────────────────────────────
 
+def _parse_memory_prefs(usm_content: str) -> dict[str, str]:
+    """
+    Extract key:value pairs from the ## User Preferences section of a USM file.
+
+    Returns a dict such as:
+      { "tone": "practical", "response_length": "brief", "input_length": "verbose" }
+
+    Keys not present in the file are absent from the dict — callers should use
+    .get() with a sensible default rather than assuming all keys are present.
+    """
+    import re as _re
+    prefs: dict[str, str] = {}
+    match = _re.search(
+        r"^##\s*User Preferences\s*\n([\s\S]*?)(?=\n##|$)",
+        usm_content,
+        _re.MULTILINE,
+    )
+    if not match:
+        return prefs
+    for line in match.group(1).split("\n"):
+        pair = _re.match(r"^([\w_]+):\s*(.+)$", line.strip())
+        if pair:
+            prefs[pair.group(1)] = pair.group(2).strip()
+    return prefs
+
+
+# ── Preference → prompt text mappings ────────────────────────────────────────
+# These translate the structured key:value prefs from the memory file into
+# concrete instructions ADP-A can follow.  Kept here (not in the memory file)
+# so the Director can tune wording without touching user data.
+
+_TONE_INSTRUCTIONS: dict[str, str] = {
+    "understanding": (
+        "Tone: UNDERSTANDING — prioritise making the user feel fully heard. "
+        "Lead with validation and reflection. Offer perspective or information only "
+        "if the user explicitly asks or the mode requires it."
+    ),
+    "balanced": (
+        "Tone: BALANCED — acknowledge feelings genuinely, then gently offer "
+        "perspective or information where it fits naturally. Neither pure validation "
+        "nor pure advice."
+    ),
+    "practical": (
+        "Tone: PRACTICAL — keep empathy brief and direct; move toward concrete "
+        "framing or next-step thinking without lingering on feelings."
+    ),
+}
+
+_LENGTH_INSTRUCTIONS: dict[str, str] = {
+    "brief":    "Response length: BRIEF — 2–3 sentences maximum. Be concise.",
+    "standard": "Response length: STANDARD — write as much as the moment calls for.",
+    "detailed": "Response length: DETAILED — unpack fully; depth is welcome here.",
+}
+
+# Note: input_length is applied client-side (word-cap on the textarea) so it
+# is not injected into the system prompt — no instruction needed here.
+
+
 def build_adp_a_system(context: ResponseContextPayload) -> str:
     """
     Build the ADP-A (Qwen3-4B) system prompt from the full ResponseContextPayload.
@@ -236,11 +294,53 @@ def build_adp_a_system(context: ResponseContextPayload) -> str:
             "---\n"
             f"{mem_snippet}\n"
             "---\n"
-            "Use this context to personalise your response. "
-            "If the user's name is provided above, address them by it naturally. "
+            "Use this context to personalise your response where it is relevant "
+            "to what the user has actually said in this conversation. "
+            "If the user's name is provided above, address them by it naturally "
+            "when it fits — do not force it into every message. "
+            "If the memory content is not relevant to the current topic, set it "
+            "aside silently — do not reference or paraphrase it unprompted. "
             "Do NOT infer clinical diagnoses, crisis state, or ongoing care needs "
             "from memory content alone.  The live conversation is your primary signal."
         )
+
+        # ── Personalisation preferences (from ## User Preferences section) ──
+        # Parse structured key:value prefs and inject concrete instructions.
+        # These override the generic framing from SupportStrategyAgent when
+        # the user has explicitly declared a preference.
+        #
+        # Safety override: in high-distress Comfort Mode, the SupportStrategy
+        # agent's empathy framing takes precedence — we inject prefs as a
+        # secondary modifier, not a hard override, so the model can still lead
+        # with emotional acknowledgement even if the user prefers "practical".
+        prefs = _parse_memory_prefs(context.usm_content)
+
+        pref_lines: list[str] = []
+
+        tone_key = prefs.get("tone", "")
+        if tone_key in _TONE_INSTRUCTIONS:
+            pref_lines.append(_TONE_INSTRUCTIONS[tone_key])
+
+        length_key = prefs.get("response_length", "")
+        if length_key in _LENGTH_INSTRUCTIONS:
+            pref_lines.append(_LENGTH_INSTRUCTIONS[length_key])
+
+        if pref_lines:
+            is_high_distress_comfort = (
+                context.mode == OperationalMode.COMFORT
+                and context.strategy
+                and getattr(context.strategy, "distress_level", 0) >= 7
+            )
+            caveat = (
+                " (note: high distress detected — lead with emotional acknowledgement "
+                "before applying this preference)"
+                if is_high_distress_comfort else ""
+            )
+            parts.append(
+                "\nUSER PREFERENCES (honoured from memory file):\n"
+                + "\n".join(pref_lines)
+                + caveat
+            )
 
     # ── Strategy guidance (tone + framing from SupportStrategyAgent) ─────────
     # The SupportStrategyAgent has already determined the optimal tone for this
