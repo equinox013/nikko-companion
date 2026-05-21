@@ -111,7 +111,9 @@ Each `chunk` event:
   "emotion": "calm | listen | search | speak | care | think",
   "sourcesUsed": ["s_sleep", "s_breath"],
   "safetyFlags": [],
-  "trace": null
+  "trace": null,
+  "memory_proposal": null,
+  "technique_recommended": null
 }
 ```
 
@@ -121,7 +123,9 @@ Each `chunk` event:
 | `emotion` | string | One of the six avatar states (see table below). |
 | `sourcesUsed` | string[] | Source keys for the citation library. Empty on most chunks. |
 | `safetyFlags` | string[] | `["crisis_detected"]` on crisis path. Empty otherwise. |
-| `trace` | object \| null | **Phase 7 addition.** Pipeline trace for the agent debug panel. Only present on the final substantive chunk of a response (never on the empty `emotion: "think"` signal chunk). Shape: `{is_crisis, flags, verdict, regen, elapsed, adp_b: {label, verdict, flags}, adp_a: {label, chars}, adp_c: {label, verdict, regen}}`. Frontend stores this in `NikkoAgentLog` for the debug overlay. `null` on fallback/canned responses. |
+| `trace` | object \| null | **Phase 7 addition.** Pipeline trace for the agent debug panel. Only present on the final substantive chunk. Shape: `{is_crisis, flags, verdict, regen, elapsed, adp_b, adp_a, adp_c}`. Frontend stores in `NikkoAgentLog`. `null` on fallback/canned responses. |
+| `memory_proposal` | object \| null | **Phase 6 addition.** Present on the final chunk when `_AFFIRMATION_RE` matches the user message. Shape: `{canonical: string, usm_entry: string}`. Frontend surfaces an inline proposal card. Only emitted when a `.enc` file is loaded (`memContentRef && sessionKeyRef`). Mutually exclusive with `technique_recommended` per turn. |
+| `technique_recommended` | object \| null | **Phase 6 addition.** Present on the final chunk when `_RESPONSE_RECOMMEND_RE` matches ADP-A output (APPROVE path only). Shape: `{canonical: string, usm_entry: string}`. Frontend surfaces `TechniqueCheckInBanner` (accent-bordered popup). Suppressed if `memory_proposal` fired on the same turn. |
 
 End-of-message footer:
 

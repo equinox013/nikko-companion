@@ -471,6 +471,47 @@ The initial CSAM plural pattern was `\bloli\b` — singular only. Plural forms (
 
 ---
 
+## 2026-05-21 (Session 2) — Phase 6: Technique Check-in Banner (Memory Write-back Phase 1)
+
+### What we did
+
+- **`technique_recommended` field** added to `SSEChunk` in `backend/main.py`.
+- **`_RESPONSE_RECOMMEND_RE`**: regex scanning ADP-A output for technique recommendation language (e.g. "try deep breathing", "you might find journalling helpful").
+- **`_TECHNIQUE_CANONICAL`**: 15-entry ordered dict mapping raw regex matches to canonical technique names and pre-written first-person USM entries (e.g. `"Nikko suggested deep breathing on [date]"`).
+- **`_detect_technique_in_response()`**: runs after the ADP-C APPROVE pass. Result emitted as `technique_recommended` on the final SSE chunk. Suppressed if `memory_proposal` already fired on the same turn — the two write-back paths are mutually exclusive per turn.
+- **`_AFFIRMATION_RE` expanded**: added present-tense patterns to fix silent-drop bug — `"help a lot"`, `"find this helpful"`, `"works for me"` now all match. Previously only past-tense affirmations were caught.
+- **`TechniqueCheckInBanner`** component added to `chat.jsx`: popup styled like the crisis `SafetyBanner` but with an accent-coloured border (`.technique-checkin-banner` in `styles.css`) — visually distinct from crisis red. User can accept or dismiss.
+- **`techniqueCheckIn` state** and **`onCheckInAdd` callback** in `chat.jsx`: on accept, the pre-written entry is promoted into `pendingEntries` and merged into `memContentRef` for the session.
+- **Guards**: both `TechniqueCheckInBanner` and the memory proposal card are gated on `memContentRef && sessionKeyRef` — they only surface when an encrypted `.enc` file is actively loaded. No write-back UI surfaces on a session without a loaded memory file.
+- **Compile and deploy**: stripped null bytes from `chat_compile.jsx`, compiled clean via `esbuild@0.25.3` to 726-line `chat.js` (42.5 KB). Verified `techniqueCheckIn` present 11× in compiled output.
+- **Docs updated**: `FRONTEND_INTEGRATION_SPEC.md` SSE chunk field table updated with `memory_proposal` and `technique_recommended` fields. GLOSSARY updated with `Technique check-in` and `pendingEntries` terms. README write-back section expanded.
+
+### Decisions & justifications
+
+| Decision | Justification |
+|----------|--------------|
+| Technique detection runs on ADP-A output, not user message | The user doesn't say "you recommended breathing" — Nikko does. The signal to detect is in the response, not the input. Scanning the ADP-A output is the only reliable source. |
+| Detection runs only on APPROVE, not REGENERATE or safe fallback | A regenerated or fallback response was not the intended output — it should not trigger a memory write. APPROVE is the only path where the response is considered authoritative. |
+| Mutually exclusive with `memory_proposal` per turn | Surfacing two write-back prompts in the same turn would be confusing and intrusive. One is enough. Affirmation proposal (user-side detection) takes precedence; technique check-in (response-side detection) is suppressed if the former fires. |
+| Popup style (accent border) rather than inline chat bubble | The check-in is a UI action, not a conversational message. Inline bubbles are part of the conversation record; this is an ephemeral prompt to act. The `SafetyBanner` popup pattern is the established precedent for non-conversation UI overlays. |
+| `pendingEntries` in React state, not immediate re-encrypt | Full re-encrypt-in-place requires `sessionKeyRef` infrastructure and a download trigger. That is the next pass. Accumulating accepted entries in state first is the correct incremental step — it unblocks the UX without blocking on the crypto plumbing. |
+| `_AFFIRMATION_RE` present-tense patterns added alongside fix | The silent-drop bug (past-tense-only matching) was discovered while testing `TechniqueCheckInBanner`. Fixed in the same commit because the two features share the mutual-exclusion logic — an undertested `_AFFIRMATION_RE` would have produced incorrect suppression decisions. |
+
+### Where I went wrong
+
+**`_AFFIRMATION_RE` only matched past-tense affirmations.** Phrases like "help a lot", "find this helpful", and "works for me" — common present-tense ways a user confirms something helped — all fell through silently. The bug had been present since affirmation detection was introduced but was only discovered when writing the mutual-exclusion logic for technique check-in. Testing a new feature exposed a gap in an existing one I hadn't caught. The fix was straightforward once found; the lesson is that detection regex needs explicit test cases for tense variants, not just the forms that come to mind during initial design.
+
+**Null bytes in `chat_compile.jsx` caused a silent esbuild failure.** The compile step failed without a useful error message until the null bytes were stripped. Source file hygiene — particularly after any bash-based write — needs a null-byte check before compilation. This is the same class of issue as the CRLF corruption from 2026-05-16; the pattern is consistent enough that I should add a pre-compile validation step.
+
+### Learnings
+
+- Detection logic for write-back features needs to be tested across tense, phrasing, and person (first/second/third) — not just the canonical form. Affirmations especially come in a wide range of natural-language forms.
+- Mutual-exclusion logic between two detection paths is a forcing function for testing both. Writing the suppression condition exposed the affirmation bug immediately because I had to reason through what would happen if both fired.
+- Incremental write-back (accumulate to `pendingEntries` → re-encrypt later) is the right shape: it delivers user value immediately without blocking on the crypto infrastructure. The alternative — waiting until the full re-encrypt pipeline is ready — would have delayed the UX indefinitely.
+- Popup UI for write-back prompts (not inline bubbles) is architecturally cleaner. Inline messages are the conversation record; write-back prompts are transient UI actions. Mixing them would make the conversation thread unreliable as a record.
+
+---
+
 ## Template for future entries
 
 ```

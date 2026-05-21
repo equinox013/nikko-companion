@@ -239,7 +239,13 @@ event: chunk           data: { text: "...", emotion: "speak", safetyFlags: [], t
 event: message_end     data: { id }
 ```
 
-The `trace` field on the substantive chunk carries the full ADP-B / ADP-A / ADP-C result breakdown. The frontend forwards this to the `NikkoAgentLog` pub/sub store, which feeds the pipeline debug overlay.
+The final substantive chunk also carries:
+
+| Field | Description |
+|-------|-------------|
+| `trace` | Full ADP-B / ADP-A / ADP-C result breakdown — forwarded to `NikkoAgentLog` for the debug overlay |
+| `memory_proposal` | Affirmation detected in user message; pre-written USM entry offered to user |
+| `technique_recommended` | Technique detected in ADP-A response; pre-written USM entry offered via `TechniqueCheckInBanner`. Suppressed if `memory_proposal` fired on the same turn |
 
 ### ThinkingBubble
 
@@ -303,9 +309,23 @@ The frontend sends the last 10 turns as `conversationHistory` in every POST requ
 - **Loaded banner** — appears on successful file load; auto-dismisses after 7s; shows a lock icon confirming encryption status.
 - **Hint banner** — appears after the user's 3rd message if no memory file is loaded; fires once per session only.
 
-### Memory write-back (planned, Phase 6+)
+### Technique check-in banner (memory write-back — Phase 1)
 
-Nikko currently reads the memory file but cannot contribute to it. Sections like `## Helpful Interventions` and `## Emotional Patterns` are populated by the user manually. A future pass will add lightweight intervention detection in `pipeline.py` (regex/keyword on user message), surface a suggestion card in the UI, and — with a `passwordRef` held for the session — re-encrypt the updated file client-side on confirmation. Server still never sees plaintext; SPEC-800 zero-retention is unaffected.
+When ADP-A recommends a technique (e.g. deep breathing, grounding, journalling), the backend detects it and the frontend surfaces a non-intrusive popup — `TechniqueCheckInBanner` — offering to add a first-person entry to the user's memory file. This is the first concrete memory write-back path.
+
+**How it works:**
+
+- `_RESPONSE_RECOMMEND_RE` (regex in `backend/main.py`) scans ADP-A output for technique recommendation language.
+- `_TECHNIQUE_CANONICAL` maps 15 raw matches to canonical technique names and pre-written first-person USM entries (e.g. `"Nikko recommended deep breathing on [date]"`).
+- `_detect_technique_in_response()` runs after the ADP-C pass — only on APPROVE. Result is emitted as `technique_recommended` on the final SSE chunk.
+- `TechniqueCheckInBanner` in `chat.jsx` shows as an accent-bordered popup (distinct from the crisis red of `SafetyBanner`). User can accept or dismiss.
+- On accept, the entry is promoted into `pendingEntries` and merged into the in-memory decrypted file content via `onCheckInAdd`.
+
+**Guards:** Both the check-in banner and the affirmation proposal card are gated on `memContentRef && sessionKeyRef` — they only surface when an encrypted `.enc` file is actively loaded. The two detections are mutually exclusive per turn: `technique_recommended` is suppressed if `memory_proposal` (affirmation detection) already fired.
+
+**Memory write-back (remaining, Phase 6+)**
+
+The check-in banner adds entries to the in-memory `memContentRef` for the session but does not yet re-encrypt and download the updated file — the user must regenerate their memory file to persist new entries permanently. Full write-back (re-encrypt in-place with `sessionKeyRef`, queue to download on session end) is the next pass.
 
 ---
 
