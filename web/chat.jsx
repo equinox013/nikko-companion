@@ -518,7 +518,9 @@ function Chat({ theme, onToggleTheme }) {
   // onMemoryLoaded(md, name, sessionKey?)
   // sessionKey = { key: CryptoKey, salt: Uint8Array } from decryptMemoryKeepKey().
   // null for plaintext .md files (no encryption path available).
-  const onMemoryLoaded = useCallback((md, name, sessionKey = null) => {
+  // isNew = true when this is a freshly generated file (not loaded from disk).
+  // Prevents a "Welcome back" greeting when the user just created their first file.
+  const onMemoryLoaded = useCallback((md, name, sessionKey = null, isNew = false) => {
     // Store decrypted content in ref — available at send time, not in React state.
     memContentRef.current = md || null;
     // Store session key for write-back re-encryption (REQ-850-033).
@@ -533,17 +535,24 @@ function Chat({ theme, onToggleTheme }) {
       : '';
     setMemUserName(userName);
 
-    // Personalise the welcome-back message if we know the user's name.
-    const greeting = userName
-      ? `Welcome back, ${userName}.`
-      : 'Welcome back.';
+    // Different message for a newly created file vs. loading an existing one.
+    // "Welcome back" is only shown when re-loading a file from a previous session.
+    let chatText;
+    if (isNew) {
+      chatText = userName
+        ? `Your memory file is ready, ${userName}. I'll keep what's there in mind as we talk — you're in charge of what stays.`
+        : `Your memory file is ready. I'll keep what's there in mind as we talk — you're in charge of what stays.`;
+    } else {
+      const greeting = userName ? `Welcome back, ${userName}.` : 'Welcome back.';
+      chatText = `${greeting} Your memory file is loaded — I'll keep what's there in mind, but the live conversation is what I'll really listen to. You're in charge of what stays.`;
+    }
 
     setMessages(prev => [...prev, {
       id: 'wb-' + Date.now(),
       role: 'assistant',
       emotion: 'care',
       streaming: false,
-      text: `${greeting} Your memory file is loaded — I'll keep what's there in mind, but the live conversation is what I'll really listen to. You're in charge of what stays.`
+      text: chatText,
     }]);
     setTimeout(scrollToBottom, 30);
 
@@ -1254,7 +1263,7 @@ function Chat({ theme, onToggleTheme }) {
         <MemoryGenerateModal
           open={memOpen}
           onClose={() => { setMemOpen(false); setPendingBootstrapEntry(null); }}
-          onCreated={(md) => { setMemOpen(false); setPendingBootstrapEntry(null); onMemoryLoaded(md, 'nikko-memory'); }}
+          onCreated={(md) => { setMemOpen(false); setPendingBootstrapEntry(null); onMemoryLoaded(md, 'nikko-memory', null, true); }}
           initialEntries={pendingBootstrapEntry ? [pendingBootstrapEntry] : []}
         />
       )}

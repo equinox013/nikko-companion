@@ -155,6 +155,7 @@ body::before {
 .topbar .pill .dot {
   display: inline-block;
   width: 6px; height: 6px; border-radius: 50%;
+  vertical-align: middle;
   background: var(--sun);
   margin-right: 6px;
   vertical-align: middle;
@@ -833,7 +834,8 @@ body::before {
 /* Accent color matches memory UI; distinct from SafetyBanner (crisis). */
 .technique-checkin-banner {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
+  flex-wrap: wrap;
   gap: 10px;
   padding: 11px 14px;
   margin-bottom: 6px;
@@ -2529,8 +2531,12 @@ body::before {
 .opill-tip {
   position: absolute;
   bottom: calc(100% + 10px);
-  left: 50%;
-  transform: translateX(-50%);
+  /* Left-aligned to the pill so the tooltip never overflows the modal's left
+     edge. 220px is well within the modal content width (~484px) for any pill
+     position. Previously centered (left:50% translateX(-50%)) which caused
+     overflow-x clipping when the modal's overflow-y:auto forced overflow-x:auto. */
+  left: 0;
+  transform: none;
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 10px;

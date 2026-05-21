@@ -326,7 +326,7 @@ def _detect_memory_candidate(
 # "take" is included because comfort-mode responses tend to say "take a deep breath"
 # rather than "try breathing exercises"; "let's" covers "let's try/do X" phrasing.
 _RESPONSE_RECOMMEND_RE = re.compile(
-    r"\b(?:try|practice|use|consider|take|let's|give\s+(?:it|this|that)\s+a\s+try|experiment\s+with)\b"
+    r"\b(?:try|practice|use|consider|tak(?:e|ing)|let's|give\s+(?:it|this|that)\s+a\s+try|experiment\s+with)\b"
     r"[^.!?\n]{0,120}"
     r"\b(box\s+breath(?:ing)?|4[-–]7[-–]8(?:\s+breath(?:ing)?)?|breath(?:ing)?(?:\s+exercise)?s?|"
     r"deep\s+breath(?:ing)?|grounding(?:\s+exercise|\s+technique)?s?|"
