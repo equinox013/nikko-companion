@@ -26,7 +26,7 @@ Design notes
 
 import re
 
-from docs.schemas.acp_schemas import OperationalMode, ResponseContextPayload
+from docs.schemas.acp_schemas import DistressLevel, OperationalMode, ResponseContextPayload
 
 
 # ── USM smart truncation ──────────────────────────────────────────────────────
@@ -329,7 +329,8 @@ def build_adp_a_system(context: ResponseContextPayload) -> str:
             is_high_distress_comfort = (
                 context.mode == OperationalMode.COMFORT
                 and context.strategy
-                and getattr(context.strategy, "distress_level", 0) >= 7
+                and getattr(context.strategy, "distress_level", DistressLevel.LOW)
+                    in (DistressLevel.HIGH, DistressLevel.CRISIS)
             )
             caveat = (
                 " (note: high distress detected — lead with emotional acknowledgement "
