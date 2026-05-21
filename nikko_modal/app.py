@@ -515,7 +515,12 @@ class NikkoInference:
         new_ids = output_ids[0][inputs["input_ids"].shape[1]:]
         return self._qwen_tokenizer.decode(new_ids, skip_special_tokens=True).strip()
 
-    def _analyze_moderation_scope(self, user_text: str, scope_ambiguous: bool = False) -> dict:
+    def _analyze_moderation_scope(
+        self,
+        user_text: str,
+        scope_ambiguous: bool = False,
+        prior_context: str = "",
+    ) -> dict:
         """
         Combined LLM moderation + scope pass (runs for ALL non-regex-blocked messages).
 
@@ -531,6 +536,10 @@ class NikkoInference:
 
         scope_ambiguous is forwarded as a hint in the user content so Qwen knows
         the rule engine was uncertain and should weigh the scope decision carefully.
+
+        prior_context: the immediately preceding assistant turn (≤ 300 chars),
+        included so the LLM can recognise short follow-up messages like
+        "Let me try the deep breathing thing..." as in-scope continuations.
 
         Confidence gate: 0.80 threshold on both checks.
         Safety fallback: always returns no-block on any error (REQ-200-SC3).
@@ -552,8 +561,14 @@ class NikkoInference:
                 "please apply extra care when deciding in_scope.)"
                 if scope_ambiguous else ""
             )
+            # Include prior assistant turn when available so the scope check has
+            # enough context to judge short follow-up turns correctly.
+            context_prefix = (
+                f'Prior assistant turn (for context only): "{prior_context[:300]}"\n'
+                if prior_context else ""
+            )
             raw = self._infer_qwen_analysis(
-                user_content=f'User message: "{user_text}"{ambiguous_note}',
+                user_content=f'{context_prefix}User message: "{user_text}"{ambiguous_note}',
                 system=_MODERATION_SCOPE_SYSTEM,
                 gen_params=ANALYSIS_GEN_PARAMS["moderation_scope"],
             )
@@ -807,7 +822,14 @@ class NikkoInference:
             #   - Edge-case OOS content the ScopeClassifier passed or called AMBIGUOUS
             # scope_ambiguous is forwarded as a hint so Qwen weights scope carefully
             # when the rule engine itself was uncertain (G-HYBRID-01 resolution).
-            mod_scope = self._analyze_moderation_scope(_user_text, scope_ambiguous)
+            # prior_assistant provides the immediately preceding assistant turn so
+            # short follow-up messages are recognised as in-scope continuations.
+            prior_assistant = (
+                messages[-2]["content"]
+                if len(messages) >= 2 and messages[-2].get("role") == "assistant"
+                else ""
+            )
+            mod_scope = self._analyze_moderation_scope(_user_text, scope_ambiguous, prior_assistant)
 
             if mod_scope["moderation_block"]:
                 log.warning(

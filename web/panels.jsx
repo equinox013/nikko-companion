@@ -335,8 +335,11 @@ function MoodDiaryPanel({ entries, onSet, onClose, memoryContent, onMemoryUpdate
 
         {/* Memory file snapshot — controlled div (not <details>) so we own the
             open/close state and the Edit mode can't be accidentally collapsed
-            by the browser's native summary toggle behaviour. */}
-        {memoryContent && hasMemSnap && (
+            by the browser's native summary toggle behaviour.
+            Show whenever a memory file is loaded, even if both sections are
+            empty (new files start with placeholder comments only). Without this
+            guard the Edit button is unreachable on a freshly-generated file. */}
+        {memoryContent && (
           <div className={'mood-memory-snap' + (memSnapOpen ? ' open' : '')}>
             {/* Toggle/header row — clicking anywhere except the Edit button
                 toggles open/close. Locked during edit mode to prevent hiding
@@ -382,6 +385,17 @@ function MoodDiaryPanel({ entries, onSet, onClose, memoryContent, onMemoryUpdate
               <div className="mood-memory-body">
                 {!editingMem ? (
                   <>
+                    {/* Empty-state: file loaded but sections have no real content
+                        (new file starts with <!-- placeholder --> comments only).
+                        Without this the user has no way to discover the Edit button. */}
+                    {!hasMemSnap && (
+                      <div className="mood-mem-empty">
+                        Nothing recorded yet —{' '}
+                        {onMemoryUpdate
+                          ? <><strong>Edit</strong> to add what's helped before.</>
+                          : 'load an encrypted file to edit this section.'}
+                      </div>
+                    )}
                     {memInterventions && (
                       <div className="mood-memory-block">
                         <div className="mood-memory-sublabel">What's helped before</div>
