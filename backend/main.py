@@ -321,11 +321,13 @@ def _detect_memory_candidate(
 
 # ── USM technique recommendation detection (SPEC-850 §9 — response-side) ────
 
-# Matches recommendation language in the assistant's output ("try X", "practice Y").
+# Matches recommendation language in the assistant's output ("try X", "take a breath").
 # Anchored to the same technique vocabulary as _TECHNIQUE_RE but scans Nikko's text.
+# "take" is included because comfort-mode responses tend to say "take a deep breath"
+# rather than "try breathing exercises"; "let's" covers "let's try/do X" phrasing.
 _RESPONSE_RECOMMEND_RE = re.compile(
-    r"\b(?:try|practice|use|consider|give\s+(?:it|this|that)\s+a\s+try|experiment\s+with)\b"
-    r"[^.!?\n]{0,100}"
+    r"\b(?:try|practice|use|consider|take|let's|give\s+(?:it|this|that)\s+a\s+try|experiment\s+with)\b"
+    r"[^.!?\n]{0,120}"
     r"\b(box\s+breath(?:ing)?|4[-–]7[-–]8(?:\s+breath(?:ing)?)?|breath(?:ing)?(?:\s+exercise)?s?|"
     r"deep\s+breath(?:ing)?|grounding(?:\s+exercise|\s+technique)?s?|"
     r"5[-–]4[-–]3[-–]2[-–]1|body\s+scan|progressive\s+muscle\s+relaxation|PMR|"
@@ -375,7 +377,7 @@ def _detect_technique_in_response(
         None — no recommendation detected
         {
             "technique": <display name, e.g. "box breathing">,
-            "section":   "What Helps Me",
+            "section":   "Helpful Interventions",  # matches ## Helpful Interventions in template
             "entry":     <first-person memory entry, REQ-850-021>,
             "raw":       <canonical key for deduplication>,
         }
@@ -387,7 +389,7 @@ def _detect_technique_in_response(
         if pattern.search(response_text):
             return {
                 "technique": raw_key,
-                "section":   "What Helps Me",
+                "section":   "Helpful Interventions",
                 "entry":     entry,
                 "raw":       raw_key,
             }
