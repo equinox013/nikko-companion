@@ -533,3 +533,56 @@ The initial CSAM plural pattern was `\bloli\b` — singular only. Plural forms (
 ### Learnings
 - What was learned that is non-obvious and worth carrying forward.
 ```
+
+---
+
+## 2026-05-21 (Session 3) — Phase 6: Mood Diary Round-trip, Mobile Bottom Sheets, USM Fixes
+
+### What we did
+
+**Mood diary SPEC-800 compliance fix**
+- Removed all `sessionStorage` reads/writes for `moodEntries` in `chat.jsx`. Replaced with `useState({})` — pure React state that clears on page refresh, as required by SPEC-800 zero-retention.
+
+**Mood diary → memory file write path (`panels.jsx`)**
+- Added module-level `formatDiaryEntry(iso, entry)`: serialises a diary entry as `YYYY-MM-DD | mood: N | emotions: x, y | triggers: a, b\nnote: ...`.
+- Rewrote `save()` in `MoodDiaryPanel` as a unified function: commits React state via `onSet`, then writes all diary entries + any memory section edits into `## Mood Diary` / `## Helpful Interventions` / `## Support Notes` in one re-encrypt + download cycle. Previously these were separate code paths.
+- `canSave` logic: Save enabled if diary has data OR user is in memory edit mode. Prevents empty downloads.
+- Removed collapsible "From your memory file" block. Memory section now renders flat above Save button — less friction, no hidden content.
+
+**Mood diary ← memory file read path (`chat.jsx`)**
+- Added `parseDiaryEntries(md)` function: inverse of `formatDiaryEntry`. Parses `## Mood Diary` section back into `{ [iso]: entry }` dict on file load. Handles `YYYY-MM-DD | mood: N | emotions: ... | triggers: ...` format; optional `note:` second line.
+- Wired into `onMemoryLoaded`: calls `setMoodEntries(parseDiaryEntries(md))` immediately after `setMemName(name)`. Round-trip complete: save → encrypt → reload → parse → state restored.
+
+**Mobile bottom sheets (`chat.jsx` + `styles.css`)**
+- At ≤600px: `.chat.floating` panels switch from fixed side cards to bottom sheets (`position: fixed; bottom: 0; left/right: 0; height: 82vh`) with `animation: sheet-up`.
+- `.tab-float` side buttons hidden; replaced by `.mobile-tabbar` fixed at footer — Mood and Sources tabs toggle their sheets, opening one auto-closes the other.
+- `.sheet-backdrop`: full-screen overlay (`z-index: 45`) — tapping outside closes both panels.
+- At ≤480px: gate card goes full-width, modals drop padding, mood chip/pip touch targets enlarged to 44px minimum, research preview pill hidden.
+
+**GitHub URL fix**
+- Research preview tooltip in `chat.jsx` linked to `github.com/nikko-research/nikko` (dead URL). Updated to `github.com/equinox013/nikko-companion`.
+
+**Compile**
+- `chat.jsx` → `chat.js` via `esbuild@0.25.3`. 47.4 KB clean output. Stale bash mount truncation at line 1356 repaired via Python byte-level splice before compile.
+
+### Decisions & justifications
+
+| Decision | Justification |
+|----------|--------------|
+| Pure React state for `moodEntries` (no sessionStorage) | SPEC-800 zero-retention: mood data must not survive a page refresh. sessionStorage survives a refresh in the same tab — React state does not. |
+| `parseDiaryEntries` lives in `chat.jsx`, not `panels.jsx` | `chat.jsx` owns `moodEntries` state and `onMemoryLoaded` — the parse call must be co-located with the callback that updates the state. `panels.jsx` owns the write path only. |
+| Unified Save (diary + memory in one cycle) | Two separate Save actions were confusing and could leave them out of sync. One encrypted download per Save click is simpler and safer — the user always gets a consistent file. |
+| Bottom sheet on ≤600px, not ≤480px | At 600px the side panel overlay starts to crowd the chat thread. 480px is too late — on real phones the panels were already overlapping. 600px matches typical phone landscape + small portrait breakpoints. |
+| Tab bar replaces `.tab-float` buttons on mobile | `.tab-float` floats over the panel body and is hard to tap one-handed. A fixed tab bar at the footer is thumb-friendly and the established mobile pattern. |
+
+### Where I went wrong
+
+**Stale bash mount truncation struck again — twice.** The bash environment saw both `panels.jsx` and `chat.jsx` truncated mid-file after Edit tool writes. The file contents were correct on the Windows host (Read tool confirmed this); the bash mount served a cached, shorter version. Pattern now confirmed: any Edit tool write to a large file followed by a bash/esbuild operation will likely see the truncated version. Fix: always use Python to read the current file content, find the truncation marker, and splice in the correct tail before compiling.
+
+**JSX multi-line comment with box-drawing characters caused an esbuild parse error.** The `{/* ── Mobile bottom tab bar ─────── */}` comment was truncated in the bash-mounted file — the closing `*/}` was missing. esbuild saw an unclosed comment and rejected the file. Not a bug in the comment syntax — a consequence of the same stale mount issue. Repaired via Python splice.
+
+### Learnings
+
+- The bash mount / Edit tool stale-read issue is deterministic, not intermittent. Treat every large JSX file compile as requiring a Python integrity check first.
+- Round-trip data flows (write → encrypt → load → parse) need both paths designed together, not one at a time. The write path shipped first; the read path was missing until the user reported the bug on reload.
+- A unified Save button with clear `canSave` semantics is worth the refactor. The split "Save diary" / "Save memory" approach was discovered to be confusing in production usage within one session.

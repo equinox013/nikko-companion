@@ -19,6 +19,39 @@ function AiDisclaimer() {
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
+function parseDiaryEntries(md) {
+  if (!md) return {};
+  const re = /^##\s*Mood Diary\s*$/m;
+  const match = md.match(re);
+  if (!match) return {};
+  const start = match.index + match[0].length;
+  const next = md.indexOf("\n##", start);
+  const body = (next === -1 ? md.slice(start) : md.slice(start, next)).replace(/<!--[\s\S]*?-->/g, "").trim();
+  if (!body) return {};
+  const result = {};
+  for (const block of body.split(/\n\n+/)) {
+    const lines = block.trim().split("\n");
+    if (!lines[0]) continue;
+    const parts = lines[0].split(" | ");
+    const iso = parts[0]?.trim();
+    if (!iso || !/^\d{4}-\d{2}-\d{2}$/.test(iso)) continue;
+    const entry = { mood: 0, emotions: [], triggers: [], note: "", journal: "" };
+    for (let i = 1; i < parts.length; i++) {
+      const p = parts[i].trim();
+      if (p.startsWith("mood:")) {
+        const n = parseInt(p.slice(5).trim(), 10);
+        if (!isNaN(n) && n >= 1 && n <= 10) entry.mood = n;
+      } else if (p.startsWith("emotions:")) {
+        entry.emotions = p.slice(9).split(",").map((s) => s.trim()).filter(Boolean);
+      } else if (p.startsWith("triggers:")) {
+        entry.triggers = p.slice(9).split(",").map((s) => s.trim()).filter(Boolean);
+      }
+    }
+    if (lines[1]?.startsWith("note:")) entry.note = lines[1].slice(5).trim();
+    result[iso] = entry;
+  }
+  return result;
+}
 function renderInline(text, sourceOrder, onCiteClick) {
   const parts = [];
   const re = /(\*\*[^*]+\*\*)|(\[\^s_[a-z_]+\])/g;
@@ -308,6 +341,8 @@ function Chat({ theme, onToggleTheme }) {
     sessionKeyRef.current = sessionKey;
     setMemLoaded(true);
     setMemName(name);
+    const parsedDiary = parseDiaryEntries(md);
+    if (Object.keys(parsedDiary).length > 0) setMoodEntries(parsedDiary);
     const userName = typeof parseMemoryName === "function" ? parseMemoryName(md) : "";
     setMemUserName(userName);
     let chatText;
@@ -338,20 +373,7 @@ function Chat({ theme, onToggleTheme }) {
     }
   }, [messages, memLoaded, memBanner]);
   useEffect(() => () => clearTimeout(memBannerAutoRef.current), []);
-  const [moodEntries, setMoodEntries] = useState(() => {
-    try {
-      const raw = sessionStorage.getItem("nikko.mood");
-      return raw ? JSON.parse(raw) : {};
-    } catch (e) {
-      return {};
-    }
-  });
-  useEffect(() => {
-    try {
-      sessionStorage.setItem("nikko.mood", JSON.stringify(moodEntries));
-    } catch (e) {
-    }
-  }, [moodEntries]);
+  const [moodEntries, setMoodEntries] = useState({});
   const setMoodEntry = (iso, val) => {
     setMoodEntries((prev) => {
       const next = { ...prev };
@@ -599,7 +621,7 @@ function Chat({ theme, onToggleTheme }) {
       "aria-hidden": "true"
     },
     /* @__PURE__ */ React.createElement(NikkoAvatar, { emotion: liveEmotion, size: 34 })
-  ), /* @__PURE__ */ React.createElement("span", { className: "wordmark" }, "Nikko")), /* @__PURE__ */ React.createElement("div", { className: "divider" }), /* @__PURE__ */ React.createElement("div", { className: "tip-host" }, /* @__PURE__ */ React.createElement("span", { className: "pill linklike", tabIndex: 0 }, /* @__PURE__ */ React.createElement("span", { className: "dot" }), "Research preview"), /* @__PURE__ */ React.createElement("div", { className: "tip", role: "tooltip" }, "Nikko is an open research preview \u2014 non-diagnostic, not a clinician, implementation publicly visible at", " ", /* @__PURE__ */ React.createElement("a", { href: "https://github.com/nikko-research/nikko", target: "_blank", rel: "noopener noreferrer" }, "github.com/nikko-research/nikko"), ".")), memLoaded && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { className: "divider" }), /* @__PURE__ */ React.createElement(
+  ), /* @__PURE__ */ React.createElement("span", { className: "wordmark" }, "Nikko")), /* @__PURE__ */ React.createElement("div", { className: "divider" }), /* @__PURE__ */ React.createElement("div", { className: "tip-host research-pill" }, /* @__PURE__ */ React.createElement("span", { className: "pill linklike", tabIndex: 0 }, /* @__PURE__ */ React.createElement("span", { className: "dot" }), "Research preview"), /* @__PURE__ */ React.createElement("div", { className: "tip", role: "tooltip" }, "Nikko is an open research preview \u2014 non-diagnostic, not a clinician, implementation publicly visible at", " ", /* @__PURE__ */ React.createElement("a", { href: "https://github.com/equinox013/nikko-companion", target: "_blank", rel: "noopener noreferrer" }, "github.com/equinox013/nikko-companion"), ".")), memLoaded && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { className: "divider" }), /* @__PURE__ */ React.createElement(
     "span",
     {
       className: "mem-indicator",
@@ -745,7 +767,50 @@ function Chat({ theme, onToggleTheme }) {
       onClose: () => setRightTab(null),
       dynamicSources
     }
-  )), memOpen && /* @__PURE__ */ React.createElement(
+  ), (leftTab || rightTab) && /* @__PURE__ */ React.createElement(
+    "div",
+    {
+      className: "sheet-backdrop",
+      onClick: () => {
+        setLeftTab(null);
+        setRightTab(null);
+      },
+      "aria-hidden": "true"
+    }
+  ), /* @__PURE__ */ React.createElement("nav", { className: "mobile-tabbar", "aria-label": "Panels" }, /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      className: "mtab" + (leftTab === "mood" ? " active" : ""),
+      "aria-pressed": leftTab === "mood",
+      "aria-label": "Mood diary",
+      onClick: () => {
+        setLeftTab((v) => v === "mood" ? null : "mood");
+        setRightTab(null);
+      }
+    },
+    /* @__PURE__ */ React.createElement("svg", { viewBox: "0 0 16 16", fill: "none", stroke: "currentColor", strokeWidth: "1.5", strokeLinecap: "round", strokeLinejoin: "round" }, /* @__PURE__ */ React.createElement("rect", { x: "2.5", y: "3.5", width: "11", height: "10", rx: "1.5" }), /* @__PURE__ */ React.createElement("path", { d: "M2.5 6h11M5 2.5v3M11 2.5v3" })),
+    "Mood"
+  ), /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      className: "mtab sources" + (rightTab === "sources" ? " active" : ""),
+      "aria-pressed": rightTab === "sources",
+      "aria-label": "Sources",
+      onClick: () => {
+        if (rightTab !== "sources") {
+          if (lastResponseSourcesRef.current.length > 0) {
+            setDynamicSources(lastResponseSourcesRef.current);
+          }
+          setRightTab("sources");
+        } else {
+          setRightTab(null);
+        }
+        setLeftTab(null);
+      }
+    },
+    /* @__PURE__ */ React.createElement("svg", { viewBox: "0 0 16 16", fill: "none", stroke: "currentColor", strokeWidth: "1.5", strokeLinecap: "round", strokeLinejoin: "round" }, /* @__PURE__ */ React.createElement("path", { d: "M3 2.5h7l2.5 2.5v8.5H3z" }), /* @__PURE__ */ React.createElement("path", { d: "M3 5.5h6M3 8h7M3 10.5h5" })),
+    "Sources"
+  ))), memOpen && /* @__PURE__ */ React.createElement(
     MemoryGenerateModal,
     {
       open: memOpen,
@@ -772,4 +837,3 @@ function Chat({ theme, onToggleTheme }) {
     }
   ), /* @__PURE__ */ React.createElement(Tutorial, { open: tutorialOpen, onSkip: closeTutorial, onDone: closeTutorial }), /* @__PURE__ */ React.createElement(AgentDebugOverlay, { open: debugOpen, onClose: () => setDebugOpen(false) }));
 }
-Object.assign(window, { Chat });

@@ -103,6 +103,35 @@ Power-user / researcher view. Reveals the full SPEC-700 pipeline including every
 
 The debug overlay is for inspection only — it does not change behaviour. Trace data lives in memory on the device and is cleared on refresh.
 
+## Mobile layout (≤600px)
+
+At ≤600px (typical phone portrait), the side panel cards switch to bottom sheets:
+
+- `.chat.floating .left-float` and `.right-float` panels become `position: fixed; bottom: 0; left/right: 0; height: 82vh`, sliding up via `@keyframes sheet-up`.
+- `.tab-float` side buttons are hidden (`display: none`). Replaced by `.mobile-tabbar` fixed at the footer — two tabs (Mood, Sources) that toggle their respective sheets.
+- `.sheet-backdrop` — full-screen overlay (`z-index: 45`) that closes both panels on tap.
+- Opening one panel auto-closes the other: click handlers call `setLeftTab(null)` / `setRightTab(null)` on open.
+- Composer lifts above the tab bar via `padding-bottom` on `.chat-composer`.
+
+At ≤480px additional fixes apply: gate card full-width, modals drop horizontal padding, mood chip and pip touch targets enlarged to 44px minimum, research preview pill hidden.
+
+**Design rule:** the bottom sheet opening animation (`sheet-up`) uses `--t-med` (280ms) easing — consistent with all other modal transitions in the system. Do not make it faster; on low-end phones it looks like a flash.
+
+## Mood diary round-trip
+
+The diary stores data in two layers:
+
+1. **Session layer** — React state (`moodEntries` in `chat.jsx`). Cleared on refresh (SPEC-800). Never touches sessionStorage.
+2. **Durable layer** — `## Mood Diary` section of the encrypted memory file. Written by `MoodDiaryPanel.save()` via `formatDiaryEntry()` in `panels.jsx`. Read back by `parseDiaryEntries()` in `chat.jsx` inside `onMemoryLoaded`.
+
+Serialisation format (one block per entry, blank-line separated):
+```
+YYYY-MM-DD | mood: N | emotions: a, b | triggers: c
+note: free text
+```
+
+If either function is changed, change both — they are an inverse pair and will silently break the round-trip if they diverge.
+
 ## File map (updated)
 - `Nikko.html` — entry point; loads scripts in dependency order.
 - `styles.css` — all tokens + component CSS.

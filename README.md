@@ -1,5 +1,6 @@
 ![docs/assets/nikko-banner.png](docs/assets/nikko-banner.png)
 
+[![GitHub](https://img.shields.io/badge/github-equinox013%2Fnikko--companion-black?logo=github)](https://github.com/equinox013/nikko-companion)
 ![Status](https://img.shields.io/badge/status-MVP-brightgreen)
 ![Phase](https://img.shields.io/badge/phase-6%20%E2%80%94%20evaluation-blue)
 ![Models](https://img.shields.io/badge/models-Qwen3--4B%20%2B%20Gemma--2--2b-informational)
@@ -326,6 +327,14 @@ When ADP-A recommends a technique (e.g. deep breathing, grounding, journalling),
 **Memory write-back (remaining, Phase 6+)**
 
 The check-in banner adds entries to the in-memory `memContentRef` for the session but does not yet re-encrypt and download the updated file — the user must regenerate their memory file to persist new entries permanently. Full write-back (re-encrypt in-place with `sessionKeyRef`, queue to download on session end) is the next pass.
+
+### Mood diary round-trip
+
+The mood diary is a session-local feature with an optional durable channel via the USM memory file.
+
+- **Session state:** `moodEntries` lives in React state only (`useState({})`). It clears on page refresh, consistent with SPEC-800 zero-retention. `sessionStorage` is not used.
+- **Write path:** `MoodDiaryPanel.save()` serialises all logged entries using `formatDiaryEntry(iso, entry)` into a `## Mood Diary` section of the decrypted memory file content, then re-encrypts and downloads it in a single cycle.
+- **Read path:** When the user re-loads their memory file, `onMemoryLoaded` calls `parseDiaryEntries(md)` to parse the `## Mood Diary` section back into the `moodEntries` state dict. The round-trip format is `YYYY-MM-DD | mood: N | emotions: x, y | triggers: a, b\nnote: ...` — one block per entry, separated by blank lines.
 
 ---
 

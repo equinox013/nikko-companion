@@ -23,6 +23,56 @@ function AiDisclaimer() {
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
+// ── Mood diary section parser ──────────────────────────────────────
+// Inverse of formatDiaryEntry() in panels.jsx. Reads the ## Mood Diary
+// section of a memory Markdown file and reconstructs the moodEntries
+// dict so the diary panel is pre-populated when a file is (re-)loaded.
+//
+// Expected per-entry format (one blank line between entries):
+//   YYYY-MM-DD | mood: N | emotions: x, y | triggers: a, b
+//   note: optional free text
+function parseDiaryEntries(md) {
+  if (!md) return {};
+  // Extract ## Mood Diary section body (mirrors parseMemSection logic).
+  const re = /^##\s*Mood Diary\s*$/m;
+  const match = md.match(re);
+  if (!match) return {};
+  const start = match.index + match[0].length;
+  const next  = md.indexOf('\n##', start);
+  const body  = (next === -1 ? md.slice(start) : md.slice(start, next))
+    .replace(/<!--[\s\S]*?-->/g, '')  // strip placeholder comments
+    .trim();
+  if (!body) return {};
+
+  const result = {};
+  for (const block of body.split(/\n\n+/)) {
+    const lines = block.trim().split('\n');
+    if (!lines[0]) continue;
+    // First line: ISO-date | key: value | key: value ...
+    const parts = lines[0].split(' | ');
+    const iso = parts[0]?.trim();
+    if (!iso || !/^\d{4}-\d{2}-\d{2}$/.test(iso)) continue;
+
+    const entry = { mood: 0, emotions: [], triggers: [], note: '', journal: '' };
+    for (let i = 1; i < parts.length; i++) {
+      const p = parts[i].trim();
+      if (p.startsWith('mood:')) {
+        const n = parseInt(p.slice(5).trim(), 10);
+        if (!isNaN(n) && n >= 1 && n <= 10) entry.mood = n;
+      } else if (p.startsWith('emotions:')) {
+        entry.emotions = p.slice(9).split(',').map(s => s.trim()).filter(Boolean);
+      } else if (p.startsWith('triggers:')) {
+        entry.triggers = p.slice(9).split(',').map(s => s.trim()).filter(Boolean);
+      }
+    }
+    // Optional second line: note: ...
+    if (lines[1]?.startsWith('note:')) entry.note = lines[1].slice(5).trim();
+
+    result[iso] = entry;
+  }
+  return result;
+}
+
 // ── Inline rendering: bold + cite superscripts ─────────────────────
 function renderInline(text, sourceOrder, onCiteClick) {
   const parts = [];
@@ -532,6 +582,13 @@ function Chat({ theme, onToggleTheme }) {
     setMemLoaded(true);
     setMemName(name);
 
+    // Restore diary entries from the ## Mood Diary section.
+    // Inverse of save() → formatDiaryEntry() in panels.jsx.
+    // Only overwrites if the file actually has diary data (preserves any
+    // in-session entries the user logged before loading the file).
+    const parsedDiary = parseDiaryEntries(md);
+    if (Object.keys(parsedDiary).length > 0) setMoodEntries(parsedDiary);
+
     // Extract the user's name from the ## Name section (if they set one).
     // parseMemoryName() is exported from memory.jsx and available on window.
     const userName = (typeof parseMemoryName === 'function')
@@ -986,8 +1043,8 @@ function Chat({ theme, onToggleTheme }) {
             <div className="tip" role="tooltip">
               Nikko is an open research preview — non-diagnostic, not a clinician,
               implementation publicly visible at{' '}
-              <a href="https://github.com/nikko-research/nikko" target="_blank" rel="noopener noreferrer">
-                github.com/nikko-research/nikko
+              <a href="https://github.com/equinox013/nikko-companion" target="_blank" rel="noopener noreferrer">
+                github.com/equinox013/nikko-companion
               </a>.
             </div>
           </div>
