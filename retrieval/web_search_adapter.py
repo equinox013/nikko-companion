@@ -665,7 +665,20 @@ class WebSearchAdapter(CachedBaseAdapter):
         grey_flag = True  # all web results are grey-literature (REQ-200-ER3)
 
         # ---- Cache write -----------------------------------------------
-        expires_at = self._save_to_cache(params.query, all_items)
+        # Only cache non-empty results.  If the search returned 0 items due to
+        # a transient rate-limit or API failure (ddgs returning [] instead of
+        # raising an exception), we MUST NOT cache the empty result — doing so
+        # would serve stale 0-item responses for the full 3-day TTL and mask
+        # the underlying issue.  The next request will retry the live search.
+        if not all_items:
+            logger.warning(
+                "[WebSearch] 0 items after Phase 1+2 for query '%s' — "
+                "skipping cache write so the next request retries live search.",
+                params.query[:80],
+            )
+            expires_at = None
+        else:
+            expires_at = self._save_to_cache(params.query, all_items)
 
         return RetrievalResult(
             source_name          = self.SOURCE_NAME,
@@ -792,12 +805,23 @@ class WebSearchAdapter(CachedBaseAdapter):
             logger.warning("[WebSearch] Phase 1: no domains selected — skipping.")
             return []
 
+        # Build the site: clause WITHOUT outer parentheses.
+        # Google Lite and Bing (the backends used by ddgs>=6 and duckduckgo_search
+        # respectively) handle "site:X OR site:Y query" correctly, but the
+        # parenthesised form "(site:X OR site:Y) query" can cause 0-result responses
+        # because parentheses are not part of standard boolean search syntax on
+        # these engines.  Removing them restores reliable results.  (Phase 6 finding)
         site_clause = " OR ".join(f"site:{d}" for d in selected_domains)
-        ddg_query   = f"({site_clause}) {query}"
+        ddg_query   = f"{site_clause} {query}"
 
         raw_results = self._ddg_search(ddg_query, max_results)
         if isinstance(raw_results, RetrievalError):
             return raw_results
+
+        logger.info(
+            "[WebSearch] Phase 1: DDG returned %d raw results before sanctioned filter.",
+            len(raw_results),
+        )
 
         # Filter: only keep results whose URL actually resolves to ANY sanctioned
         # domain (not just the selected subset) — a mis-routing is safer to
