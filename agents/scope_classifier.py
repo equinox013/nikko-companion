@@ -115,6 +115,13 @@ _OUT_OF_SCOPE_PATTERNS: list[tuple[re.Pattern, float]] = [
     # --- Mathematics / engineering ---
     (re.compile(r"\b(solve|calculate|compute|derive|integrate|differentiate)\s+(the\s+)?(equation|formula|integral|derivative|matrix|polynomial)\b", re.I), 0.85),
     (re.compile(r"[=+\-*/^]{2,}|∑|∫|√|∂|∇|\d+\s*[+\-*/^]\s*\d+\s*=", re.I), 0.80),
+    # Bare arithmetic questions — "what's 1+1?", "what is 2*3", "what's 100/5".
+    # The existing pattern above requires consecutive operators or a trailing '='
+    # so "1+1?" slips through.  This pattern anchors on the question framing so
+    # "my mood dropped from 8 to 3" (single digit, no operator query) is safe.
+    (re.compile(r"\bwhat(?:'s| is)\s+\d+\s*[+\-*/×÷]\s*\d+", re.I), 0.90),
+    # Word-form arithmetic — "what is two plus two", "what's five times three".
+    (re.compile(r"\bwhat(?:'s| is)\s+(one|two|three|four|five|six|seven|eight|nine|ten|\d+)\s+(plus|minus|times|divided\s+by|over|multiplied\s+by)\s+(one|two|three|four|five|six|seven|eight|nine|ten|\d+)\b", re.I), 0.90),
 
     # --- Recipes / food ---
     (re.compile(r"\b(recipe|ingredient|tablespoon|teaspoon|bake|fry|simmer|preheat|oven|degrees (celsius|fahrenheit))\b", re.I), 0.85),
