@@ -279,7 +279,7 @@ function downloadFile(name, content) {
     URL.revokeObjectURL(url);
   }, 200);
 }
-function MemoryGenerateModal({ open, onClose, onCreated }) {
+function MemoryGenerateModal({ open, onClose, onCreated, initialEntries = [] }) {
   const [step, setStep] = React.useState("disclosure");
   const [acked, setAcked] = React.useState(false);
   const [skipped, setSkipped] = React.useState(false);
@@ -326,7 +326,7 @@ function MemoryGenerateModal({ open, onClose, onCreated }) {
     }
     setBusy(true);
     try {
-      const md = makeEmptyMemoryMd({
+      let md = makeEmptyMemoryMd({
         name,
         tone,
         responseLength,
@@ -335,6 +335,9 @@ function MemoryGenerateModal({ open, onClose, onCreated }) {
         dontHelpOther,
         currentContext
       });
+      for (const e of initialEntries) {
+        md = applyMemoryEntry(md, e.section, e.entry);
+      }
       const enc = await encryptMemory(md, pw1);
       downloadFile("nikko-memory" + NIKKO_MEM_EXT, enc);
       onCreated && onCreated(md);

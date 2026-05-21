@@ -114,9 +114,15 @@ function Composer({ onSend, disabled }) {
   ), /* @__PURE__ */ React.createElement("div", { className: "composer-foot" }, /* @__PURE__ */ React.createElement("span", null, /* @__PURE__ */ React.createElement("span", { className: "kbd" }, "Enter"), " to send \xB7 ", /* @__PURE__ */ React.createElement("span", { className: "kbd" }, "Shift"), "+", /* @__PURE__ */ React.createElement("span", { className: "kbd" }, "Enter"), " for newline \xB7 type ", /* @__PURE__ */ React.createElement("span", { className: "kbd" }, "/help"), " for the tutorial"), /* @__PURE__ */ React.createElement("span", null, "Cleared on refresh")));
 }
 function MemBanner({ type, onDismiss, onOpenLoad }) {
-  return /* @__PURE__ */ React.createElement("div", { className: "mem-banner", role: "status", "aria-live": "polite" }, /* @__PURE__ */ React.createElement("span", { className: "mem-banner-icon", "aria-hidden": "true" }, type === "loaded" ? /* @__PURE__ */ React.createElement("svg", { viewBox: "0 0 12 12", fill: "none", stroke: "currentColor", strokeWidth: "1.5", strokeLinecap: "round", strokeLinejoin: "round" }, /* @__PURE__ */ React.createElement("rect", { x: "2", y: "5.5", width: "8", height: "5.5", rx: "1" }), /* @__PURE__ */ React.createElement("path", { d: "M4 5.5V4a2 2 0 0 1 4 0v1.5" }), /* @__PURE__ */ React.createElement("path", { d: "M6 7.5v1.5" })) : /* @__PURE__ */ React.createElement("svg", { viewBox: "0 0 12 12", fill: "none", stroke: "currentColor", strokeWidth: "1.5", strokeLinecap: "round", strokeLinejoin: "round" }, /* @__PURE__ */ React.createElement("circle", { cx: "6", cy: "6", r: "4.5" }), /* @__PURE__ */ React.createElement("path", { d: "M6 5v3" }), /* @__PURE__ */ React.createElement("circle", { cx: "6", cy: "3.5", r: "0.4", fill: "currentColor", stroke: "none" }))), /* @__PURE__ */ React.createElement("div", { className: "mem-banner-body" }, type === "loaded" ? "Memory loaded \u2014 I'll keep your context in mind." : "Give Nikko a memory file for a more personal experience."), type === "hint" && /* @__PURE__ */ React.createElement("button", { className: "mem-banner-action", onClick: onOpenLoad }, "Set up"), /* @__PURE__ */ React.createElement("button", { className: "dismiss", onClick: onDismiss, "aria-label": "Dismiss banner" }, /* @__PURE__ */ React.createElement("svg", { viewBox: "0 0 10 10", fill: "none", stroke: "currentColor", strokeWidth: "1.5", strokeLinecap: "round" }, /* @__PURE__ */ React.createElement("path", { d: "m2.5 2.5 5 5M7.5 2.5l-5 5" }))));
+  return /* @__PURE__ */ React.createElement("div", { className: "mem-banner", role: "status", "aria-live": "polite" }, /* @__PURE__ */ React.createElement("span", { className: "mem-banner-icon", "aria-hidden": "true" }, type === "loaded" ? (
+    // Lock icon — memory is secure and active
+    /* @__PURE__ */ React.createElement("svg", { viewBox: "0 0 12 12", fill: "none", stroke: "currentColor", strokeWidth: "1.5", strokeLinecap: "round", strokeLinejoin: "round" }, /* @__PURE__ */ React.createElement("rect", { x: "2", y: "5.5", width: "8", height: "5.5", rx: "1" }), /* @__PURE__ */ React.createElement("path", { d: "M4 5.5V4a2 2 0 0 1 4 0v1.5" }), /* @__PURE__ */ React.createElement("path", { d: "M6 7.5v1.5" }))
+  ) : (
+    // Info icon — gentle nudge, not an alert
+    /* @__PURE__ */ React.createElement("svg", { viewBox: "0 0 12 12", fill: "none", stroke: "currentColor", strokeWidth: "1.5", strokeLinecap: "round", strokeLinejoin: "round" }, /* @__PURE__ */ React.createElement("circle", { cx: "6", cy: "6", r: "4.5" }), /* @__PURE__ */ React.createElement("path", { d: "M6 5v3" }), /* @__PURE__ */ React.createElement("circle", { cx: "6", cy: "3.5", r: "0.4", fill: "currentColor", stroke: "none" }))
+  )), /* @__PURE__ */ React.createElement("div", { className: "mem-banner-body" }, type === "loaded" ? "Memory loaded \u2014 I'll keep your context in mind." : "Give Nikko a memory file for a more personal experience."), type === "hint" && /* @__PURE__ */ React.createElement("button", { className: "mem-banner-action", onClick: onOpenLoad }, "Set up"), /* @__PURE__ */ React.createElement("button", { className: "dismiss", onClick: onDismiss, "aria-label": "Dismiss banner" }, /* @__PURE__ */ React.createElement("svg", { viewBox: "0 0 10 10", fill: "none", stroke: "currentColor", strokeWidth: "1.5", strokeLinecap: "round" }, /* @__PURE__ */ React.createElement("path", { d: "m2.5 2.5 5 5M7.5 2.5l-5 5" }))));
 }
-function TechniqueCheckInBanner({ technique, onAdd, onDismiss }) {
+function TechniqueCheckInBanner({ technique, onAdd, onDismiss, hasMemory }) {
   return /* @__PURE__ */ React.createElement("div", { className: "technique-checkin-banner", role: "status", "aria-live": "polite" }, /* @__PURE__ */ React.createElement("span", { className: "technique-checkin-icon", "aria-hidden": "true" }, /* @__PURE__ */ React.createElement(
     "svg",
     {
@@ -130,14 +136,14 @@ function TechniqueCheckInBanner({ technique, onAdd, onDismiss }) {
     /* @__PURE__ */ React.createElement("rect", { x: "2.5", y: "6", width: "9", height: "6.5", rx: "1.2" }),
     /* @__PURE__ */ React.createElement("path", { d: "M4.5 6V4a2.5 2.5 0 0 1 5 0v2" }),
     /* @__PURE__ */ React.createElement("path", { d: "M7 8.5v2" })
-  )), /* @__PURE__ */ React.createElement("div", { className: "technique-checkin-body" }, /* @__PURE__ */ React.createElement("strong", null, "Worth remembering?"), /* @__PURE__ */ React.createElement("p", null, "If ", technique, " helps, I can add it to your memory file.")), /* @__PURE__ */ React.createElement("div", { className: "technique-checkin-actions" }, /* @__PURE__ */ React.createElement(
+  )), /* @__PURE__ */ React.createElement("div", { className: "technique-checkin-body" }, /* @__PURE__ */ React.createElement("strong", null, "Worth remembering?"), hasMemory ? /* @__PURE__ */ React.createElement("p", null, "If ", technique, " helps, I can add it to your memory file.") : /* @__PURE__ */ React.createElement("p", null, "If ", technique, " helps, you can save it to a memory file. I'll create one with it already included.")), /* @__PURE__ */ React.createElement("div", { className: "technique-checkin-actions" }, /* @__PURE__ */ React.createElement(
     "button",
     {
       className: "technique-checkin-yes",
       onClick: onAdd,
-      "aria-label": `Add ${technique} to memory file`
+      "aria-label": hasMemory ? `Add ${technique} to memory file` : `Create memory file with ${technique}`
     },
-    "Add to memory"
+    hasMemory ? "Add to memory" : "Create memory file"
   ), /* @__PURE__ */ React.createElement(
     "button",
     {
@@ -273,6 +279,7 @@ function Chat({ theme, onToggleTheme }) {
   const sessionKeyRef = useRef(null);
   const [memPop, setMemPop] = useState(false);
   const [pendingEntries, setPendingEntries] = useState([]);
+  const [pendingBootstrapEntry, setPendingBootstrapEntry] = useState(null);
   const [techniqueCheckIn, setTechniqueCheckIn] = useState(null);
   const [memBanner, setMemBanner] = useState(null);
   const memBannerAutoRef = useRef(null);
@@ -395,7 +402,12 @@ function Chat({ theme, onToggleTheme }) {
   }, [pendingEntries, memName]);
   const onCheckInAdd = useCallback(() => {
     if (!techniqueCheckIn) return;
-    setPendingEntries((prev) => [...prev, { ...techniqueCheckIn, ts: Date.now() }]);
+    if (memContentRef.current && sessionKeyRef.current) {
+      setPendingEntries((prev) => [...prev, { ...techniqueCheckIn, ts: Date.now() }]);
+    } else {
+      setPendingBootstrapEntry(techniqueCheckIn);
+      setMemOpen(true);
+    }
     setTechniqueCheckIn(null);
   }, [techniqueCheckIn]);
   useEffect(() => {
@@ -491,7 +503,7 @@ function Chat({ theme, onToggleTheme }) {
                     ts: Date.now()
                   }]);
                 }
-                if (data.technique_recommended && !data.memory_proposal && memContentRef.current && sessionKeyRef.current) {
+                if (data.technique_recommended && !data.memory_proposal) {
                   setTechniqueCheckIn(data.technique_recommended);
                 }
               } else {
@@ -668,10 +680,11 @@ function Chat({ theme, onToggleTheme }) {
         " used"
       ), idx === 0 && showSuggestions && /* @__PURE__ */ React.createElement("div", { className: "suggest-row" }, NIKKO_SUGGESTIONS.map((s) => /* @__PURE__ */ React.createElement("button", { key: s, className: "suggest", onClick: () => onSend(s) }, s)))));
     }))
-  ), /* @__PURE__ */ React.createElement("div", { className: "composer-wrap" }, /* @__PURE__ */ React.createElement("div", { className: "composer-inner" }, techniqueCheckIn && memContentRef.current && sessionKeyRef.current && /* @__PURE__ */ React.createElement(
+  ), /* @__PURE__ */ React.createElement("div", { className: "composer-wrap" }, /* @__PURE__ */ React.createElement("div", { className: "composer-inner" }, techniqueCheckIn && /* @__PURE__ */ React.createElement(
     TechniqueCheckInBanner,
     {
       technique: techniqueCheckIn.technique,
+      hasMemory: !!(memContentRef.current && sessionKeyRef.current),
       onAdd: onCheckInAdd,
       onDismiss: () => setTechniqueCheckIn(null)
     }
@@ -708,8 +721,16 @@ function Chat({ theme, onToggleTheme }) {
     MemoryGenerateModal,
     {
       open: memOpen,
-      onClose: () => setMemOpen(false),
-      onCreated: () => setMemOpen(false)
+      onClose: () => {
+        setMemOpen(false);
+        setPendingBootstrapEntry(null);
+      },
+      onCreated: (md) => {
+        setMemOpen(false);
+        setPendingBootstrapEntry(null);
+        onMemoryLoaded(md, "nikko-memory");
+      },
+      initialEntries: pendingBootstrapEntry ? [pendingBootstrapEntry] : []
     }
   ), loadOpen && /* @__PURE__ */ React.createElement(
     MemoryLoadModal,

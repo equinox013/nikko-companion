@@ -354,7 +354,10 @@ function downloadFile(name, content) {
 // Steps: disclosure → name-gate → style → support → password
 // Users can skip personalisation at name-gate; Back from password
 // returns to name-gate (skipped) or support (personalised).
-function MemoryGenerateModal({ open, onClose, onCreated }) {
+// initialEntries: optional array of { section, entry } to pre-populate
+// into the generated file (bootstrap check-in path — technique accepted
+// before any file existed; baked in at download, not written later).
+function MemoryGenerateModal({ open, onClose, onCreated, initialEntries = [] }) {
   const [step, setStep]                   = React.useState('disclosure');
   const [acked, setAcked]                 = React.useState(false);
   const [skipped, setSkipped]             = React.useState(false);   // true when "Skip to password" chosen
@@ -390,10 +393,15 @@ function MemoryGenerateModal({ open, onClose, onCreated }) {
     if (pw1 !== pw2)    { setErr("Passwords don't match."); return; }
     setBusy(true);
     try {
-      const md = makeEmptyMemoryMd({
+      // Build template from personalisation choices.
+      let md = makeEmptyMemoryMd({
         name, tone, responseLength, inputLength,
         dontHelp, dontHelpOther, currentContext,
       });
+      // Apply any bootstrap entries (technique accepted before file existed).
+      for (const e of initialEntries) {
+        md = applyMemoryEntry(md, e.section, e.entry);
+      }
       const enc = await encryptMemory(md, pw1);
       downloadFile('nikko-memory' + NIKKO_MEM_EXT, enc);
       onCreated && onCreated(md);

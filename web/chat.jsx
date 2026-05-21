@@ -216,7 +216,10 @@ function MemBanner({ type, onDismiss, onOpenLoad }) {
 // Primary trigger path — does not require the user to type specific phrases.
 // REQ-850-011: user must explicitly Accept before anything is written.
 // REQ-850-092: visually distinct from both SafetyBanner and MemoryProposalCard.
-function TechniqueCheckInBanner({ technique, onAdd, onDismiss }) {
+// hasMemory: true when an encrypted file is already loaded. Controls whether
+// "Add to memory" patches the existing file (hasMemory=true) or opens the
+// generate modal to create one with the entry pre-populated (hasMemory=false).
+function TechniqueCheckInBanner({ technique, onAdd, onDismiss, hasMemory }) {
   return (
     <div className="technique-checkin-banner" role="status" aria-live="polite">
       <span className="technique-checkin-icon" aria-hidden="true">
@@ -229,12 +232,15 @@ function TechniqueCheckInBanner({ technique, onAdd, onDismiss }) {
       </span>
       <div className="technique-checkin-body">
         <strong>Worth remembering?</strong>
-        <p>If {technique} helps, I can add it to your memory file.</p>
+        {hasMemory
+          ? <p>If {technique} helps, I can add it to your memory file.</p>
+          : <p>If {technique} helps, you can save it to a memory file. I'll create one with it already included.</p>
+        }
       </div>
       <div className="technique-checkin-actions">
         <button className="technique-checkin-yes" onClick={onAdd}
-                aria-label={`Add ${technique} to memory file`}>
-          Add to memory
+                aria-label={hasMemory ? `Add ${technique} to memory file` : `Create memory file with ${technique}`}>
+          {hasMemory ? 'Add to memory' : 'Create memory file'}
         </button>
         <button className="technique-checkin-no" onClick={onDismiss}
                 aria-label="Dismiss suggestion">
@@ -461,10 +467,16 @@ function Chat({ theme, onToggleTheme }) {
   // REQ-850-093: session-end warning fires when this array is non-empty.
   const [pendingEntries, setPendingEntries] = useState([]);
 
+  // Bootstrap entry: a technique the user accepted for memory BEFORE any file
+  // was loaded. Stored here so it can be passed to MemoryGenerateModal as
+  // initialEntries and baked into the file on download, then cleared.
+  const [pendingBootstrapEntry, setPendingBootstrapEntry] = useState(null);
+
   // Technique check-in banner — shown when Nikko's response recommends a named
-  // technique and the user has an encrypted memory file loaded.
+  // technique. Now fires regardless of whether a file is loaded (bootstrap path).
   // Shape: { technique: string, section: string, entry: string } | null.
-  // "Add to memory" converts this to a pendingEntry (shows proposal card).
+  // "Add to memory" either queues a pendingEntry (file loaded) or opens the
+  // generate modal with the entry pre-populated (no file loaded).
   // "Not now" clears it with no side effects.
   const [techniqueCheckIn, setTechniqueCheckIn] = useState(null);
 
@@ -657,12 +669,21 @@ function Chat({ theme, onToggleTheme }) {
     }
   }, [pendingEntries, memName]);
 
-  // Convert a technique check-in acceptance into a pending entry.
-  // Shows the proposal card so the user sees exactly what will be written
-  // before the final Accept triggers the download (REQ-850-011).
+  // Convert a technique check-in acceptance into a pending entry (file loaded)
+  // or open the generate modal with the entry pre-populated (bootstrap path).
   const onCheckInAdd = useCallback(() => {
     if (!techniqueCheckIn) return;
-    setPendingEntries(prev => [...prev, { ...techniqueCheckIn, ts: Date.now() }]);
+    if (memContentRef.current && sessionKeyRef.current) {
+      // File is loaded — queue as a normal pending entry. The proposal card
+      // will appear in the thread and the user can confirm before download.
+      setPendingEntries(prev => [...prev, { ...techniqueCheckIn, ts: Date.now() }]);
+    } else {
+      // No file yet — stash the entry and open the generate modal. The entry
+      // will be baked into the new file at download time (REQ-850-011 preserved:
+      // user still explicitly triggers the generate + encrypt flow).
+      setPendingBootstrapEntry(techniqueCheckIn);
+      setMemOpen(true);
+    }
     setTechniqueCheckIn(null);
   }, [techniqueCheckIn]);
 
@@ -809,10 +830,10 @@ function Chat({ theme, onToggleTheme }) {
                 }
 
                 // USM write-back: check for a memory_proposal from the backend.
-                // Only surface when the file is loaded AND we have a session key
-                // (encrypted file) — no key = no write-back path (REQ-850-040).
-                // The proposal card is shown in the thread; user must explicitly
-                // Accept before anything is written (REQ-850-011).
+                // Affirmation path — user typed something like "that really helped".
+                // Requires file + session key (write-back path). If no file is loaded
+                // the proposal is silently dropped; the technique check-in (below)
+                // handles the no-file bootstrap case instead (REQ-850-040).
                 if (data.memory_proposal && memContentRef.current && sessionKeyRef.current) {
                   setPendingEntries(prev => [...prev, {
                     ...data.memory_proposal,
@@ -821,11 +842,10 @@ function Chat({ theme, onToggleTheme }) {
                 }
 
                 // Technique check-in: backend detected Nikko recommended a named
-                // technique in this response. Show a popup banner asking the user
-                // if they want to track it — only when encrypted file is loaded.
-                // Suppressed if memory_proposal already fired for this turn.
-                if (data.technique_recommended && !data.memory_proposal
-                    && memContentRef.current && sessionKeyRef.current) {
+                // technique. Now surfaces regardless of whether a file is loaded —
+                // the banner copy and Accept action branch on hasMemory (bootstrap
+                // vs patch). Suppressed if memory_proposal already fired this turn.
+                if (data.technique_recommended && !data.memory_proposal) {
                   setTechniqueCheckIn(data.technique_recommended);
                 }
               } else {
@@ -1173,13 +1193,14 @@ function Chat({ theme, onToggleTheme }) {
 
           <div className="composer-wrap">
             <div className="composer-inner">
-              {/* Technique check-in banner — shown when Nikko recommended a
-                  technique in this response. Popup style like SafetyBanner.
-                  "Add to memory" converts to a proposal card for final confirm.
-                  Only visible when encrypted memory file is loaded. */}
-              {techniqueCheckIn && memContentRef.current && sessionKeyRef.current && (
+              {/* Technique check-in banner — now fires regardless of file state.
+                  hasMemory=true  → "Add to memory" queues a proposal card.
+                  hasMemory=false → "Create memory file" opens generate modal
+                                    with entry pre-populated (bootstrap path). */}
+              {techniqueCheckIn && (
                 <TechniqueCheckInBanner
                   technique={techniqueCheckIn.technique}
+                  hasMemory={!!(memContentRef.current && sessionKeyRef.current)}
                   onAdd={onCheckInAdd}
                   onDismiss={() => setTechniqueCheckIn(null)}
                 />
@@ -1232,8 +1253,9 @@ function Chat({ theme, onToggleTheme }) {
       {memOpen && (
         <MemoryGenerateModal
           open={memOpen}
-          onClose={() => setMemOpen(false)}
-          onCreated={() => setMemOpen(false)}
+          onClose={() => { setMemOpen(false); setPendingBootstrapEntry(null); }}
+          onCreated={(md) => { setMemOpen(false); setPendingBootstrapEntry(null); onMemoryLoaded(md, 'nikko-memory'); }}
+          initialEntries={pendingBootstrapEntry ? [pendingBootstrapEntry] : []}
         />
       )}
       {loadOpen && (

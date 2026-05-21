@@ -1116,8 +1116,17 @@ body::before {
   border: 1px solid var(--line);
   border-radius: var(--r-xl);
   box-shadow: var(--shadow-card);
-  padding: 28px 28px 22px;
+  /* padding-bottom intentionally 0 — overflow-y:auto drops padding-bottom in
+     Chrome/Edge when content scrolls. Bottom clearance is provided by ::after. */
+  padding: 28px 28px 0;
   overflow-y: auto;
+}
+/* Spacer that scroll containers actually respect (unlike padding-bottom). */
+.modal::after {
+  content: '';
+  display: block;
+  height: 24px;
+  flex-shrink: 0;
 }
 .modal h2 {
   margin: 0 0 6px;
