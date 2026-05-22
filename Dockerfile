@@ -32,6 +32,9 @@ WORKDIR /app
 # requirements.txt changes, not on every source edit.
 COPY backend/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
+# Download spaCy en_core_web_sm for NER-based PII redaction (SPEC-800).
+# Baked into the image at build time so there's no runtime download penalty.
+RUN python -m spacy download en_core_web_sm
 
 # ── Copy runtime packages ─────────────────────────────────────────────────────
 # Only the packages actually imported at runtime are copied. Training notebooks,
