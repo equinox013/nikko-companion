@@ -4,8 +4,8 @@ title: System Charter & Risk Model
 status: authoritative
 supersedes: none
 depends_on: []
-version: 1.0.0-draft
-last_reviewed: 2026-05-08
+version: 1.1.0
+last_reviewed: 2026-05-22
 ---
 
 # SPEC-000 — System Charter & Risk Model

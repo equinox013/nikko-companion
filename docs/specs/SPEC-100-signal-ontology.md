@@ -4,8 +4,8 @@ title: Psychological Signal Ontology
 status: authoritative
 supersedes: [SPEC-002]
 depends_on: [SPEC-000]
-version: 1.0.0-draft
-last_reviewed: 2026-05-08
+version: 1.1.0
+last_reviewed: 2026-05-22
 ---
 
 # SPEC-100 — Psychological Signal Ontology

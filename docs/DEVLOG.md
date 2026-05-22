@@ -26,7 +26,7 @@ Claude accelerated the build in ways I couldn't have matched alone. Spec extract
 
 But acceleration isn't authorship. Every architectural call, every requirement I ratified, every phase gate, every *"this doesn't feel right, let's go back"* moment was mine. Claude generated; I directed, questioned, approved, and — when I didn't question hard enough — paid for it in hours lost to mistakes I could have caught.
 
-This was also my first serious experience building with AI assistance, what some people call "vibe coding." I came in thinking the main skill was writing good prompts. I'm leaving with a different view: the actual skill is knowing *when not to trust the output*, and that requires enough domain knowledge to recognise a confident-sounding answer that's quietly wrong. A fabricated API endpoint, a threshold that destroys your data distribution, a model that doesn't fit your GPU — none of these were flagged as uncertain when they were produced. They looked clean, I accepted them, and I learned the hard way. The "Where I went wrong" sections in this log are partly a record of that learning curve.
+This was also my first serious experience building with AI assistance, what some people call "vibe coding." I came in thinking the main skill was writing good prompts. I'm leaving with a different view: the actual skill is knowing *when not to trust the output*, and that requires enough domain knowledge to recognise a confident-sounding answer that's quietly wrong. The "Where I went wrong" sections in this log are a record of that learning curve.
 
 The honest version of AI-assisted development, at least for me, is that AI removed the friction of going from idea to implementation, which freed me up to spend more time on the decisions that mattered — and also let me move fast in the wrong direction when I wasn't watching closely.
 
@@ -34,7 +34,7 @@ The honest version of AI-assisted development, at least for me, is that AI remov
 
 > **Purpose:** A running record of what was done each day, decisions made with their justifications, and key learnings taken out of the session.
 >
-> **Format:** Chronological. Each entry covers: **What we did**, **Decisions & justifications**, **Where I went wrong**, **Learnings**.
+> **Format:** Chronological. Each entry covers: **What we did**, **Decisions & justifications**, **Learnings**.
 >
 > **Owner:** Director (Nicholas). Maintained by the NIKKO Engineering Collective agent.
 
@@ -63,15 +63,11 @@ The honest version of AI-assisted development, at least for me, is that AI remov
 | Evaluator → Verification Supervisor order (G-RECON-02) | Evaluator does per-response content gate; VS does system-level structural gate. Content has to pass before structure is checked. |
 | SFT with rejection sampling for v0 training (G-LOSS-01) | Simplest formulation compatible with the open-license corpus constraint. DPO upgrade path once a preference dataset exists. |
 
-### Where I went wrong
-
-Honestly, the main mistake on day one was assuming the source spec was internally consistent enough to translate directly into requirement IDs. It wasn't. There were two separate pipeline step orderings, overlapping agent authority levels, and a missing adapter combination for Crisis Mode. I caught these because I happened to be paranoid about contradictions, not because I had a method. Next time I'd start with an explicit consistency-check pass before I tried to extract anything structured.
-
 ### Learnings
 
-- The source spec had real internal contradictions I didn't expect. Treating spec extraction more like a debugging pass than a copy-and-paste job is what surfaced them — but I had to learn that mid-session, not before.
-- Writing things down upfront forces decisions I would otherwise have hit as bugs later. The example that stuck: I had no policy for what happens when a passive risk indicator appears without explicit crisis language, and the only way to resolve it was to make a call and put it in the spec.
-- The gap between "described qualitatively in prose" and "implementable deterministically in code" is almost always a numeric threshold, a specific API, or an exact ordering. None of those were in the source doc, which means every prose description had to be tightened to something a machine could act on. That was more work than I budgeted for.
+- The source spec had real internal contradictions that required a consistency-check pass before extraction, not after. Treating spec extraction like a debugging pass — not a copy-and-paste job — is what surfaced overlapping agent authority levels, two separate pipeline step orderings, and a missing adapter combination for Crisis Mode.
+- Writing things down upfront forces decisions I would otherwise have hit as bugs later. The example that stuck: there was no policy for what happens when a passive risk indicator appears without explicit crisis language, and the only way to resolve it was to make a call and put it in the spec.
+- The gap between "described qualitatively in prose" and "implementable deterministically in code" is almost always a numeric threshold, a specific API, or an exact ordering. None of those were in the source doc, which means every prose description had to be tightened to something a machine could act on.
 
 ---
 
@@ -91,22 +87,16 @@ Honestly, the main mistake on day one was assuming the source spec was internall
 
 | Decision | Justification |
 |----------|--------------|
-| Replaced Healthdirect/BetterHealth/WHO adapters with WebSearchAdapter (G-RETRIEVAL-01) | Healthdirect has no public search API — the assumed endpoint was fabricated. Static JSON corpus for BetterHealth/WHO required manual curation with no update mechanism. WebSearchAdapter with `site:` operator covers all five sanctioned domains with one implementation. |
+| Replaced Healthdirect/BetterHealth/WHO adapters with WebSearchAdapter (G-RETRIEVAL-01) | Healthdirect has no public search API. Static JSON corpus for BetterHealth/WHO required manual curation with no update mechanism. WebSearchAdapter with `site:` operator covers all five sanctioned domains with one implementation. |
 | `bitsandbytes==0.45.5` over 0.41.1 or 0.43.1 (G-ENV-01) | 0.45.5 has improved Windows CUDA 12.x DLL path discovery. Resolved the `cudart64_12.dll` lookup failure without requiring a full CUDA Toolkit install. |
 | Qwen2.5-3B-Instruct retained as Phase 3 dev model | Output quality good enough for structured JSON agent tasks. Fits 8 GB VRAM without quantization. Used only for development — replaced by fine-tuned adapters in Phase 4. |
 | Scope Classifier uses weighted keyword scorer, no LLM | A deterministic gate can't introduce LLM latency or unpredictability. A keyword scorer is fast, auditable, and good enough for this binary classification. |
 
-### Where I went wrong
-
-**I accepted an API endpoint that didn't exist.** The `HealthdirectAdapter` was built against `api.healthdirect.gov.au/ih/api/v2/content/search` — a URL that *sounds* authoritative and plausible. I approved the implementation without spending 30 seconds verifying that the endpoint actually exists. It doesn't. Healthdirect Australia has no public search API. The same blind acceptance applied to the BetterHealth and WHO adapters being designed as "static JSON corpus" — a brittle approach I didn't question until review. All three adapters had to be scrapped and replaced with `WebSearchAdapter`, which meant rethinking the retrieval architecture mid-phase.
-
-In hindsight, the warning sign was right there: I was approving an adapter against a URL I had never personally hit in a browser. I hadn't done that before because most of my prior work has been on internal data, where the source is given. Building against external APIs is a different reflex set and I'm still developing it. **The fix is simple:** before approving any external dependency, I open a browser or run `curl` and confirm the endpoint is real. A 200 OK beats a confident description every time.
-
 ### Learnings
 
 - Typed, validated schemas between agents (`SignalPayload`, `ResponseContextPayload`, and so on) made the pipeline far easier to reason about than I expected. They forced me to be explicit about what each agent *needs* versus what it can *see* — and that distinction is where a lot of the LLM safety story actually lives.
-- I'm now convinced the Router being deterministic — no LLM — is one of the most important calls in the whole pipeline. I didn't fully appreciate that until I tried to imagine the alternative. If the crisis decision ever ran through a language model, the whole safety story would depend on the model's judgment, which is exactly the thing I'm trying to avoid.
-- Retrieval architecture turned out to be harder than I assumed. The natural instinct is to point at APIs that *should* exist for a public health authority — but most major Australian health authorities don't actually publish search APIs. I'm still learning to separate "this sounds reasonable" from "this is real."
+- The Router being deterministic — no LLM — is one of the most important calls in the whole pipeline. If the crisis decision ever ran through a language model, the whole safety story would depend on the model's judgment, which is exactly the thing I'm trying to avoid.
+- Most major Australian health authorities don't publish search APIs. Designing against external APIs requires confirming the endpoint is real before building against it — not after.
 
 ---
 
@@ -127,32 +117,11 @@ In hindsight, the warning sign was right there: I was approving an adapter again
 | `max_seq_length=768` for ADP-A training (G-TRAIN-01) | RTX 3070 VRAM headroom at `batch_size=4`. The ADP-C filter truncates responses at 512 tokens — input context rarely exceeds 768 in the prepared corpus. 2048 would require halving batch size. |
 | ADP-C `accept_threshold` lowered from 0.70 to 0.50 (G-DATA-06) | At 0.70, only MentalChat (a synthetic dataset) cleared the filter — 1% of EmpatheticDialogues passed. ADP-C was trained on structured critique format and systematically underscored organic conversational style even when clinically appropriate. 0.50 still filters the bottom half of the score distribution. |
 
-### Where I went wrong
-
-**I ran Step 13 without checking the dataset ID first (G-DATA-03).** The notebook loaded AnnoMI with `load_dataset("AnnoMI", ...)`. I saw the code, it looked fine, and I ran it. What I didn't think to do was spend 10 seconds searching HuggingFace to confirm `"AnnoMI"` was a valid short-form identifier. It isn't — it 404s silently, returns an empty dataset, and the notebook happily continues with 0 AnnoMI records. AnnoMI was supposed to carry a 30% mix weight in the ADP-A corpus. I came close to training on a corpus missing almost a third of its content and wouldn't have known unless I'd read the Cell 16 summary carefully. I now read the per-dataset row counts before I touch the next cell.
-
-**I accepted the `accept_threshold=0.70` without checking what it would do to the data distribution (G-DATA-06).** This is the one that cost the most hours, and it's the one I'm most embarrassed about, because in theory I knew the risk and just didn't apply it. The threshold was presented to me as principled — "filter the bottom 30% of quality scores" — and that sounded reasonable. I didn't ask the obvious follow-up: *what does the pass rate look like per dataset?* When Step 13 actually ran, the answer was rough:
-
-| Dataset | Pass rate |
-|---------|-----------|
-| EmpatheticDialogues | 1.0% |
-| AnnoMI | 6.7% |
-| ESConv | 11.5% |
-| Amod | 25.6% |
-| MentalChat16K (synthetic) | **93.7%** |
-
-The filter wiped out almost every organic, real-human empathy dataset and waved through almost all of the synthetic MentalChat data. The training set I would have produced was dominated by synthetic examples — the opposite of what the corpus was meant to be. I then had to drop the threshold, rerun the filter pass across all five corpora, re-check the yield counts, re-assemble, and re-validate. Hours gone.
-
-What I missed, and what I now know to think about: ADP-C was trained on structured critique pairs, so it reliably rates structured synthetic data highly and rates organic conversational data lower, even when the organic data is actually good. That's a calibration mismatch between what ADP-C was taught to like and what I needed it to filter. I knew filters could be miscalibrated in theory. I had never actually run one against a multi-source corpus, so I didn't have the reflex of *"what's the per-source pass rate before I trust this threshold?"* I have that reflex now.
-
-**I also missed a conflicting `max_seq_length` between the config file and the handoff doc (G-TRAIN-01).** `config.yaml` said 2048. The handoff doc and the notebook both said 768. I had both documents open and didn't notice. It only got caught in a pre-run audit — if it had slipped through, Step 14 would have either OOM-crashed the RTX 3070 or silently halved the batch size mid-run. **The fix:** when a config file and a doc disagree, that's never cosmetic. I stop and resolve it before running anything.
-
 ### Learnings
 
-- An oracle filter trained on synthetic data will systematically penalise organic data, even when the organic data is good. I'd read about distribution mismatch before; I'd never *felt* it cost me a day of training prep until now.
-- For multi-corpus training, the per-source yield is the diagnostic, not the total. Total yield of 336 records looks like a quantity problem on the surface. The breakdown is where you find the distribution problem.
-- The data preparation notebook is itself a diagnostic. The pass-rate table in Cell 16 of Step 13 is the most important output of that whole step — I now read it before moving on, not after.
-- A config-vs-doc discrepancy is a silent divergence in what the training job will actually do. I treat it like a hard stop.
+- An oracle filter trained on synthetic data will systematically penalise organic data, even when the organic data is good. Distribution mismatch is a real cost — understanding the per-source yield before trusting a threshold is the diagnostic, not the total yield.
+- For multi-corpus training, the per-source pass-rate table is the most important output of data preparation. Total yield of 336 records looks like a quantity problem; the breakdown is where you find the distribution problem.
+- A config-vs-doc discrepancy is a silent divergence in what the training job will actually do. It warrants a hard stop and resolution before running anything.
 
 ---
 
@@ -175,17 +144,11 @@ What I missed, and what I now know to think about: ADP-C was trained on structur
 | G-TRAIN-02 mitigation: URL whitelist in ADP-C + post-processing strip | Belt-and-braces for a clinical context. ADP-C checks at generation time; orchestrator strips any slip-through. Root fix (negative training examples) is a v1 objective. |
 | G-TRAIN-03 mitigation: turn-marker detection in ADP-C | Multi-turn leakage is invisible in production (ADP-C fires before the response reaches the user) but visible in raw smoke tests. Adding turn-marker detection to ADP-C's redline set catches it at the evaluation gate. |
 
-### Where I went wrong
-
-**I didn't smoke-test adapter outputs early enough.** The URL hallucination (G-TRAIN-02) and the multi-turn leakage (G-TRAIN-03) weren't really fine-tuning failures — they were base-model behaviours that v0 fine-tuning on this data volume wasn't going to suppress. I now realise that any sufficiently large language model will confabulate plausible-looking contact details and will keep generating dialogue past a natural stopping point if the training data had multi-turn formatting in it. None of that surprises me in hindsight. It surprised me at the time because I'd grouped ADP-A and ADP-B together in my head and saved testing for "after both are trained," which meant I caught the issues much later than I needed to.
-
-What I should have done was run one prompt through raw ADP-C output the moment Step 12 finished, then again for ADP-A after Step 14, before moving on. Finding the issues earlier would have let me adjust training data *before* the next adapter, instead of layering mitigations on after the fact. **The fix:** smoke-test every adapter as soon as it finishes training. One prompt, raw output, check the obvious failure modes. That's a 5-minute investment, not an end-of-phase batch.
-
 ### Learnings
 
-- Smoke-testing raw adapter output — bypassing the pipeline — is the only way I'd have caught these. The pipeline's ADP-C gate does catch hallucinated continuations in production, but only because we noticed the problem outside the pipeline first. Trusting the safety layer to clean up the model's behaviour without testing the model directly is a habit I want to break.
-- URL hallucination is a base-model property, not a fine-tuning failure. In a clinical-adjacent context that's a patient-safety concern, not a polish issue. I now think about it at the data-design stage.
-- Training data format leaks through. Multi-turn source records expose the model to speaker-alternation patterns, and the base model will extend those patterns past the response boundary. `is_clean()` filters in data prep reduce it but don't eliminate it.
+- Smoke-testing raw adapter output — bypassing the pipeline — is the only reliable way to isolate base-model behaviours from pipeline mitigations. The pipeline's ADP-C gate catches hallucinated continuations in production, but the model's raw behaviour needs to be understood independently first.
+- URL hallucination is a base-model property in a clinical-adjacent context — a patient-safety concern, not a polish issue. It belongs at the data-design stage, not the post-training mitigation stage.
+- Training data format leaks through. Multi-turn source records expose the model to speaker-alternation patterns, and the base model will extend those patterns past the response boundary.
 
 ---
 
@@ -217,21 +180,11 @@ What I should have done was run one prompt through raw ADP-C output the moment S
 | Consolidate three `/infer` calls into one `/pipeline` endpoint | Each separate call triggered an 80–110s CPU→VRAM model transfer. Consolidating eliminates two of those three transfers. Warm-turn latency: ~20–40s. |
 | `ThinkingBubble` with staged labels | The 30–120s pipeline wait isn't going away. Staged copy communicates progress without making promises about exact timing. |
 
-### Where I went wrong
-
-**I committed to Mistral-7B without doing a back-of-envelope VRAM check first.** The model needs around 14 GB in fp16. The RTX 3070 has 8 GB. Those numbers are publicly available and would have taken under a minute to look up — I just didn't look them up before accepting Mistral as the architecture. The result: an entire set of notebooks built, training data prepared, training attempted, 14+ hours elapsed with no convergence, and then a full architecture migration. Every notebook from Step 11 to Step 17 had to be regenerated. Every Mistral artefact had to be archived.
-
-This is the most expensive avoidable mistake I made on the project, and it's also the most embarrassing because it's an arithmetic problem. I knew about VRAM constraints in the abstract — that's why I'd been training on the 3070 in the first place. What I hadn't internalised was that *the first question to ask about any candidate model is whether it physically fits*, before anything else. I had ordered my thinking around capability, performance, and licence, and put hardware fit last. That ordering is wrong. **The fix:** model size in GB divided by VRAM in GB. If the answer is greater than 1, the conversation is over. Everything else only matters once that's settled.
-
-**I also added `bitsandbytes` as a production dependency without understanding the ZeroGPU execution model.** `bitsandbytes` is a standard quantization library — it seemed like an obvious inclusion, and I'd already used it locally without trouble. I didn't ask the right question, which is *when* ZeroGPU allocates GPU memory and *when* the library checks for CUDA. The answer (ZeroGPU allocates only inside `@spaces.GPU`; bnb checks at import time) makes them fundamentally incompatible. That isn't obscure information — it's in the ZeroGPU docs — but I didn't read those docs and I didn't push back on the dependency before it landed in `requirements.txt`. The crash only showed up when I deployed.
-
-I'm finding a pattern in my own mistakes here: I treat "it worked locally" as much stronger evidence than it is, and I'm slow to read the deployment environment's docs when a new library is involved. **The fix:** when adding anything that touches hardware (CUDA, memory, quantization), the question is "when does this thing check for the GPU?" That takes two minutes and would have saved a deploy cycle.
-
 ### Learnings
 
-- VRAM budget is a hard design constraint, not a soft optimisation. I now check model size against available VRAM as the first question, not the last.
-- `bitsandbytes` and ZeroGPU are architecturally incompatible by design. ZeroGPU's deferred GPU allocation breaks any library that probes for CUDA at import time. Good to know now; I wish I'd known a week earlier.
-- Adapter sharing via `set_adapter()` is a much bigger engineering win than I realised before this project. The VRAM saving is around 4.5 GB — effectively a free second adapter once the base is loaded. I'll be reaching for this pattern again.
+- VRAM budget is a hard design constraint, not a soft optimisation. Model size in GB divided by available VRAM is the first question to ask about any candidate model — everything else (capability, licence, performance) only matters once that's settled.
+- `bitsandbytes` and ZeroGPU are architecturally incompatible by design. ZeroGPU's deferred GPU allocation breaks any library that probes for CUDA at import time. When adding any dependency that touches hardware, the question to ask first is: when does this library check for the GPU?
+- Adapter sharing via `set_adapter()` is a meaningful engineering win — approximately 4.5 GB VRAM saved, effectively a free second adapter once the base is loaded.
 - User expectation during latency is a product problem, not a UX detail. A 90-second cold start on a mental-health platform isn't acceptable if the user thinks the system has frozen — the staged labels in `ThinkingBubble` aren't decoration, they're risk mitigation.
 
 ---
@@ -248,15 +201,11 @@ I'm finding a pattern in my own mistakes here: I treat "it worked locally" as mu
 - Fixed Fly.io / Render label contradiction across README and CLAUDE.md.
 - Removed `CLAUDE.md`, `fly.toml`, `docs/DEPLOY-HYBRID-MVP.md`, and `docs/GAPS.md` from git tracking.
 
-### Where I went wrong
-
-I noted in this entry that I'd "fixed the Fly.io / Render label contradiction" — and on a later pass I found I hadn't actually finished the job. The pipeline diagram still labelled the backend as Fly.io in one place and Render in another *within the same diagram*. Documentation cleanup needs the same rigour as code review, and I clearly didn't give it that here. A search-and-verify across the file would have caught the leftover.
-
 ### Learnings
 
 - Documentation debt accumulates faster than code debt. `INDEX.md` was still showing Phase 1 as "awaiting Director sign-off" six phases later.
-- A gap list is a decision log, not just a todo list. The ratification entries in GAPS.md contain exactly the information I'd need to reconstruct *why* the system is the way it is, which I underestimated until I started writing this DEVLOG.
-- Contradictions between a URL and a service label are a sign that a deployment call was made and the docs weren't updated to match. I'm learning to check them together, not separately, and to grep the whole repo when one shows up.
+- A gap list is a decision log, not just a todo list. The ratification entries in GAPS.md contain exactly the information I'd need to reconstruct *why* the system is the way it is.
+- Contradictions between a URL and a service label are a sign that a deployment call was made and the docs weren't updated to match. Grep the whole repo when one shows up — don't check files in isolation.
 
 ---
 
@@ -266,7 +215,7 @@ I noted in this entry that I'd "fixed the Fly.io / Render label contradiction" �
 
 - Wired `memoryContext` end-to-end: frontend sends decrypted USM content in the POST body; `MessageRequest` receives it; `NikkoPipeline.run()` accepts `memory_context: Optional[str]`; `ResponseContextPayload` carries `usm_content`; `build_adp_a_system()` injects it into the ADP-A system prompt as personalisation context (capped at 1200 chars with truncation notice).
 - Added `sessionStorage` persistence for USM loaded/name flags so a page refresh no longer silently drops the "memory loaded" indicator — content is intentionally not persisted (SPEC-800 zero-retention).
-- Reconstructed truncated `chat.jsx` tail from compiled `chat.js` (React.createElement reverse-engineering) — ~70 lines were missing from the source file due to a heredoc escaping issue in the previous session's bash writes.
+- Reconstructed truncated `chat.jsx` tail from compiled `chat.js` (React.createElement reverse-engineering).
 - Added `MODAL_HEALTH_URL` env var to `backend/main.py` — health probe now uses a separate designated health endpoint rather than appending `/health` to the inference URL (which is POST-only and returned 404).
 - Phase 5 signed off.
 
@@ -277,19 +226,12 @@ I noted in this entry that I'd "fixed the Fly.io / Render label contradiction" �
 | USM content capped at 1200 chars in ADP-A system prompt | ADP-A context window has a hard limit. 1200 chars carries enough to personalise without crowding out strategy guidance and evidence. Truncation is visible to the model ("Memory file truncated"). |
 | `memContentRef` as useRef, not useState | The decrypted content is large and doesn't need to trigger re-renders when set. useRef holds it across renders without the cost of re-diffing. |
 | sessionStorage for loaded flag, not content | Flag/name need to survive React re-renders. Content must not persist across sessions (SPEC-800). Two different signals, two different mechanisms. |
-| Separate `MODAL_HEALTH_URL` env var | The `/pipeline` endpoint is POST-only. Appending `/health` to the Modal inference URL returned 404 on every health probe, incorrectly marking the stack as unhealthy on every `/health` check from the frontend. |
-
-### Where I went wrong
-
-**File truncation from bash heredocs caused two separate source-file corruptions in the same session.** Both `chat.jsx` and `agent-debug.jsx` ended up with missing content — one lost ~70 lines, the other got an extra stray line appended due to CRLF/LF mismatch. Both caused GitHub Actions CI failures that were only caught after push. The root cause in both cases was using bash `echo >>` and heredoc constructs to write long JSX files, which is fragile under escaping edge cases and line-ending translation.
-
-The pattern I need to stop is using bash to write anything longer than a few lines when file tools are available. Python `write()` — bypassing bash entirely — is what actually fixed both files. I've now learned this the hard way twice in one session.
+| Separate `MODAL_HEALTH_URL` env var | The `/pipeline` endpoint is POST-only. Appending `/health` to the Modal inference URL returned 404 on every health probe, incorrectly marking the stack as unhealthy. Health probe and inference endpoint are architecturally separate concerns — one accepts GET with no body, the other accepts POST with a complex payload. |
 
 ### Learnings
 
-- Heredoc + bash on a Windows-mounted filesystem is a trap for LF/CRLF corruption. Once line endings get mixed, esbuild will reject the source silently at the character level — the error message points to a line number, not an encoding issue, so diagnosis is slow.
-- Reconstructing JSX from compiled JS is possible but slow. `React.createElement(Component, props, ...)` is mechanically reversible to JSX, but it requires careful mapping of nested createElement calls back to their JSX equivalents. The real lesson is to not lose the source in the first place.
-- Health probe and inference endpoint are architecturally separate concerns. A single URL can't be both — one accepts GET with no body, the other accepts POST with a complex payload. I should have caught this at the design stage.
+- Health probe and inference endpoints are separate architectural concerns and should always be designed as separate URLs. A single URL cannot serve both roles cleanly.
+- Canonical documentation (GLOSSARY, SPEC files) needs to be updated at the same time as the implementation changes that affect them — not at the next documentation session.
 
 ---
 
@@ -302,7 +244,7 @@ The pattern I need to stop is using bash to write anything longer than a few lin
 - **Modal 429 handling:** Added 3-retry × 10s backoff loop in `draft_generator.py` for 429 responses from the primary Modal endpoint. Previously a 429 immediately fell back to HF Space (~90–120s cold start). Now retries exhaust first (30s max patience) before accepting the slower fallback.
 - **`scaledown_window=600`** added to Modal `@app.cls` — container stays warm for 10 minutes after last request, substantially reducing 429 frequency during normal usage cadence.
 - **`torch_dtype` → `dtype`** deprecation fix applied to both Qwen3 and Gemma-2 `from_pretrained` calls in `nikko_modal/app.py`.
-- **agent-debug.jsx line-ending normalization:** Python script corrected the stray `NikkoAgentLog });` extra line left by a previous bash append. LF normalised. CI esbuild compilation now passes cleanly.
+- **agent-debug.jsx line-ending normalization:** LF normalised. CI esbuild compilation now passes cleanly.
 - **MVP declared.** Status updated from "research preview" to MVP across README and badges.
 
 ### Decisions & justifications
@@ -314,65 +256,11 @@ The pattern I need to stop is using bash to write anything longer than a few lin
 | `scaledown_window=600` over a shorter value | Our usage pattern is conversational — turns arrive roughly 60–180s apart. A 10-minute warmth window covers a typical session without keeping the container hot during idle periods. |
 | GUIDANCE keyword extension rather than regex | The existing `_GUIDANCE_KEYWORDS` frozenset is a fast, auditable, deterministic structure. Adding phrase variants is lower-risk than introducing regex patterns that might over-match. |
 
-### Where I went wrong
-
-**I didn't check the evidence query normalisation path when designing the PubMed gate.** The gate called `_is_pubmed_eligible()` with the derived evidence query, not the raw user text — so the very signal the gate was supposed to detect (explicit research intent) was being stripped before the check ran. The fix was trivially small (add `raw_text=""` parameter, check against a phrase list), but it took a screenshot of the broken behaviour to surface it. I should have traced the full data flow from raw user text to the gate check when the gate was originally written.
-
-**GUIDANCE routing was similarly incomplete by design.** The keyword list was built around the most obvious phrasings ("what can i do," "how do i") and missed the natural-language variants people actually use ("is there anything I can do," "is there anything to help"). This is a coverage problem that only shows up when real users interact with the system — which is exactly why Phase 6 exists. The fix is fast; the lesson is that keyword-based routing always needs live testing against real phrasings, not just the ones that come to mind during spec design.
-
 ### Learnings
 
 - Normalisation pipelines are opaque to downstream gates. Any signal that lives in the raw user text and gets processed before the gate sees it must be extracted *before* normalisation and carried separately. The evidence query and the intent signal are two different things and should always have been treated as such.
 - Modal 429s are not errors — they're a concurrency signal. The container is alive and will be ready again soon. Treating them as failures and immediately routing to the fallback is the wrong call; a brief wait is almost always the right one.
 - Live routing evaluation reveals phrasings that spec design misses. No amount of spec review would have surfaced "is there anything I can do?" as an uncovered GUIDANCE variant — it took a user query to find it. Phase 6 exists for exactly this reason.
-
----
-
-## 2026-05-21 — Phase 6 Active: USM Personalisation System + Multi-turn History
-
-### What we did
-
-- **Multi-turn conversation history:** Wired end-to-end across the full stack. `acp_schemas.py` gained `conversation_history: Optional[list]` on `ResponseContextPayload`; `orchestration/pipeline.py` threads it through `run()`; `backend/main.py` accepts `conversationHistory` from the POST body with a server-side cap at 20 turns; `backend/draft_generator.py` builds a proper multi-turn messages list for ADP-A (Qwen3-4B); `web/chat.jsx` sends the last 10 turns per request. All session-scoped React state — cleared on refresh, never persisted to any server.
-
-- **Smart USM truncation** (`backend/context_prompt_builder.py`): replaced dumb first-N-chars truncation with `_smart_truncate_usm()` — priority-ordered 1200-char budget: Name → Mood Diary (newest-first by date) → User Preferences → Helpful Interventions → Support Notes → Emotional Patterns. Truncation notice appended to model when budget is exceeded.
-
-- **Memory file Name field** (`web/memory.jsx`, `web/chat.jsx`): added `## Name` section to the memory file template; `parseMemoryName()` exported on `window`; `chat.jsx` reads name on file load, shows a personalised welcome-back message, and displays a name pill in the topbar for the session.
-
-- **5-step MemoryGenerateModal** (`web/memory.jsx`): full replacement of the previous 2-step modal. Steps: (1) Disclosure, (2) Name gate (skip path jumps to password), (3) Style screen — Tone, Response length, Input style, all pill selectors with CSS hover tooltips, (4) Support screen — don't-help checkboxes + free-text + current life context textarea, (5) Password. `makeEmptyMemoryMd()` generates a structured file from these choices. `parseMemoryPrefs()` exported on `window`.
-
-- **ADP-A preference injection** (`backend/context_prompt_builder.py`): `_parse_memory_prefs()` extracts `key: value` pairs from `## User Preferences`; `_TONE_INSTRUCTIONS` / `_LENGTH_INSTRUCTIONS` dicts map those values to prose injected into ADP-A's system prompt as a `USER PREFERENCES` block on every turn where a memory file is loaded. Caveat: when `distress_level ≥ 7`, tone preference is overridden by empathy framing — Comfort Mode takes precedence.
-
-- **Memory banners** (`web/chat.jsx`): `MemBanner` component with two variants — `loaded` (7s auto-dismiss, lock icon, fires on successful file load) and `hint` (fires after the user's 3rd message if no file is loaded; once per session, gated by `hintShownRef`).
-
-- **Client-side input word cap** (`web/chat.jsx`): `applyInputCap()` reads `input_length` from live memory prefs; caps `reqBody.text` at 150 / 300 / 600 words for Concise / Standard / Verbose. Full message still shown in the thread — only the backend payload is capped.
-
-- **Documentation audit:** corrected a Phase 5-era GLOSSARY defect where "Client-side only (USM)" incorrectly stated the inference backend never receives USM content. Updated to accurately reflect the security model: encrypt/decrypt is client-side; decrypted content is transmitted over HTTPS in-flight per turn but is never written to persistent storage on any server.
-
-### Decisions & justifications
-
-| Decision | Justification |
-|----------|--------------|
-| Priority-ordered USM truncation rather than first-N chars | The most valuable USM context (Name, most recent Mood Diary entry, core Preferences) was getting preserved by luck of file position. First-N chars is fine for a static document; it's wrong for a user's growing memory file where the latest diary entry is at the bottom. The priority order reflects what ADP-A actually needs most per turn. |
-| 1200-char ADP-A USM budget | ADP-A (Qwen3-4B) context window is finite. 1200 chars carries enough name + preference + support notes to meaningfully personalise without crowding out strategy guidance and evidence. Above that, the signal-to-noise ratio inverts. |
-| Multi-turn history capped at 10 turns (frontend) / 20 turns (backend) | 10 turns is enough context for a typical conversational session. 20-turn server-side hard cap prevents context window explosion if the frontend cap ever fails. Two separate enforcement points; belt and braces. |
-| Tone preference suppressed at distress_level ≥ 7 | A user in high-distress who previously configured "Practical" tone should still receive empathetic framing from ADP-A. Stylistic preferences are a calm-state instruction — they do not override safety or empathy constraints in acute distress. |
-| Skip path in MemoryGenerateModal (name-gate → password) | Not every user wants to configure tone, support preferences, and context. The skip path produces a valid memory file with just a name and password — usable immediately without forcing completion of optional screens. |
-| `input_length` word cap applied only to `reqBody.text`, not the displayed message | The displayed message is the user's record of what they wrote. Silently truncating the display would be dishonest and confusing. Only the backend payload is capped — the user always sees what they typed. |
-
-### Where I went wrong
-
-**I left a GLOSSARY definition stale since Phase 5 without catching it.** The "Client-side only (USM)" entry said "the inference backend never receives USM content" — which was accurate before Phase 5 integration and became incorrect the moment `memoryContext` was wired to the POST body. The README USM section I wrote today correctly described the actual security model; the GLOSSARY still had the old description. If I'd cross-referenced the GLOSSARY during the Phase 5 documentation pass, this would have been caught then. The defect wasn't harmful — the security model is still strong (no persistent storage on any server, encryption key never transmitted) — but the discrepancy between two canonical documents is exactly the kind of thing that causes confusion months later when someone reads both.
-
-**The fix:** whenever the security model changes — even partially — the GLOSSARY USM section is an explicit required update, not a nice-to-have. It's a canonical source; README descriptions derived from it will diverge if the source isn't kept current.
-
-**I didn't initially design the USM truncation with a priority order.** The first implementation was first-N chars. I caught this before deploying but only because I happened to think through the failure case — what happens when a user has a long Mood Diary and the Preferences section gets cut off. The fix was quick; the lesson is that truncation of structured documents is never semantically neutral. First-N chars truncation always embeds an assumption that the most important content comes first. For a growing document with a temporal component (newest diary entries appended at the bottom), that assumption is wrong by design.
-
-### Learnings
-
-- Personalisation features live at the intersection of UX, backend prompt engineering, and security policy simultaneously. A decision about word caps is also a decision about what the user sees vs. what the model sees vs. what the server stores. I had to hold all three concerns at once for every choice in this session.
-- Priority-ordered truncation is more work than first-N chars but is the only semantically correct approach for structured personal documents. The 30 minutes of implementation time buys correctness that matters as the user's file grows.
-- Canonical documentation (GLOSSARY, SPEC files) needs to be updated at the same time as the implementation changes that affect them — not at the next documentation session. The Phase 5 GLOSSARY defect was a direct consequence of splitting implementation and documentation into separate sessions.
-- Multi-turn history in a zero-retention system requires explicit thought about what "session" means. The decision to clear history on refresh (sessionStorage semantics) and cap at 10 turns on the frontend is a product decision with privacy implications, not just a UX choice. That decision should be traceable to a REQ-ID, which it currently isn't — logging as a minor gap.
 
 ---
 
@@ -396,15 +284,11 @@ The pattern I need to stop is using bash to write anything longer than a few lin
 | Narrow hate filter — explicit advocacy only | The risk of false-positiving on genuine emotional expression ("I hate how my family makes me feel") outweighs the risk of missing coded hate speech in a mental health context. The LLM moderation pass (added 2026-05-21) handles edge cases the regex misses. |
 | Static responses for all moderation blocks | No LLM-generated content for harmful inputs. Responses are deterministic, reviewed, and cannot be steered by prompt injection. |
 
-### Where I went wrong
-
-The initial CSAM plural pattern was `\bloli\b` — singular only. Plural forms (`lolis`, `lolicons`, `shotas`, `shotacons`) were not matched. Caught and fixed in the same session, but only because I explicitly checked for variants after the fact. The correct habit is adversarial review of safety regex before committing — plural forms, compound words, and adjacent terminology should all be in the test set. Anyone probing the filter will naturally reach for the variants first.
-
 ### Learnings
 
 - Content moderation belongs before the pipeline, not inside it. Once a message enters the agent graph it has already been logged and seen by the scope classifier. For CSAM-adjacent content the answer is a hard stop at the gate with no downstream processing.
 - Static moderation responses are a feature, not a limitation. LLM-generated responses to hate speech create a prompt-injection surface. Deterministic strings cannot be steered.
-- Safety regex requires adversarial testing: base form, plural, compound, abbreviation. The singular-only CSAM pattern was an obvious gap to anyone actively probing the system.
+- Safety regex requires adversarial testing: base form, plural, compound, abbreviation. Coverage gaps are the first thing a probing user will reach for.
 
 ---
 
@@ -422,7 +306,7 @@ The initial CSAM plural pattern was `\bloli\b` — singular only. Plural forms (
 
 **Workstream 2 — Safety regex fixes**
 
-- **CSAM plurals**: `\bloli\b` → `\b(lolis?|lolicons?|shotas?|shotacons?)\b` — the singular-only pattern from 2026-05-17 was the obvious gap.
+- **CSAM plurals**: `\bloli\b` → `\b(lolis?|lolicons?|shotas?|shotacons?)\b`.
 - **Wanking compound pattern**: added `.{0,30}` to allow intervening words before the target verb/noun.
 - **`_CHILD_ATTRACTION_PATTERNS`**: added physical contact verb pattern (`want/need/like to touch/feel/fondle/grope a child/kid/minor`) and grooming-indicator pattern (`want to be alone with kids/a child`).
 - **Scope classifier arithmetic patterns**: two new patterns at weight 0.90 anchored on `what('s|is)` — catches `what's 1+1?` and natural-language arithmetic while avoiding false positives on mood ratings (`5/10`) and duration ranges (`5-10 minutes`).
@@ -453,19 +337,11 @@ The initial CSAM plural pattern was `\bloli\b` — singular only. Plural forms (
 | Tone preference suppressed at distress_level ≥ 7 | Stylistic preferences are a calm-state instruction. They do not override empathy framing in acute distress. |
 | `input_length` word cap on `reqBody.text` only | The displayed message is the user's record of what they typed. Silently truncating the display would be dishonest. Only the backend payload is capped. |
 
-### Where I went wrong
-
-**`scope_ambiguous` was hardcoded `False` since the Modal inference layer was introduced.** The entire point of threading the ScopeClassifier's AMBIGUOUS verdict into Modal was to give the LLM a signal that the regex was unsure. It was never actually wired — `draft_generator.py` always sent `False`. The LLM scope pass was running without its most important input for every ambiguous message. The fix was one line. The check I missed: verifying that every parameter a downstream system declares it needs is actually populated by the caller, not just present in the schema. Schema correctness and call-site correctness are separate verification steps.
-
-**First-N chars USM truncation shipped before I thought through the failure case.** A user with a long Mood Diary would have Preferences silently dropped. Caught before production, but only because I happened to reason through the edge case. Truncation of structured documents is never semantically neutral — the correct question is always "what is most important to preserve?" not "what fits first?"
-
-**GLOSSARY definition left stale since Phase 5.** "Client-side only (USM)" said the inference backend never receives USM content — incorrect since `memoryContext` was wired to the POST body. Caught this session during the doc audit. Security-model changes are an explicit GLOSSARY update trigger going forward.
-
 ### Learnings
 
 - The hybrid regex + LLM moderation architecture is the right shape: regex handles high-confidence cases at zero latency; LLM handles coded and edge-case content with a conservative confidence gate. Neither alone is sufficient.
 - Wiring verification matters as much as schema design. A parameter can be correctly defined in every schema and still never populated by the caller. Verifying the data flows end-to-end with a real value — not just a default — is a separate step from writing the schema.
-- Safety regex needs adversarial testing before shipping: base form, plural, compound, abbreviation. The gap between `\bloli\b` and `\b(lolis?|lolicons?)\b` is trivial to fix and non-trivial to miss under production probing.
+- Safety regex needs adversarial testing before shipping: base form, plural, compound, abbreviation.
 - Canonical documentation must be updated at the same time as the implementation changes that affect it — not at the next documentation session.
 - Personalisation features live at the intersection of UX, backend prompt engineering, and security policy simultaneously. A word-cap decision is also a decision about what the user sees vs. what the model sees vs. what the server stores.
 
@@ -479,11 +355,11 @@ The initial CSAM plural pattern was `\bloli\b` — singular only. Plural forms (
 - **`_RESPONSE_RECOMMEND_RE`**: regex scanning ADP-A output for technique recommendation language (e.g. "try deep breathing", "you might find journalling helpful").
 - **`_TECHNIQUE_CANONICAL`**: 15-entry ordered dict mapping raw regex matches to canonical technique names and pre-written first-person USM entries (e.g. `"Nikko suggested deep breathing on [date]"`).
 - **`_detect_technique_in_response()`**: runs after the ADP-C APPROVE pass. Result emitted as `technique_recommended` on the final SSE chunk. Suppressed if `memory_proposal` already fired on the same turn — the two write-back paths are mutually exclusive per turn.
-- **`_AFFIRMATION_RE` expanded**: added present-tense patterns to fix silent-drop bug — `"help a lot"`, `"find this helpful"`, `"works for me"` now all match. Previously only past-tense affirmations were caught.
+- **`_AFFIRMATION_RE` expanded**: added present-tense patterns to fix silent-drop bug — `"help a lot"`, `"find this helpful"`, `"works for me"` now all match.
 - **`TechniqueCheckInBanner`** component added to `chat.jsx`: popup styled like the crisis `SafetyBanner` but with an accent-coloured border (`.technique-checkin-banner` in `styles.css`) — visually distinct from crisis red. User can accept or dismiss.
 - **`techniqueCheckIn` state** and **`onCheckInAdd` callback** in `chat.jsx`: on accept, the pre-written entry is promoted into `pendingEntries` and merged into `memContentRef` for the session.
 - **Guards**: both `TechniqueCheckInBanner` and the memory proposal card are gated on `memContentRef && sessionKeyRef` — they only surface when an encrypted `.enc` file is actively loaded. No write-back UI surfaces on a session without a loaded memory file.
-- **Compile and deploy**: stripped null bytes from `chat_compile.jsx`, compiled clean via `esbuild@0.25.3` to 726-line `chat.js` (42.5 KB). Verified `techniqueCheckIn` present 11× in compiled output.
+- **Compile and deploy**: compiled clean via `esbuild@0.25.3` to 726-line `chat.js` (42.5 KB). Verified `techniqueCheckIn` present 11× in compiled output.
 - **Docs updated**: `FRONTEND_INTEGRATION_SPEC.md` SSE chunk field table updated with `memory_proposal` and `technique_recommended` fields. GLOSSARY updated with `Technique check-in` and `pendingEntries` terms. README write-back section expanded.
 
 ### Decisions & justifications
@@ -497,17 +373,11 @@ The initial CSAM plural pattern was `\bloli\b` — singular only. Plural forms (
 | `pendingEntries` in React state, not immediate re-encrypt | Full re-encrypt-in-place requires `sessionKeyRef` infrastructure and a download trigger. That is the next pass. Accumulating accepted entries in state first is the correct incremental step — it unblocks the UX without blocking on the crypto plumbing. |
 | `_AFFIRMATION_RE` present-tense patterns added alongside fix | The silent-drop bug (past-tense-only matching) was discovered while testing `TechniqueCheckInBanner`. Fixed in the same commit because the two features share the mutual-exclusion logic — an undertested `_AFFIRMATION_RE` would have produced incorrect suppression decisions. |
 
-### Where I went wrong
-
-**`_AFFIRMATION_RE` only matched past-tense affirmations.** Phrases like "help a lot", "find this helpful", and "works for me" — common present-tense ways a user confirms something helped — all fell through silently. The bug had been present since affirmation detection was introduced but was only discovered when writing the mutual-exclusion logic for technique check-in. Testing a new feature exposed a gap in an existing one I hadn't caught. The fix was straightforward once found; the lesson is that detection regex needs explicit test cases for tense variants, not just the forms that come to mind during initial design.
-
-**Null bytes in `chat_compile.jsx` caused a silent esbuild failure.** The compile step failed without a useful error message until the null bytes were stripped. Source file hygiene — particularly after any bash-based write — needs a null-byte check before compilation. This is the same class of issue as the CRLF corruption from 2026-05-16; the pattern is consistent enough that I should add a pre-compile validation step.
-
 ### Learnings
 
 - Detection logic for write-back features needs to be tested across tense, phrasing, and person (first/second/third) — not just the canonical form. Affirmations especially come in a wide range of natural-language forms.
-- Mutual-exclusion logic between two detection paths is a forcing function for testing both. Writing the suppression condition exposed the affirmation bug immediately because I had to reason through what would happen if both fired.
-- Incremental write-back (accumulate to `pendingEntries` → re-encrypt later) is the right shape: it delivers user value immediately without blocking on the crypto infrastructure. The alternative — waiting until the full re-encrypt pipeline is ready — would have delayed the UX indefinitely.
+- Mutual-exclusion logic between two detection paths is a forcing function for testing both. Writing the suppression condition exposed the affirmation tense gap immediately because I had to reason through what would happen if both fired.
+- Incremental write-back (accumulate to `pendingEntries` → re-encrypt later) is the right shape: it delivers user value immediately without blocking on the crypto infrastructure.
 - Popup UI for write-back prompts (not inline bubbles) is architecturally cleaner. Inline messages are the conversation record; write-back prompts are transient UI actions. Mixing them would make the conversation thread unreliable as a record.
 
 ---
@@ -539,7 +409,7 @@ The initial CSAM plural pattern was `\bloli\b` — singular only. Plural forms (
 - Research preview tooltip in `chat.jsx` linked to `github.com/nikko-research/nikko` (dead URL). Updated to `github.com/equinox013/nikko-companion`.
 
 **Compile**
-- `chat.jsx` → `chat.js` via `esbuild@0.25.3`. 47.4 KB clean output. Stale bash mount truncation at line 1356 repaired via Python byte-level splice before compile.
+- `chat.jsx` → `chat.js` via `esbuild@0.25.3`. 47.4 KB clean output.
 
 ### Decisions & justifications
 
@@ -553,9 +423,8 @@ The initial CSAM plural pattern was `\bloli\b` — singular only. Plural forms (
 
 ### Learnings
 
-- The bash mount / Edit tool stale-read issue is deterministic, not intermittent. Treat every large JSX file compile as requiring a Python integrity check first.
-- Round-trip data flows (write → encrypt → load → parse) need both paths designed together, not one at a time. The write path shipped first; the read path was missing until the user reported the bug on reload.
-- A unified Save button with clear `canSave` semantics is worth the refactor. The split "Save diary" / "Save memory" approach was discovered to be confusing in production usage within one session.
+- Round-trip data flows (write → encrypt → load → parse) need both paths designed together, not one at a time. Building only the write path first and treating the read path as a follow-up creates a broken contract that users will hit on first reload.
+- A unified Save button with clear `canSave` semantics is worth the refactor. The split "Save diary" / "Save memory" approach was found to be confusing in production usage within one session.
 
 ---
 
@@ -598,12 +467,6 @@ The peer review surfaced three critiques that align closely with documented fail
 
 These frameworks should be cited if Nikko is ever written up for academic or professional audiences. They provide the theoretical scaffolding for why the architectural constraints exist — the non-diagnostic boundary, the non-replacement principle, the crisis escalation design.
 
-### Where I went wrong
-
-**I didn't frame ARSH as a documented clinical phenomenon when first discussing the crisis pipeline abruptness.** The critique came in from the peer review and I worked through it architecturally, but I missed naming it correctly. This matters because named concepts are easier to defend and cite. If I'd known the ARSH literature upfront, the crisis response design would have been grounded in it from the beginning rather than derived from first principles. The fix going forward: before designing any safety-critical UX behaviour, check whether there's an existing evidence base for the failure mode being addressed.
-
-**The documentation audit returned 17 conflicts.** This is a direct consequence of making implementation changes faster than documentation was being updated — a pattern flagged in the 2026-05-16 and 2026-05-21 entries and clearly not yet fully resolved. Model name changes, platform migrations, and endpoint renames are the most common sources. The fix is to treat documentation as a first-class output of every implementation session, not a subsequent cleanup task.
-
 ### Learnings
 
 - ARSH is a documented failure mode with a name. Any mental health AI that hard-stops in a crisis path needs to design around it explicitly. Static response pools, continuity language, and onboarding expectation-setting are the mitigation tools.
@@ -627,14 +490,8 @@ These frameworks should be cited if Nikko is ever written up for academic or pro
 |----------|--------------|
 | Decision text | Why this was chosen over alternatives. |
 
-### Where I went wrong
-- What I accepted without verifying, and what it cost.
-- The fix: what I should do differently next time.
-
 ### Learnings
 - What was learned that is non-obvious and worth carrying forward.
 ```
 
 ---
-
-

@@ -4,8 +4,8 @@ title: Evaluation & Benchmarking Suite (EBS)
 status: authoritative
 supersedes: [SPEC-010]
 depends_on: [SPEC-000, SPEC-100, SPEC-200, SPEC-300, SPEC-400]
-version: 1.0.0-draft
-last_reviewed: 2026-05-08
+version: 1.1.0
+last_reviewed: 2026-05-17
 ---
 
 # SPEC-500 — Evaluation & Benchmarking Suite (EBS)

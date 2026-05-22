@@ -4,8 +4,8 @@ title: Agent Communication Protocol (ACP)
 status: authoritative
 supersedes: [SPEC-003, SPEC-004, SPEC-005, SPEC-006, SPEC-007, SPEC-008]
 depends_on: [SPEC-000, SPEC-100]
-version: 1.0.0-draft
-last_reviewed: 2026-05-08
+version: 1.1.0
+last_reviewed: 2026-05-21
 ---
 
 # SPEC-200 — Agent Communication Protocol (ACP)

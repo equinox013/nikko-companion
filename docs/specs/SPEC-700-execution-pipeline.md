@@ -4,8 +4,8 @@ title: Full System Integration Blueprint (End-to-End Execution Trace)
 status: authoritative
 supersedes: []
 depends_on: [SPEC-000, SPEC-100, SPEC-200, SPEC-300, SPEC-400, SPEC-500, SPEC-600]
-version: 1.0.0-draft
-last_reviewed: 2026-05-08
+version: 1.1.0
+last_reviewed: 2026-05-22
 ---
 
 # SPEC-700 — Full System Integration Blueprint

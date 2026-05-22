@@ -4,8 +4,8 @@ title: Data Lifecycle & Privacy
 status: authoritative
 supersedes: []
 depends_on: [SPEC-000, SPEC-600, SPEC-700]
-version: 1.0.0-draft
-last_reviewed: 2026-05-09
+version: 1.1.0
+last_reviewed: 2026-05-21
 ---
 
 # SPEC-800 — Data Lifecycle & Privacy

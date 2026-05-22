@@ -4,8 +4,8 @@ title: Crisis Response Protocol (CRP)
 status: authoritative
 supersedes: []
 depends_on: [SPEC-000, SPEC-100, SPEC-200]
-version: 1.0.0-draft
-last_reviewed: 2026-05-08
+version: 1.1.0
+last_reviewed: 2026-05-22
 ---
 
 # SPEC-300 — Crisis Response Protocol (CRP)
