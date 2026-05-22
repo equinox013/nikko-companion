@@ -317,27 +317,96 @@ _PRE_ANALYSIS_SYSTEM = (
     "Analyse the user message for the following signals and output ONLY a JSON object "
     "with key 'annotations' containing a space-separated list of detected tags, or an "
     "empty string if none are detected.\n\n"
-    "SIGNALS TO DETECT:\n"
-    "[PARA: tone_softener] — humour, 'lol', 'haha', 'jk', 'kidding' "
-    "IMMEDIATELY AFTER or within the same clause as a distress statement. "
-    "Example: 'I hate my life lol' → YES. 'That movie was hilarious lol' → NO.\n"
-    "[PARA: minimisation] — distress followed by 'it's fine', 'nvm', 'doesn't matter', "
-    "'forget it', 'not a big deal'. Example: 'I've been really struggling, it's fine' → YES.\n"
-    "[PARA: mixed_affect] — contradictory emotional signals in one message. "
-    "Example: 'I'm so happy but I keep crying and I don't know why'.\n"
+
+    # ── Design principle ─────────────────────────────────────────────────────────
+    # Paralinguistic markers set AROUSAL / INTENSITY. Words set valence.
+    # A message scored as non-distressed lexically but flagged for high-arousal
+    # signals should have its distress reading adjusted upward. Never use these
+    # tags as standalone emotion labels — they are intensity modifiers for ADP-B.
+    # Source basis: McCulloch (2019), Al Tawil (2019), Wylie (2020),
+    # Apriliani & Muslim (2021). See docs/paralinguistic_emotion_cues.md.
+
+    "SIGNALS TO DETECT:\n\n"
+
+    "── PARALINGUISTIC (how something is said) ──\n"
+    "[PARA: tone_softener] — laughter token ('lol', 'haha', 'hehe', 'lmao', 'jk', 'kidding') "
+    "appearing IMMEDIATELY AFTER or within the same clause as a distress statement. "
+    "The laughter is doing face-saving work, not expressing genuine amusement. "
+    "Example: 'I hate my life lol' → YES. 'That movie was hilarious lol' → NO. "
+    "'I want to disappear haha' → YES.\n"
+
+    "[PARA: minimisation] — distress statement immediately walked back with dismissive language: "
+    "'it's fine', 'nvm', 'never mind', 'doesn't matter', 'forget it', 'not a big deal', 'ignore me'. "
+    "The person opened the door then closed it. "
+    "Example: 'I've been really struggling, it's fine though' → YES.\n"
+
+    "[PARA: mixed_affect] — contradictory emotional signals within the same message. "
+    "Example: 'I'm so happy but I keep crying and I don't know why'. "
+    "'Everything is fine I just feel empty' → YES.\n"
+
     "[PARA: typographic_register] — abrupt shift within the message from formal/complete "
-    "sentences to very casual abbreviations or slang. "
-    "Example: 'I have been experiencing significant distress ... idk man whatever'.\n"
-    "[STRUCT: fragmented_syntax] — incomplete sentences, multiple trailing ellipses, "
-    "or sentences that stop mid-thought. Example: 'I just feel like... I don't know...'.\n"
-    "[STRUCT: all_caps_segment] — isolated ALL CAPS in otherwise lowercase message. "
-    "Example: 'I can't do this anymore I JUST WANT IT TO STOP but yeah'.\n"
-    "[STRUCT: register_collapse] — message degrades from full sentences to single "
-    "words or emoji only by the end. Example: 'I've been trying so hard. Nothing works. ugh. 😔'.\n\n"
-    "IMPORTANT: Only tag signals that are CLEARLY present. When uncertain, omit the tag. "
-    "A false positive here could cause over-sensitivity in the safety check. "
-    "Output ONLY the JSON object. No explanation. No preamble.\n"
-    'Example output: {"annotations": "[PARA: tone_softener] [STRUCT: fragmented_syntax]"}\n'
+    "sentences to very casual abbreviations, slang, or single-word utterances. "
+    "Example: 'I have been experiencing significant distress ... idk man whatever' → YES. "
+    "Also fires for asterisk-wrapped actions (*sigh*, *cries*, *shakes*) — explicit stage-direction "
+    "tone annotation that bypasses verbal expression. Example: '*stares at wall*' → YES.\n"
+
+    "[PARA: expressive_lengthening] — letters repeated 3+ times to mimic a drawn-out spoken "
+    "sound, amplifying the emotional weight of the base word. The arousal level tracks the "
+    "repeat count. "
+    "Example: 'I can't doooo this', 'pleaseeee', 'nooo', 'I'm so tireddddd' → YES. "
+    "Legitimate doubles ('committee', 'letter') are excluded by the 3+ threshold.\n"
+
+    "[PARA: punctuation_urgency] — two or more consecutive question marks (??), "
+    "two or more exclamation marks (!!), or mixed ?! combinations. "
+    "Signals confusion, disbelief, urgency, or shock — elevated arousal regardless of valence. "
+    "Example: 'why is this happening??' → YES. 'what?!' → YES. "
+    "Single ? or single ! do NOT fire this tag.\n"
+
+    "[PARA: keysmash] — haphazard keyboard mashing expressing emotional overwhelm or being "
+    "lost for words: 'asdfjkl;', 'fjdkslafjdsk', 'jfkdlsajfklds'. "
+    "Characteristics: 5+ alpha characters, low vowel ratio (<35%), high home-row ratio (>50%). "
+    "Example: 'I just aksdjfhkajsdhf I can't even' → YES. "
+    "Real words and abbreviations do NOT fire this tag.\n"
+
+    "[PARA: emoji_distress] — one or more distress-coded emoji (😭 😔 💔 😶 😶‍🌫️ 🥺 😞 😣 😢 🖤 💀), "
+    "OR any emoji repeated 3+ times (repetition amplifies intensity regardless of which emoji). "
+    "Example: '😭😭😭' → YES. '💔' → YES. '😊😊😊' → YES (repetition). '👍' alone → NO.\n\n"
+
+    "── STRUCTURAL (the shape of the message) ──\n"
+    "[STRUCT: fragmented_syntax] — incomplete sentences or thoughts that stop mid-clause "
+    "without resolution. Distinct from ellipsis trail (below): this is about broken grammar, "
+    "not trailing off. Example: 'I just feel like', 'I don't know I just', 'h-hi there' → YES.\n"
+
+    "[STRUCT: ellipsis_trail] — message contains two or more ellipsis clusters (... or …), "
+    "especially at the end of clauses or sentences. Signals hesitation at the edge of saying "
+    "something difficult — the person is approaching a disclosure but not completing it. "
+    "Example: 'I just feel like... I don't know... it doesn't matter...' → YES. "
+    "A single ellipsis for stylistic pause does NOT fire this tag.\n"
+
+    "[STRUCT: all_caps_segment] — isolated ALL CAPS burst in an otherwise mixed-case message — "
+    "an intensity spike that amplifies whatever emotion surrounds it. "
+    "Exclude common acronyms (LOL, OK, OMG, WTF, FYI, ASAP, IDK). "
+    "Example: 'I can't do this anymore I JUST WANT IT TO STOP' → YES. 'I feel OK' → NO.\n"
+
+    "[STRUCT: all_lowercase] — entire message contains no uppercase letters despite being "
+    "multiple words long. McCulloch's 'minimalist typography': deliberate absence of capitals "
+    "signals a sincere, deadpan, or emotionally drained register — the person is not performing "
+    "normality. Only meaningful when the message is 4+ words. "
+    "Example: 'i don't know what to do anymore' → YES. 'ok' → NO (too short).\n"
+
+    "[STRUCT: register_collapse] — message opens with full sentences and degrades to single "
+    "words, fragments, or emoji-only by the end — structural deterioration as the person "
+    "runs out of words or emotional energy mid-message. "
+    "Example: 'I've been trying so hard. Nothing works. ugh. 😔' → YES.\n\n"
+
+    "IMPORTANT RULES:\n"
+    "1. Only tag signals that are CLEARLY present. When uncertain, omit the tag. "
+    "A false positive causes over-sensitivity; a false negative is preferable.\n"
+    "2. These tags signal AROUSAL and INTENSITY — not specific emotions. "
+    "Do not infer valence from the tags alone.\n"
+    "3. Multiple tags may fire on the same message.\n"
+    "4. Output ONLY the JSON object. No explanation. No preamble.\n"
+    'Example output: {"annotations": "[PARA: tone_softener] [STRUCT: ellipsis_trail] [PARA: expressive_lengthening]"}\n'
     'No signals: {"annotations": ""}'
 )
 
@@ -850,12 +919,20 @@ class NikkoInference:
         annotation_block = (
             f"PARALINGUISTIC / STRUCTURAL SIGNALS DETECTED IN THIS MESSAGE:\n"
             f"{annotations}\n\n"
-            "These signals MAY indicate masked or minimised distress. "
-            "A tone softener (e.g. 'lol' after distress language) does NOT make the "
-            "message safe — it may indicate the user is downplaying their state. "
-            "Weight these signals when determining the crisis verdict, but do not let "
-            "them override explicit content: if the message contains no direct self-harm "
-            "language, crisis MUST still be false.\n\n"
+            "INTERPRETATION RULES FOR THESE SIGNALS:\n"
+            "1. These signals indicate elevated AROUSAL and INTENSITY — not a specific "
+            "emotion. The verbal content sets valence; these signals amplify it. "
+            "A message that reads as mild distress in words but carries keysmash, "
+            "expressive lengthening, or multiple ellipsis trails should be read as "
+            "higher-intensity distress than the words alone suggest.\n"
+            "2. Tone softeners ([PARA: tone_softener]) and minimisation ([PARA: minimisation]) "
+            "do NOT make a distressed message safe — they indicate the user is actively "
+            "downplaying their state. Weight the distress signal MORE, not less.\n"
+            "3. These signals do NOT override explicit content rules: if the message "
+            "contains no direct self-harm language, crisis MUST still be false regardless "
+            "of how many paralinguistic signals are present.\n"
+            "4. Multiple signals compound: two or more firing together on the same message "
+            "is a stronger indicator of masked distress than a single signal alone.\n\n"
         )
         return annotation_block + base_system
 
