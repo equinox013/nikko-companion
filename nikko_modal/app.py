@@ -916,7 +916,51 @@ class NikkoInference:
         """
         if not annotations:
             return base_system
+
+        # ── Signal-strength gate ──────────────────────────────────────────────
+        # [REQ-700-SA6] Weak signals that fire in isolation should be treated as
+        # background texture, not elevated distress indicators. This prevents the
+        # safety model from over-reading stylistic choices (e.g. all-lowercase,
+        # trailing ellipses) in messages that carry no distressed verbal content.
+        #
+        # WEAK  — ambiguous on their own; often stylistic / low-register writing.
+        #         all_lowercase, ellipsis_trail, expressive_lengthening,
+        #         punctuation_urgency, emoji_distress.
+        # STRONG — high-signal indicators of arousal or masking behaviour.
+        #         tone_softener, minimisation, mixed_affect, keysmash,
+        #         all_caps_segment, register_collapse, typographic_register,
+        #         fragmented_syntax.
+        #
+        # Logic: if exactly 1 signal fires AND it is in the WEAK set → prepend a
+        # low-confidence caveat. 2+ signals or any STRONG signal → full weight.
+        _WEAK_SIGNALS = {
+            "all_lowercase",
+            "ellipsis_trail",
+            "expressive_lengthening",
+            "punctuation_urgency",
+            "emoji_distress",
+        }
+        # Extract tag names from the annotation string (format: "[PARA: foo]" / "[STRUCT: bar]")
+        import re as _re
+        detected_tags = _re.findall(r"\[(?:PARA|STRUCT):\s*(\w+)\]", annotations)
+        is_weak_singleton = (
+            len(detected_tags) == 1
+            and detected_tags[0] in _WEAK_SIGNALS
+        )
+
+        if is_weak_singleton:
+            strength_note = (
+                "SIGNAL CONFIDENCE — LOW: Only a single weak-intensity signal was detected "
+                f"({detected_tags[0]}). This signal is stylistically ambiguous and should be "
+                "treated as background context, not an elevated distress indicator. "
+                "Do not adjust your safety verdict based on this signal alone — rely on the "
+                "verbal content of the message as primary evidence.\n\n"
+            )
+        else:
+            strength_note = ""
+
         annotation_block = (
+            f"{strength_note}"
             f"PARALINGUISTIC / STRUCTURAL SIGNALS DETECTED IN THIS MESSAGE:\n"
             f"{annotations}\n\n"
             "INTERPRETATION RULES FOR THESE SIGNALS:\n"

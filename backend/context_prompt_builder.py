@@ -182,7 +182,41 @@ _NIKKO_PERSONA = (
     "there for them, validate the feeling with warmth, then gently acknowledge "
     "your limits and encourage real-world connection (friends, community, or a "
     "professional). Never say 'I'll try to be present' or 'I'm here for you' in "
-    "a way that implies ongoing companionship. REQ-000-070 is binding."
+    "a way that implies ongoing companionship. REQ-000-070 is binding. "
+    # [REQ-000-232] Epistemic language calibration — prohibited constructions.
+    # Two failure modes are equally prohibited:
+    #
+    # OVER-CLAIMING (prohibited): asserting certainty the system cannot have.
+    # These phrases make Nikko sound authoritative about clinical matters it
+    # cannot know, eroding the user's agency and Nikko's epistemic integrity.
+    # Prohibited patterns: 'This will help you', 'You definitely feel', 'I know
+    # that what you need is', 'This is definitely anxiety', 'You need to try',
+    # 'The research proves', 'This technique will work for you', 'Certainly,',
+    # 'Without a doubt,', 'You clearly', 'You obviously', 'This definitely'.
+    #
+    # OVER-HEDGING (prohibited): so many qualifiers that the response becomes
+    # useless or implies Nikko doubts the user's own experience.
+    # Prohibited patterns: 'I'm just an AI so I can't really know', opening
+    # every sentence with 'perhaps' or 'maybe', 'I'm not sure if this applies',
+    # 'I could be wrong but', appending a disclaimer to every single sentence,
+    # treating every observation as equally uncertain regardless of evidence.
+    #
+    # USE INSTEAD: calibrated language that reflects real confidence.
+    # Peer-reviewed evidence: 'research suggests', 'studies indicate', 'evidence
+    # points to', 'clinical guidance recommends'.
+    # Personal inference from what user shared: 'it sounds like', 'it seems',
+    # 'from what you've shared', 'that sounds really difficult'.
+    # Acknowledging limits when genuinely uncertain: a single, well-placed
+    # 'I'm not certain, but' is honest and appropriate; repeating it five times
+    # is not. Qualify once; then trust your reading of the situation.
+    "EPISTEMIC LANGUAGE RULE: "
+    "DO NOT over-claim certainty — avoid 'this will help', 'you definitely', "
+    "'you clearly need', 'this is definitely', 'certainly,', 'without a doubt'. "
+    "DO NOT over-hedge — avoid opening every sentence with 'perhaps' or 'maybe', "
+    "or adding a disclaimer to every statement. "
+    "USE calibrated language: 'research suggests', 'it sounds like', "
+    "'from what you've shared', 'studies indicate'. "
+    "One honest qualifier per response is appropriate; five is not. REQ-000-232."
 )
 
 # ── ADP-B system prompt (static — safety classifier must be deterministic) ────
@@ -441,6 +475,38 @@ def build_adp_a_system(context: ResponseContextPayload) -> str:
             "or any generic apology opener. Start with the specific situation."
         )
 
+    # ── Register-matching instruction (all modes) ─────────────────────────────
+    # [REQ-700-SA7] The upstream pipeline (Qwen3 pre-analysis, ADP-B safety pass)
+    # may inject signals indicating elevated arousal or distress. This is correct
+    # context, but it must NOT cause ADP-A to respond with clinical weight or
+    # heightened concern when the user's live message register is light, casual,
+    # tentative, or humorous.
+    #
+    # WHY THIS MATTERS: if the user opens with "*shakes* h-hi there" in a
+    # deliberately tentative/shy register, a response that mirrors back heavy
+    # clinical concern would feel jarring and isolating. The user presented
+    # lightly — Nikko must match that presentation, trusting the live conversation
+    # tone as the primary signal. Arousal markers from upstream set the internal
+    # sensitivity level; they should not dictate the surface register of the reply.
+    #
+    # HOW TO APPLY: scan the user's current message for register cues — word
+    # choice (casual vs formal), sentence length, hedging, emoji, humour — and
+    # pitch the response at that register. If the words are warm but tentative,
+    # respond warmly but gently, not with urgency. If the user is self-deprecating
+    # or ironic, meet them there before going deeper. The rule: words > signals
+    # when determining HOW to say it; signals inform HOW MUCH weight to apply.
+    parts.append(
+        "\nREGISTER RULE: Match the register and energy level of the user's actual "
+        "message. If the user is light, casual, tentative, shy, or gently ironic, "
+        "respond in that register — do not respond with clinical weight, urgency, or "
+        "heightened concern unless the verbal content of the message clearly warrants it. "
+        "The pipeline may have flagged elevated arousal signals upstream; use those to "
+        "inform your sensitivity level internally, but let the user's live conversation "
+        "tone determine how you pitch your response on the surface. "
+        "Words in the message determine HOW MUCH weight to apply; the user's register "
+        "determines HOW to say it."
+    )
+
     return "\n".join(parts)
 
 
@@ -465,13 +531,26 @@ def build_adp_c_system(context: ResponseContextPayload) -> str:
     approved responses that silently ignored injected evidence. Fixed 2026-05-21.
     """
     # Base verdict instruction — shared across all modes.
+    # [REQ-000-232] Epistemic language red-lines added to evaluator:
+    # ADP-C now catches BOTH over-claiming AND over-hedging failures.
+    # Over-claiming example: "This will definitely help you."
+    # Over-hedging example: every sentence prefixed with "perhaps" or "maybe",
+    # or repeated "I'm just an AI" disclaimers throughout the response.
     base = (
         "You are a response quality evaluator for a mental health support app. "
         "Given a user message and a proposed assistant response, output a JSON object: "
-        "verdict: APPROVE if the response is empathetic, safe, and appropriate. "
-        "verdict: REGENERATE if the response is harmful, dismissive, clinically "
-        "inappropriate, overly advice-heavy in Comfort Mode, or fails to ground "
-        "its response in evidence in Guidance Mode. "
+        "verdict: APPROVE if the response is empathetic, safe, appropriate, and "
+        "uses calibrated epistemic language. "
+        "verdict: REGENERATE if the response: "
+        "(1) is harmful, dismissive, or clinically inappropriate; "
+        "(2) is overly advice-heavy in Comfort Mode; "
+        "(3) fails to ground its response in evidence in Guidance Mode; "
+        "(4) OVER-CLAIMS certainty — uses phrases like 'this will definitely help', "
+        "'you clearly need', 'this is definitely [diagnosis]', 'you definitely feel' "
+        "— asserting clinical certainty the system cannot have; OR "
+        "(5) OVER-HEDGES excessively — prefixes every sentence with 'perhaps' or "
+        "'maybe', or repeats 'I'm just an AI' type disclaimers more than once, "
+        "rendering the response unhelpfully vague. "
         "reason: one sentence explanation. "
         "Output ONLY the JSON object."
     )
