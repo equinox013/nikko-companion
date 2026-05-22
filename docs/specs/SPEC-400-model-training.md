@@ -46,10 +46,11 @@ Reference candidates (revised 2026-05-14):
 
 > **[GAP-G-MODEL-01] CLOSED 2026-05-14** — Licensing review completed. Both selected models permit research deployment without commercial restrictions. See Director Decision below.
 
-[REQ-400-BM1] Nikko is a research-only deployment and will not be commercialised. Base model candidates with compatible research-use licenses (updated priority order, Director decision 2026-05-14):
-1. **Phi-3.5-mini-instruct** (MIT — fully permissive; selected for ADP-A empathy)
-2. **Gemma-2-2b-it** (Google Gemma licence — permits research/commercial use; selected for ADP-B/C)
-3. **Qwen2.5-3B-Instruct** (Apache 2.0 — retained as Phase 3 dev/testing baseline only)
+[REQ-400-BM1] Nikko is a research-only deployment and will not be commercialised. Base model candidates with compatible research-use licenses (updated priority order, Director decision 2026-05-14; ADP-A further revised 2026-05-16):
+1. ~~**Phi-3.5-mini-instruct** (MIT — selected for ADP-A empathy 2026-05-14)~~ — **superseded 2026-05-16**: fine-tuning discontinued (VRAM ceiling); replaced by Qwen3-4B base
+2. **Qwen3-4B** (Apache 2.0 — selected as ADP-A production base 2026-05-16; no fine-tuning for MVP)
+3. **Gemma-2-2b-it** (Google Gemma licence — selected for ADP-B/C)
+4. **Qwen2.5-3B-Instruct** (Apache 2.0 — retained as Phase 3 dev/testing baseline only)
 
 *Retired candidates (archived to `finetuning/mistral-7b/`):*
 - ~~Mistral 7B v0.3~~ — infeasible on RTX 3070 8 GB VRAM (14 GB fp16 footprint; training exceeded 14h with no convergence signal at Step 19). See archived notebooks in `notebooks/mistral-7b/`.
@@ -67,18 +68,28 @@ Reference candidates (revised 2026-05-14):
 >
 > Rationale: Mistral-7B-Instruct-v0.3 was infeasible on the Director's RTX 3070 8 GB VRAM (14 GB bf16 footprint). Phi-3.5-mini-instruct (3.8B) converges ADP-A empathy fine-tuning in ~2h with `packing=True`, `weight_decay=0.01`, `lr=1e-4`. Gemma-2-2b-it (2B) is architecturally ideal for ADP-B/C binary classification tasks and shares its base across both adapters via PEFT `set_adapter()`, eliminating a third model load. Total A10G VRAM budget: ~15 GB (fits 24 GB ZeroGPU with headroom). `trust_remote_code=True` is required for Phi-3.5-mini tokenizer and model classes. bitsandbytes / NF4 quantization is NOT used (ZeroGPU CUDA init-time incompatibility). Both models use native `apply_chat_template()` with system role support. This decision satisfies REQ-400-BM2. Gap GAP-G-MODEL-01 is hereby closed.
 
+> **[DIRECTOR DECISION — 2026-05-16]** ADP-A base model **revised**. Phi-3.5-mini-instruct ADP-A fine-tuning **discontinued** — encountered the same VRAM ceiling as Mistral-7B on the RTX 3070 8 GB dev machine. **Qwen3-4B** (`Qwen/Qwen3-4B`, Apache-2.0) is used as the ADP-A production model **without fine-tuning**; zero-shot quality at the 4B scale is sufficient for the MVP empathy response task. ADP-B and ADP-C training is unaffected. The production model table is amended as follows:
+>
+> | Adapter | Base Model | HF Identifier | Licence | Fine-tuned? |
+> |---------|-----------|---------------|---------|-------------|
+> | ADP-A (Empathy) | **Qwen3-4B** | `Qwen/Qwen3-4B` | Apache-2.0 | **⛔ No — base model used directly** |
+> | ADP-B (Safety) | Gemma-2-2b-it | `google/gemma-2-2b-it` | Gemma | ✅ QLoRA |
+> | ADP-C (Evaluator) | Gemma-2-2b-it | `google/gemma-2-2b-it` | Gemma | ✅ QLoRA |
+>
+> Production VRAM budget (Modal A10G 24 GB): Qwen3-4B ~8.0 GB + Gemma-2-2b-it ~4.5 GB + adapters + overhead ≈ 14.6 GB (9.4 GB headroom). This supersedes the Phi-3.5-mini-instruct ADP-A selection above. SPEC-400 §3.1, §3.2, `finetuning/README.md`, `agents/README.md` updated accordingly.
+
 ### 3.2 Adapter System (Mandatory)
 
 [REQ-400-030] Training MUST use LoRA or QLoRA adapters. The production deployment
 uses a **dual-base-model** layout (Director-approved 2026-05-14):
 
 ```
-Phi-3.5-mini-instruct (base)
-└── Adapter A: Empathy Layer        (ADP-A)   ← response generation
+Qwen3-4B (base, no LoRA)
+└── ADP-A: Empathy Layer            (ADP-A)   ← response generation (base model only for MVP)
 
 Gemma-2-2b-it (base, shared)
-├── Adapter B: Safety Alignment     (ADP-B)   ← crisis/safety classification
-└── Adapter C: Evaluator Behavior   (ADP-C)   ← response quality gate
+├── ADP-B: Safety Alignment         (ADP-B)   ← crisis/safety classification
+└── ADP-C: Evaluator Behavior       (ADP-C)   ← response quality gate
 ```
 
 ADP-B and ADP-C share the Gemma-2-2b-it base. Runtime adapter hot-swap is handled

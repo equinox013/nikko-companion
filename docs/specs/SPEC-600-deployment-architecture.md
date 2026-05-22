@@ -35,15 +35,16 @@ last_reviewed: 2026-05-08
 ## 3. High-Level Production Architecture
 
 ```
-GitHub Pages — equinox013.github.io/nikko (Frontend SPA)
+GitHub Pages — equinox013.github.io/nikko-companion (Frontend SPA)
   ↓
-Fly.io — FastAPI + LangGraph Orchestration (Backend API Layer)
+Render — FastAPI Orchestration (Backend API Layer, nikko-companion.onrender.com)
   ↓
 Router (SPEC-200)
   ↓
 Agent System (Signal / Evidence / Strategy / Eval)
   ↓
-HF Spaces + ZeroGPU — Base Model + PEFT Adapters (LLM Inference)
+Modal Serverless A10G (primary) / HF Spaces ZeroGPU H200 (fallback)
+  — Qwen3-4B + Gemma-2-2b-it + PEFT Adapters (LLM Inference)
   ↓
 Response + Audit Log
 ```
@@ -52,7 +53,7 @@ Response + Audit Log
 
 ### 4.1 Location
 
-[REQ-600-020] The frontend SHALL be hosted at `equinox013.github.io/nikko`.
+[REQ-600-020] The frontend SHALL be hosted at `equinox013.github.io/nikko-companion`.
 
 ### 4.2 Frontend responsibilities
 
@@ -98,11 +99,13 @@ Responsibilities:
 
 ### 5.3 Orchestration hosting (v0 research preview)
 
-[REQ-600-DEP1] The backend orchestration service SHALL be hosted on **Fly.io** for the v0 research-preview deployment. Fly.io is selected for its persistent free-tier micro-VMs (no spin-down), global edge network, and Docker-native deployment model — all of which make it more operationally reliable than Render's free tier for an always-on API.
+[REQ-600-DEP1] The backend orchestration service SHALL be hosted on **Render** (`nikko-companion.onrender.com`) for the v0 research-preview deployment. Render is the live production host as of Phase 7 (2026-05-16). Cold starts are handled by the loading screen (see FRONTEND_INTEGRATION_SPEC §12). A `Dockerfile` is required at the repo root (not in `backend/`); see `README.md §Deployment Stack`.
 
-[REQ-600-DEP2] If Fly.io deployment proves infeasible (e.g., resource limits, Docker compatibility issues), **Render** is the designated fallback. The Director MUST approve any fallback to Render and the associated cold-start UX implications (cold starts of ~30s are handled by the loading screen — see FRONTEND_INTEGRATION_SPEC §12).
+> **[DIRECTOR DECISION — 2026-05-16]** Fly.io was the original target per the original SPEC-600 authoring; Render was activated as fallback and is now the confirmed live host. `fly.toml` is retained at repo root for reference. Any future migration back to Fly.io requires Director approval.
 
-[REQ-600-DEP3] A `Dockerfile` and `fly.toml` MUST be provided in `backend/` before Phase 7 gate opens.
+[REQ-600-DEP2] (retired — Render is confirmed live; Fly.io fallback clause no longer applies)
+
+[REQ-600-DEP3] A `Dockerfile` MUST be present at the repository root (not in `backend/`) before Phase 7 gate opens. ✅ Complete 2026-05-16.
 
 ## 6. LLM Inference Layer
 
@@ -112,11 +115,15 @@ Responsibilities:
 
 > **[GAP-G-INFRA-01]** A single hosting provider (HF Spaces) is a single point of failure for a safety-critical system. No DR / multi-region / failover policy is defined. Director ruling required.
 
-[REQ-600-HF1] Hugging Face Spaces with the **ZeroGPU** tier is the sole inference host for v0 (research preview). ZeroGPU provides free A100 access for custom model serving (base model + PEFT adapters). The Space SHALL be configured as a private FastAPI application, not a Gradio demo. This single-region, single-provider, session-gated limitation MUST be documented in the UI via the research-preview label (REQ-600-UI1). Multi-provider failover is a GA-phase requirement.
+[REQ-600-HF1] **Modal Serverless** is the primary LLM inference host for v0 (research preview), running on **A10G 24 GB** GPU. **Hugging Face Spaces ZeroGPU** (H200 slice) is the designated fallback — the Render backend automatically retries against the HF Space `/pipeline` endpoint if Modal is unavailable. Both endpoints run the same `/pipeline` FastAPI interface (base model + PEFT adapters). The HF Space SHALL be configured as a private FastAPI application, not a Gradio demo. This single-region limitation MUST be documented in the UI via the research-preview label (REQ-600-UI1). Multi-provider failover beyond Modal → HF Spaces is a GA-phase requirement.
+
+> **[DIRECTOR DECISION — 2026-05-16]** Original spec named HF Spaces as sole inference host. Revised: Modal Serverless is primary (faster cold start ~30–60s via Volume read vs ~90–120s for HF Hub download). HF Spaces ZeroGPU H200 is fallback. ZeroGPU hardware was A100 at original authoring; upgraded to H200 as of v0 deployment.
 
 [REQ-600-HF2] The HF Space MUST load the base model and all active PEFT adapters (ADP-A, ADP-B, ADP-C) at Space startup. Adapter weights SHALL be stored in a private HF Hub repository and pulled at startup — not bundled into the Space image.
 
-[REQ-600-HF3] The inference Space MUST expose a `/infer` POST endpoint consumed by the Fly.io orchestration layer. The Space MUST NOT be directly accessible from the frontend.
+[REQ-600-HF3] Both the Modal endpoint and the HF Space fallback MUST expose a `/pipeline` POST endpoint consumed by the Render orchestration layer. Neither inference endpoint MUST be directly accessible from the frontend. The legacy `/infer` endpoint is retained in `hf_space/app.py` for compatibility but is not used by the backend in production.
+
+> **[DIRECTOR DECISION — 2026-05-16]** Original spec specified `/infer`. Revised to `/pipeline` — the consolidated single-GPU-session endpoint that runs ADP-B → ADP-A → ADP-C in one call, reducing warm-turn latency from ~240–330s to ~20–40s.
 
 ### 6.2 Model constraints
 
@@ -244,7 +251,7 @@ Response Draft
 
 ## 11a. Health Check Endpoint
 
-[REQ-600-HL1] The Fly.io orchestration service MUST expose a `GET /health` endpoint that returns `HTTP 200` when the service and its connection to the HF Spaces inference layer are ready to serve requests. Response body: `{ "status": "ok" }`.
+[REQ-600-HL1] The Render orchestration service MUST expose a `GET /health` endpoint that returns `HTTP 200` when the service and its connection to the inference layer (Modal primary / HF Spaces fallback) are ready to serve requests. Response body: `{ "status": "ok", "space_ok": true }`.
 
 [REQ-600-HL2] The frontend MUST poll `GET /health` at 3-second intervals from the moment the loading screen is displayed until a `200` is received or the 60-second timeout is reached.
 
@@ -286,8 +293,8 @@ Response Draft
 | Environment | Host | Configuration |
 |-------------|------|---------------|
 | Development | local machine | local FastAPI dev server; simulated agents; offline evaluation suite; model served via local `transformers` + PEFT |
-| Staging | Fly.io (orchestration) + HF Spaces ZeroGPU (inference) | full agent chain; evaluation logging active; GitHub Pages frontend pointed at staging API |
-| Production (v0 preview) | Fly.io + HF Spaces ZeroGPU + GitHub Pages | stable model + adapters; full SPEC-500 validation passed; monitoring enabled; research-preview label visible |
+| Staging | Render (orchestration) + Modal Serverless / HF Spaces ZeroGPU (inference) | full agent chain; evaluation logging active; GitHub Pages frontend pointed at staging API |
+| Production (v0 preview) | Render + Modal Serverless (primary) + HF Spaces ZeroGPU (fallback) + GitHub Pages | stable model + adapters; full SPEC-500 validation passed; monitoring enabled; research-preview label visible |
 
 [REQ-600-260] No build SHALL be promoted to Production without passing the full SPEC-500 evaluation set.
 
@@ -306,7 +313,7 @@ nikko/
 └── deployment/
 ```
 
-[REQ-600-271] The frontend SHALL remain in a separate repository at `equinox013.github.io/nikko`.
+[REQ-600-271] The frontend SHALL remain in a separate repository at `equinox013.github.io/nikko-companion`.
 
 > **[PROPOSED-RECONCILIATION:** the original spec places `specs/` inside the implementation tree. This repository instead places spec governance documents at the repo root under `docs/specs/` (governance > implementation), and the implementation tree (`agents/`, `backend/`, etc.) will be created at the repo root in Phase 2. The `specs/` subfolder shown above is therefore reinterpreted as a symbolic link or convention pointer to `docs/specs/`. **]** See [G-LAYOUT-01](../GAPS.md).
 

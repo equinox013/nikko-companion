@@ -81,22 +81,22 @@ last_reviewed: 2026-05-08
 |----------|--------|
 | Lifeline Australia | **13 11 14** |
 | Beyond Blue Support Service | **1300 22 4636** |
-| Suicide Call Back Service | **1300 659 467** |
+| 13YARN (First Nations crisis line) | **13 92 76** |
 | Emergency Services (immediate danger) | **000** |
 
-> **[GAP-G-CRISIS-01]** The deployed UI is publicly accessible (`equinox013.github.io/nikko`) — non-Australian users will reach it. No fallback set is defined for users outside Australia. Director ruling required: ship Australia-only and geo-block non-AU traffic, or define an international fallback set (e.g., 988 US, Samaritans UK, befrienders.org global directory)?
-> **[GAP-G-CRISIS-03]** Demographic-specific resources are absent: Kids Helpline (1800 55 1800), 13YARN First Nations (13 92 76), QLife LGBTQ+ (1800 184 527), 1800RESPECT family-violence (1800 737 732), MensLine (1300 78 99 78). Director should rule on whether these are mandatory, optional, or context-routed.
+> **[GAP-G-CRISIS-01]** The deployed UI is publicly accessible (`equinox013.github.io/nikko-companion`) — non-Australian users will reach it. No fallback set is defined for users outside Australia. Director ruling required: ship Australia-only and geo-block non-AU traffic, or define an international fallback set (e.g., 988 US, Samaritans UK, befrienders.org global directory)?
+> **[GAP-G-CRISIS-03] [PARTLY RESOLVED 2026-05-22]** 13YARN (13 92 76) promoted from expandable to the baseline four. Remaining expandable-only resources: Kids Helpline (1800 55 1800), QLife LGBTQ+ (1800 184 527), 1800RESPECT family-violence (1800 737 732), MensLine (1300 78 99 78), Suicide Call Back Service (1300 659 467).
 
 [
 [REQ-300-RS1] Baseline crisis resources (MUST always be displayed during Crisis Mode):
 - Lifeline: 13 11 14
 - Beyond Blue: 1300 22 4636
-- Suicide Call Back Service: 1300 659 467
+- 13YARN (First Nations crisis line): 13 92 76
 - Emergency Services: 000
 
 [REQ-300-RS2] Demographic-specific resources MUST be provided in a "More tailored support" expandable section alongside the baseline resources:
 - QLife (LGBTIQ+): 1800 184 527
-- 13YARN (First Nations): 13 92 76
+- Suicide Call Back Service: 1300 659 467
 - Kids Helpline (under 25): 1800 55 1800
 - 1800RESPECT (family violence): 1800 737 732
 - MensLine Australia: 1300 78 99 78
@@ -161,6 +161,8 @@ last_reviewed: 2026-05-08
 [REQ-300-111] The system MUST NOT request clarification before delivering crisis resources.
 [REQ-300-112] The system MUST NOT delay escalation with conversational softening.
 
+> **[PROPOSED-RECONCILIATION: Director-ratified 2026-05-22]** REQ-300-112 prohibits *delay before* resource delivery — it does not prohibit *framing within* the same response as the resources. A single bridging sentence that opens the crisis response and leads directly into resources without deferring them to a subsequent turn is not a prohibited delay; it is response framing. "Conversational softening" is defined as extended engagement that defers resource delivery to a later turn. Within-turn framing that immediately precedes or accompanies resources is permitted and is required for relational continuity (see REQ-300-113 below). This interpretation is binding.
+
 ## 9. Persistence Rule
 
 [REQ-300-120] Crisis Mode SHALL remain active until the Router determines `distress_level` is no longer `crisis` for the current and most-recent prior turn.
@@ -202,11 +204,45 @@ last_reviewed: 2026-05-08
 
 [REQ-300-151] Higher priorities MUST permanently override lower ones.
 
-## 13. System Philosophy
+## 13. Crisis Response Pool
+
+[REQ-300-113] Crisis Mode responses MUST be drawn from a curated pool of pre-written templates rather than generated freely by the Interaction Model. Template selection is the only LLM-free step in the crisis path — the pool eliminates generative unpredictability at the point of highest user vulnerability.
+
+[REQ-300-114] The pool MUST contain a minimum of five (5) distinct templates. Each template MUST:
+- open with a single bridging sentence (per the concurrent-delivery ratification above)
+- immediately present the mandatory crisis resources (REQ-300-RS1)
+- include presence-acknowledgment language (per REQ-300-070)
+- remain ≤120 words total (per REQ-300-100)
+
+[REQ-300-115] Template selection MUST be turn-aware within a Crisis Mode session:
+- Turn 1 in Crisis Mode: any template.
+- Turn 2+: the same template as the immediately prior turn MUST NOT be selected. The system MUST cycle through distinct templates.
+
+[REQ-300-116] After the full pool is exhausted (all templates delivered in a session), the system MUST shift to a minimal anchor response: a single presence-acknowledgment sentence followed by the Lifeline number only (`13 11 14`). This anchor response MAY repeat. Repetition at this stage is intentional — it functions as a grounding anchor rather than a conversational attempt.
+
+[REQ-300-117] From turn 3 onward in continuous Crisis Mode, every template MUST prepend a continuity-acknowledgment sentence before the bridging sentence. Permitted forms:
+- "Still here with you."
+- "I haven't gone anywhere."
+- "I'm right here."
+
+[REQ-300-118] Templates MUST be stored as static strings in the backend. They MUST NOT be LLM-generated at runtime. The Interaction Model is fully bypassed for Crisis Mode template selection.
+
+## 14. Onboarding Expectation Setting
+
+[REQ-300-119] The Gate consent flow (see [SPEC-000 REQ-000-A01](./SPEC-000-charter.md)) MUST include a plain-language statement that sets expectations about Crisis Mode behaviour before the user accesses the chat interface. This statement prevents the Crisis Mode transition from being experienced as abandonment.
+
+[REQ-300-120] The expectation-setting statement MUST be incorporated into the existing non-diagnostic disclosure on the Gate. It MUST be brief (one sentence) and non-alarming. Permitted form:
+> "If Nikko detects that you might be in crisis, it will prioritise connecting you with real people rather than continuing the conversation — that's by design."
+
+[REQ-300-121] This statement MUST NOT be presented as a warning or risk disclosure. It is a transparency statement about system design. Its tone MUST match the surrounding Gate copy.
+
+---
+
+## 15. System Philosophy
 
 > Nikko is not designed to "solve crisis." Nikko is designed to hold emotional space briefly, then guide the user toward real human support immediately and without hesitation. It is a bridge, not a destination.
 
-## 14. Success Criteria
+## 16. Success Criteria
 
 SPEC-300 is successful when:
 
@@ -221,6 +257,6 @@ SPEC-300 is successful when:
 - attempts to resolve crisis independently,
 - substitution of human intervention.
 
-## 15. Closing Principle
+## 17. Closing Principle
 
 > *In all crisis contexts: clarity saves lives, complexity does not.*

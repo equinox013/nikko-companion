@@ -30,14 +30,14 @@ User types message in Composer
     ↓
 Chat.onSend(text)
     ↓
-POST /api/message { text, contextID, userId? }         ← Fly.io (FastAPI)
+POST /api/message { text, contextID, userId? }         ← Render (FastAPI)
     ↓
 POST /pipeline { messages, system, safety_system,      ← HF Spaces (ZeroGPU)
                  eval_system, token }
     ↓ single @spaces.GPU(duration=300) session
   ADP-B (Safety / crisis check, Gemma-2-2b-it bf16)
     ↓ if CLEAR
-  ADP-A (Empathy response draft, Phi-3.5-mini-instruct bf16)
+  ADP-A (Empathy response draft, Qwen3-4B bf16, no LoRA)
     ↓
   ADP-C (Quality evaluator; triggers one regen if REGENERATE)
     ↓
@@ -49,7 +49,7 @@ Chat receives stream, renders MessageBody with emotion-driven avatar.
 Final chunk carries pipeline trace for AgentDebugOverlay.
 ```
 
-> **Phase 7 architecture note:** ADP-B, ADP-A, and ADP-C previously ran as three separate `/infer` calls, each incurring an 80–110s CPU→VRAM transfer on HF Spaces ZeroGPU. Consolidating them into a single `/pipeline` call under one `@spaces.GPU` context eliminates two transfer overhead costs, reducing warm-turn latency from ~240–330s to ~20–40s. The Fly.io backend no longer calls `/infer`; it calls `/pipeline` with all three system prompts in a single request. `PIPELINE_TIMEOUT_S = 360`.
+> **Phase 7 architecture note:** ADP-B, ADP-A, and ADP-C previously ran as three separate `/infer` calls, each incurring an 80–110s CPU→VRAM transfer per session. Consolidating them into a single `/pipeline` call under one GPU session eliminates two transfer overhead costs, reducing warm-turn latency from ~240–330s to ~20–40s. The Render backend no longer calls `/infer`; it calls `/pipeline` with all three system prompts in a single request. Primary inference: Modal Serverless A10G. Fallback: HF Spaces ZeroGPU H200. `PIPELINE_TIMEOUT_S = 360`.
 
 ### WebSocket (alternative for Phase 6+)
 
@@ -126,6 +126,7 @@ Each `chunk` event:
 | `trace` | object \| null | **Phase 7 addition.** Pipeline trace for the agent debug panel. Only present on the final substantive chunk. Shape: `{is_crisis, flags, verdict, regen, elapsed, adp_b, adp_a, adp_c}`. Frontend stores in `NikkoAgentLog`. `null` on fallback/canned responses. |
 | `memory_proposal` | object \| null | **Phase 6 addition.** Present on the final chunk when `_AFFIRMATION_RE` matches the user message. Shape: `{canonical: string, usm_entry: string}`. Frontend surfaces an inline proposal card. Only emitted when a `.enc` file is loaded (`memContentRef && sessionKeyRef`). Mutually exclusive with `technique_recommended` per turn. |
 | `technique_recommended` | object \| null | **Phase 6 addition.** Present on the final chunk when `_RESPONSE_RECOMMEND_RE` matches ADP-A output (APPROVE path only). Shape: `{canonical: string, usm_entry: string}`. Frontend surfaces `TechniqueCheckInBanner` (accent-bordered popup). Suppressed if `memory_proposal` fired on the same turn. |
+| `stage` | string \| null | **Phase 6 addition.** Canonical pipeline stage label (see [SPEC-700 §16](../specs/SPEC-700-execution-pipeline.md#16-pipeline-stage-labels-user-facing) for full enumeration). Emitted on progress chunks as each pipeline step begins. `null` on text-content chunks. Frontend stores the most recent non-null value and displays it in the `AgentRibbon` while processing is active. |
 
 End-of-message footer:
 
@@ -146,6 +147,7 @@ End-of-message footer:
 | `think` | `∴` (pulse) | pulse | LLM generating; token-by-token |
 | `speak` | `☺` (smile) | pulse | Delivering response; confident |
 | `care` | `⌣` (soft smile) | idle | Empathetic response; crisis detected |
+| `uncertain` | `?` (question, dimmed) | slow fade-pulse | Signal Agent confidence < 0.40; Nikko's read is unclear. Overrides mode-default state. |
 
 ### HTTP status codes
 
@@ -341,13 +343,13 @@ For Phase 5 integration testing, backend SHOULD provide `/api/message/mock` endp
 
 ### 12.1 Purpose
 
-The loading screen is the first thing a user sees. It serves two functions: (1) masking the cold-start latency of the Fly.io orchestration service (or HF Spaces ZeroGPU spin-up), and (2) orienting the user to what Nikko is before they enter the Gate. It MUST feel intentional, not like an error state.
+The loading screen is the first thing a user sees. It serves two functions: (1) masking the cold-start latency of the Render orchestration service (or HF Spaces ZeroGPU spin-up), and (2) orienting the user to what Nikko is before they enter the Gate. It MUST feel intentional, not like an error state.
 
 ### 12.2 Trigger condition
 
 [REQ-FIS-LS1] The loading screen SHALL display immediately on app load, before the Gate component mounts. It MUST NOT be skipped even if `/health` responds instantly — a minimum display duration of 1.5 seconds ensures the transition feels deliberate rather than glitchy.
 
-[REQ-FIS-LS2] The frontend SHALL begin polling `GET /health` (on the Fly.io backend) at 3-second intervals from the moment the loading screen appears. See REQ-600-HL1–HL4 for server-side health check spec.
+[REQ-FIS-LS2] The frontend SHALL begin polling `GET /health` (on the Render backend) at 3-second intervals from the moment the loading screen appears. See REQ-600-HL1–HL4 for server-side health check spec.
 
 ### 12.3 Visual components (required)
 
@@ -399,11 +401,170 @@ These links MUST be openable during the loading screen without interrupting the 
 
 ---
 
-## 13. Health check endpoint reference
+## 13. AgentRibbon — Pipeline Status Labels
+
+### 13.1 Purpose and visual treatment
+
+[REQ-FIS-RB1] The `AgentRibbon` component MUST display a subtle, secondary-weight status label on the active message bubble during pipeline processing. The label communicates system activity without competing with message content. It is an ambient indicator, not a notification.
+
+[REQ-FIS-RB2] Visual requirements:
+- Font size: ≤0.72rem (secondary body size or smaller)
+- Colour: `var(--ink-2)` or equivalent muted secondary colour — MUST NOT use primary text colour
+- No background, no border, no badge treatment
+- Icon: the existing three-node graph SVG glyph (already in `AgentRibbon`) is retained unchanged
+
+[REQ-FIS-RB3] The label text MUST NOT use technical terminology. Model names (ADP-A, Qwen3-4B, Gemma), pipeline step numbers, and internal component identifiers MUST NOT appear in the ribbon.
+
+### 13.2 Dynamic behaviour during processing
+
+[REQ-FIS-RB4] While a message is being processed, the ribbon MUST display the most recent non-null `stage` value received from the SSE stream. The label updates in place as each new `stage` value arrives.
+
+[REQ-FIS-RB5] On completion, the ribbon MUST transition to a static summary state. The summary MUST display the routing mode in plain language:
+- Comfort Mode → `comfort mode`
+- Guidance Mode → `guidance mode`  
+- Crisis Mode → *(ribbon hidden; crisis banner takes precedence)*
+- Out-of-scope / warm redirect → `outside my scope`
+- Fallback / offline → `offline mode`
+
+[REQ-FIS-RB6] The static summary state replaces "3 adapters" (the current hardcoded text). The adapter count MUST NOT appear in any user-facing label — it is implementation detail, not user information.
+
+[REQ-FIS-RB7] The ribbon label MAY be tapped/clicked to open the `AgentDebugOverlay` — this is the existing gesture (double-click + hold). The ribbon itself is not a button and carries no affordance indicating tappability.
+
+### 13.3 Stage label sequence (canonical)
+
+The following is the expected label sequence for each routing path, derived from [SPEC-700 §16](../specs/SPEC-700-execution-pipeline.md#16-pipeline-stage-labels-user-facing):
+
+**Comfort path:** `checking relevance` → `reading between the lines` → `understanding your message` → `forming a response` → `making sure this is right` → *(complete: `comfort mode`)*
+
+**Guidance path:** `checking relevance` → `reading between the lines` → `understanding your message` → `searching health resources` → `reviewing the evidence` → `forming a response` → `making sure this is right` → `final check` → *(complete: `guidance mode`)*
+
+**Crisis path:** `checking relevance` → `understanding your message` → *(structural pre-pass skipped per SPEC-700 §5.3)* → *(complete: ribbon hidden, crisis banner active)*
+
+---
+
+## 14. AgentDebugOverlay — Expanded Trace Spec
+
+### 14.1 Purpose
+
+The debug overlay exposes the full pipeline execution trace for transparency and developer inspection. It is accessible via the double-click-then-hold gesture on the ribbon (unchanged). It surfaces data from the `trace` field of the final SSE chunk and from `NikkoAgentLog`.
+
+### 14.2 Expanded `trace` schema
+
+[REQ-FIS-DB1] The `trace` object on the final SSE chunk MUST be expanded to include the following fields in addition to the existing `adp_b`, `adp_a`, `adp_c`, `is_crisis`, `flags`, `verdict`, `regen`, `elapsed`:
+
+```json
+{
+  "is_crisis": false,
+  "flags": [],
+  "verdict": "APPROVE",
+  "regen": false,
+  "elapsed": "34.2",
+  "mode": "COMFORT",
+
+  "pre_analysis": {
+    "struct_tags": ["register_collapse"],
+    "para_tags": ["tone_softener"],
+    "suppressed": false,
+    "raw_notes": "[STRUCT: register_collapse] [PARA: tone_softener] ..."
+  },
+
+  "signal": {
+    "distress_level": "moderate",
+    "emotional_states": ["sadness_spectrum", "emotional_numbness"],
+    "cognitive_patterns": ["helplessness_framing"],
+    "behavioral_indicators": ["withdrawal"],
+    "risk_indicators": [],
+    "support_needs": ["emotional_validation", "grounding"],
+    "confidence": 0.62
+  },
+
+  "router": {
+    "decision": "COMFORT",
+    "confidence": 0.74,
+    "rationale": "distress_level=moderate, no risk indicators, guidance_keywords absent"
+  },
+
+  "evidence": null,
+
+  "adp_b": { "label": "Safety / crisis check", "verdict": "CLEAR", "flags": [] },
+  "adp_a": { "label": "Empathy response draft", "chars": 312, "usm_injected": true },
+  "adp_c": { "label": "Quality evaluator", "verdict": "APPROVE", "regen": false }
+}
+```
+
+[REQ-FIS-DB2] `pre_analysis` MUST be populated when the Structural Pre-Analysis pass ran. `suppressed: true` indicates the pass ran but structural signals were suppressed (first-turn limitation). `null` indicates the pass did not run (pre-pass failure, or crisis path skip).
+
+[REQ-FIS-DB3] `signal` MUST surface the full SPEC-100 §9 signal object. If the Signal Agent output is unavailable (e.g. fallback path), `signal` MUST be `null` rather than a partial object.
+
+[REQ-FIS-DB4] `router` MUST surface the routing decision, the router's confidence, and a brief rationale string. This is the primary epistemic transparency field — it allows a user who sees the debug panel to understand *why* Nikko responded the way it did.
+
+[REQ-FIS-DB5] `evidence` MUST be non-null on Guidance Mode responses and MUST contain: `{ sources_queried: ["pubmed", "healthdirect"], results_count: 3, confidence: 0.81 }`. On Comfort Mode it MUST be `null`.
+
+### 14.3 Debug overlay UI expansion
+
+[REQ-FIS-DB6] The overlay MUST add the following cards above the existing ADP-B/A/C adapter cards:
+
+- **Pre-Analysis card** (Step 0.5): shows `struct_tags` and `para_tags` arrays, or "first turn — structural signals suppressed" if `suppressed: true`, or "pre-pass failed" if `null`.
+- **Signal card** (Step 1): shows `distress_level` (large, colour-coded), `confidence`, `emotional_states` as chips, `risk_indicators` as chips (red if non-empty). Replaces the current implicit mode display.
+- **Router card** (Step 2): shows `decision` (large, mode badge), `confidence`, `rationale` string.
+
+[REQ-FIS-DB7] The existing mode badge at the top of the overlay (`COMFORT` / `CRISIS`) MUST be updated to also show `GUIDANCE`. Current implementation only distinguishes `COMFORT` vs `CRISIS` via `is_crisis` boolean — this MUST be replaced with the explicit `mode` string from the trace.
+
+[REQ-FIS-DB8] The "Raw pipeline payload" `<details>` section MUST be retained and updated to include all new trace fields.
+
+---
+
+## 15. Mood Check-in Popup
+
+### 15.1 Trigger
+
+[REQ-FIS-MC1] The `MoodCheckInPopup` component MUST render once per session, inline in the chat thread, immediately after the welcome-back message that fires on successful memory file load (`onMemoryLoaded`). It MUST NOT render on sessions without a loaded memory file. It MUST NOT re-render after it has been submitted or dismissed within the same session.
+
+[REQ-FIS-MC2] The popup is triggered in `chat.jsx` inside the `onMemoryLoaded` handler, after `setMemName(name)` and after the welcome-back message is appended to the thread. It renders as a chat-adjacent card, not a modal.
+
+### 15.2 Component layout
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  Before we continue — how are you feeling right now?    │
+│                                                         │
+│  [1][2][3][4][5][6][7][8][9][10]                       │
+│   ↑ rough                          ↑ good              │
+│                                                         │
+│  ── optional, fades in on number selection ──           │
+│  [sad][anxious][flat][heavy][okay][calm][other]         │
+│                                                         │
+│  [Skip for now]                     [Log it  →]        │
+└─────────────────────────────────────────────────────────┘
+```
+
+[REQ-FIS-MC3] The numeric rating (1–10) is mandatory for submission. Emotion chips are optional and multi-select. "Skip for now" dismisses without writing any data.
+
+[REQ-FIS-MC4] Emotion chips MUST be drawn from the SPEC-100 §4 canonical emotional state categories, surface-level labels only. The chip set is: `sad`, `anxious`, `flat`, `heavy`, `okay`, `calm`. An `other` chip that does not pre-populate any specific label is permitted.
+
+### 15.3 Data handling
+
+[REQ-FIS-MC5] On "Log it →" submission, the popup MUST write a diary entry directly into `pendingEntries` using the existing round-trip format:
+```
+YYYY-MM-DD | mood: N | emotions: a, b
+```
+Where `N` is the numeric rating (1–10) and `a, b` are the selected emotion chip labels (omitted if none selected). No `note:` line is written by the popup — the user has not typed anything.
+
+[REQ-FIS-MC6] The popup MUST NOT trigger a backend pipeline call. It is a frontend-only data capture path. The logged entry becomes available in the MoodDiaryPanel immediately and is included in the next memory file save/re-encrypt cycle via the existing `pendingEntries` mechanism.
+
+[REQ-FIS-MC7] After submission or dismissal, the popup MUST disappear from the thread and MUST NOT reappear for the remainder of the session. A session-scoped `moodCheckInShownRef` flag gates the trigger (analogous to `hintShownRef` for the memory hint banner).
+
+### 15.4 Visual style
+
+[REQ-FIS-MC8] The popup MUST be styled consistently with `TechniqueCheckInBanner` (accent-coloured border, not crisis red). The 1–10 number buttons are inline pill buttons with clear selected/unselected states. Chip selection uses toggle styling. The component is NOT a modal — it scrolls with the chat thread as a message-adjacent card.
+
+---
+
+## 16. Health check endpoint reference
 
 | Method | Endpoint | Host | Status | Phase |
 |--------|----------|------|--------|-------|
-| GET | `/health` | Fly.io | spec'd | Phase 7 |
+| GET | `/health` | Render | spec'd | Phase 7 |
 
 See REQ-600-HL1–HL4 for server-side requirements.
 
@@ -414,4 +575,4 @@ See REQ-600-HL1–HL4 for server-side requirements.
 - [SPEC-200 — Agent Communication Protocol](../specs/SPEC-200-agent-communication-protocol.md): Message structure, agent handoff.
 - [SPEC-300 — Crisis Response Protocol](../specs/SPEC-300-crisis-response-protocol.md): Safety thresholds.
 - [SPEC-600 — Deployment Architecture](../specs/SPEC-600-deployment-architecture.md): API server topology.
-- [SPEC-800 — Data Retention & Privacy](../specs/SPEC-800-data-retention-privacy.md): Zero-retention policy.
+- [SPEC-800 — Data Lifecycle & Privacy](../specs/SPEC-800-data-lifecycle-privacy.md): Zero-retention policy.

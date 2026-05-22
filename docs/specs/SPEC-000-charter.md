@@ -145,6 +145,21 @@ Users may perceive Nikko as human.
 
 [REQ-000-150] The system MUST mitigate RISK-06 via consistent AI disclosure, non-human framing language, and avoidance of emotional claims.
 
+### 5.7 (previously listed as 5.7–5.9, retained)
+
+> *See existing RISK-07 through RISK-09 below.*
+
+### 5.10 RISK-10 — Visual Halo Effect
+
+The visual design of Nikko (avatar warmth, animation quality, empathetic colour palette) may cause users to attribute competence, accuracy, and clinical authority beyond what the system actually possesses — independent of any text-layer disclaimer. The halo effect operates through design perception, not through language, and is not addressed by verbal disclaimers alone.
+
+[REQ-000-231] The system MUST mitigate RISK-10 via the following design-layer controls, in addition to the language-layer controls in RISK-06:
+
+- **Uncertainty state:** When Signal Agent `confidence` < 0.40 (low band per [SPEC-100 REQ-100-CB1](./SPEC-100-signal-ontology.md)), the avatar MUST enter the `uncertain` state (see [GLOSSARY — Avatar emotion states](../GLOSSARY.md)). This provides a real-time visual signal that Nikko's read on the user is uncertain, counteracting the default impression of confident comprehension.
+- **Epistemic language calibration:** The Interaction Model MUST use evidential language that reports inference rather than claims perception. Prohibited constructions include `"I can see"`, `"I can tell"`, `"I understand exactly how you feel"`. Required alternatives include `"it sounds like"`, `"what you're describing suggests"`, `"I hear that"`. This requirement applies to all Comfort and Guidance Mode outputs and is enforced by the Evaluator pass (ADP-C).
+
+[REQ-000-232] RISK-10 mitigations MUST NOT reduce conversational warmth. The goal is calibrated trust — ensuring the warmth reads as *designed* rather than as emergent care — not clinical coldness. The Evaluator MUST flag any response that is epistemically over-claiming AND any response that is so hedged as to be emotionally flat. Both are failures under this requirement.
+
 > **[GAP-G-RISK-01]** The current risk model does not explicitly enumerate adversarial threats (prompt injection from retrieved web content, training-data poisoning, model extraction). See [`GAPS.md`](../GAPS.md).
 >
 > **[GAP-G-DATA-01]** No risk for unauthorized PII leakage, retention violations, or privacy-law non-compliance is enumerated. Significant omission for a digital-health product.

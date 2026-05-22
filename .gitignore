@@ -85,9 +85,15 @@ docs/derived/
 backend/fly.toml
 
 # --- Training pipeline (private — kept local only) ---
-notebooks/
-finetuning/
 run_adp_a_v2_pipeline.bat
 
 # --- HF Space (separate git repo, pushed directly to HF Spaces) ---
 # hf_space/ -- tracked in main repo (Space deployed via HF git)
+
+# Large ML artifacts — weights on HF Hub, not git
+*.safetensors
+optimizer.pt
+tokenizer.json
+rng_state.pth
+training_args.bin
+tokenizer.model

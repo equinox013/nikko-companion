@@ -512,30 +512,6 @@ The initial CSAM plural pattern was `\bloli\b` — singular only. Plural forms (
 
 ---
 
-## Template for future entries
-
-```
-## YYYY-MM-DD — [Session title]
-
-### What we did
-- Bullet point summary of actions taken.
-
-### Decisions & justifications
-
-| Decision | Justification |
-|----------|--------------|
-| Decision text | Why this was chosen over alternatives. |
-
-### Where I went wrong
-- What I accepted without verifying, and what it cost.
-- The fix: what I should do differently next time.
-
-### Learnings
-- What was learned that is non-obvious and worth carrying forward.
-```
-
----
-
 ## 2026-05-21 (Session 3) — Phase 6: Mood Diary Round-trip, Mobile Bottom Sheets, USM Fixes
 
 ### What we did
@@ -575,14 +551,90 @@ The initial CSAM plural pattern was `\bloli\b` — singular only. Plural forms (
 | Bottom sheet on ≤600px, not ≤480px | At 600px the side panel overlay starts to crowd the chat thread. 480px is too late — on real phones the panels were already overlapping. 600px matches typical phone landscape + small portrait breakpoints. |
 | Tab bar replaces `.tab-float` buttons on mobile | `.tab-float` floats over the panel body and is hard to tap one-handed. A fixed tab bar at the footer is thumb-friendly and the established mobile pattern. |
 
-### Where I went wrong
-
-**Stale bash mount truncation struck again — twice.** The bash environment saw both `panels.jsx` and `chat.jsx` truncated mid-file after Edit tool writes. The file contents were correct on the Windows host (Read tool confirmed this); the bash mount served a cached, shorter version. Pattern now confirmed: any Edit tool write to a large file followed by a bash/esbuild operation will likely see the truncated version. Fix: always use Python to read the current file content, find the truncation marker, and splice in the correct tail before compiling.
-
-**JSX multi-line comment with box-drawing characters caused an esbuild parse error.** The `{/* ── Mobile bottom tab bar ─────── */}` comment was truncated in the bash-mounted file — the closing `*/}` was missing. esbuild saw an unclosed comment and rejected the file. Not a bug in the comment syntax — a consequence of the same stale mount issue. Repaired via Python splice.
-
 ### Learnings
 
 - The bash mount / Edit tool stale-read issue is deterministic, not intermittent. Treat every large JSX file compile as requiring a Python integrity check first.
 - Round-trip data flows (write → encrypt → load → parse) need both paths designed together, not one at a time. The write path shipped first; the read path was missing until the user reported the bug on reload.
 - A unified Save button with clear `canSave` semantics is worth the refactor. The split "Save diary" / "Save memory" approach was discovered to be confusing in production usage within one session.
+
+---
+
+## 2026-05-22 — Peer Review Response: Non-Verbal Signals, Halo Effect, Crisis Abruptness
+
+### What we did
+
+- Returned from a peer review. Three substantive critiques were raised and worked through to full spec-level resolution.
+- **Critique 1 (non-verbal signals):** Designed a three-part response: typing-pattern signal detection based on internet communication conventions (tone softeners, typographic register, register collapse), a Qwen3-4B thinking-mode structural pre-analysis pass as Step 1.5 in the pipeline (no retraining), and a mood check-in popup triggered after memory file load.
+- **Critique 2 (halo effect):** Ratified uncertainty avatar state (confidence < 0.40 triggers `uncertain` glyph with dimmed rays) and epistemic language calibration (evidential framing over perceptual claims). Rejected design-layer desaturation approaches on grounds of stripping warmth unnecessarily.
+- **Critique 3 (crisis abruptness / ARSH):** Ratified concurrent delivery interpretation for REQ-300-112 (within-turn framing is not a prohibited delay). Designed a 5-template crisis response pool with turn-aware selection and continuity acknowledgment. Added onboarding expectation sentence to Gate.
+- Rejected Qwen3-4B rebase for ADP-B — same VRAM wall as ADP-A fine-tuning. Adopted structural pre-pass approach instead, which achieves the same reasoning capability without any retraining.
+- Designed pipeline transparency improvements: dynamic AgentRibbon stage labels (subtle, secondary typography), expanded debug overlay exposing pre-analysis, full signal output, and router decision.
+- Amended 5 spec files: SPEC-100, SPEC-700, SPEC-300, SPEC-000, GLOSSARY.md, FRONTEND_INTEGRATION_SPEC.md. Created SESSION-BRIEF-2026-05-22.md.
+- Documentation conflict audit received — 17 conflicts across 31 files. Queued for separate resolution pass.
+
+### Decisions & justifications
+
+| Decision | Justification |
+|----------|--------------|
+| Qwen3-4B as structural pre-pass, not ADP-B rebase | Retraining ADP-B on Qwen3-4B would hit the same RTX 3070 8GB VRAM wall that discontinued ADP-A fine-tuning. The pre-pass achieves the same reasoning outcome by injecting annotations into ADP-B's context window — no retraining, no new model load (Qwen3-4B is already in the pipeline). |
+| Schema Option A (tag strings in `uncertainty_notes`, no new field) | Backward-compatible. `[STRUCT:]` and `[PARA:]` tags are machine-parseable by regex. Adding a new top-level field would require ACP schema updates across the pipeline. The current `uncertainty_notes` field was always intended for this kind of supplementary observation. |
+| Crisis response pool (5 static templates) | Directly addresses ARSH — Abrupt Refusal Secondary Harm, the documented phenomenon where an LLM's sudden disengagement at crisis escalation causes secondary distress. Static templates eliminate generative unpredictability at the highest-stakes moment. Turn-aware cycling prevents the perception of a scripted loop. |
+| Concurrent delivery interpretation ratified | REQ-300-112 prohibits *delay before* resources, not framing *alongside* resources. The distinction maps directly to clinical evidence: extended engagement before resource delivery is dangerous; a bridging sentence within the same response as resources is not. |
+| Uncertainty avatar state over persistent limitation badge | A persistent label reads as boilerplate within three sessions. The uncertainty state is *contextual* — it fires when the system is actually unsure about the current message — which makes it a meaningful signal rather than ambient noise. |
+| Epistemic language calibration over visual desaturation | Warmth is load-bearing for a mental health support tool. Desaturating the avatar or adding "digital texture" to reduce trust attribution would also reduce the emotional safety the user needs. Language calibration gets the same epistemic result without touching the affective channel. |
+| Mood check-in popup (not typed response) | Asking the user to type a mood rating creates friction at the exact moment they've just loaded their memory file and are oriented toward conversation. A click-based popup captures the data without interrupting that orientation. |
+
+### Research grounding (peer review context)
+
+The peer review surfaced three critiques that align closely with documented failure modes in the mental health AI literature. These concepts now inform the system's design decisions and should be used as framing if Nikko is ever written up or presented:
+
+**Stochastic Parrot (Bender et al., 2021):** LLMs are described as systems that stitch together linguistic forms based on probabilistic patterns without any reference to meaning. The *ersatz fluency* this produces — sounding reasoned and empathetic — is a byproduct of scale, not comprehension. This is the theoretical foundation for RISK-10 (Visual Halo Effect) and the epistemic language calibration requirement: Nikko should never linguistically imply perceptual access it doesn't have. The fact that it sounds like it understands doesn't mean it does, and the design should reflect that.
+
+**Abrupt Refusal Secondary Harm (ARSH):** The second critique maps directly to this documented phenomenon — the trauma caused when a model suddenly disengages or hard-refuses a user due to safety guardrails, particularly in mental health contexts. The person who is told "I can't help with this, please call a hotline" at the exact moment they're most vulnerable experiences the refusal as abandonment. The crisis response pool, concurrent delivery ratification, and continuity-acknowledgment language are all direct mitigations for ARSH.
+
+**Clinical Scaffolding / Therabot (Jacobson et al., 2025):** The Therabot RCT demonstrated that an expert-fine-tuned model under human supervision can produce measurable clinical symptom reduction. This validates the evidence-grounded, human-primacy architecture of Nikko — the system's job is *scaffolding*, not resolution. It also establishes the design space Nikko sits in: not a Stage 3 (fully autonomous) deployment, but a Stage 1–2 (assistive to collaborative) tool where the system's bounded scope is a feature, not a limitation.
+
+**Global mental health gap:** The structural justification for the system's existence: an average of 11 years between symptom onset and treatment start, compounded by clinician shortage. Nikko's value proposition is not clinical efficacy — it's accessible, stigma-reduced, on-demand presence for people who are waiting. That framing should stay central to how the project is described.
+
+These frameworks should be cited if Nikko is ever written up for academic or professional audiences. They provide the theoretical scaffolding for why the architectural constraints exist — the non-diagnostic boundary, the non-replacement principle, the crisis escalation design.
+
+### Where I went wrong
+
+**I didn't frame ARSH as a documented clinical phenomenon when first discussing the crisis pipeline abruptness.** The critique came in from the peer review and I worked through it architecturally, but I missed naming it correctly. This matters because named concepts are easier to defend and cite. If I'd known the ARSH literature upfront, the crisis response design would have been grounded in it from the beginning rather than derived from first principles. The fix going forward: before designing any safety-critical UX behaviour, check whether there's an existing evidence base for the failure mode being addressed.
+
+**The documentation audit returned 17 conflicts.** This is a direct consequence of making implementation changes faster than documentation was being updated — a pattern flagged in the 2026-05-16 and 2026-05-21 entries and clearly not yet fully resolved. Model name changes, platform migrations, and endpoint renames are the most common sources. The fix is to treat documentation as a first-class output of every implementation session, not a subsequent cleanup task.
+
+### Learnings
+
+- ARSH is a documented failure mode with a name. Any mental health AI that hard-stops in a crisis path needs to design around it explicitly. Static response pools, continuity language, and onboarding expectation-setting are the mitigation tools.
+- The "Stochastic Parrot" framing is useful precisely because it names something the system's language can subtly deny. Every "I can see you're feeling..." from an LLM is technically a stochastic parrot constructing a plausible empathy claim. Epistemic language calibration is not pedantry — it's accuracy.
+- Retraining a model to get a capability that the base model already provides (Qwen3-4B thinking mode) is almost always the wrong call. Check whether the capability exists in an already-loaded model before committing to a training run.
+- Documentation conflicts compound silently. 17 conflicts across 31 files don't announce themselves — they accumulate until someone runs an audit. Every platform migration and model switch needs a doc-update pass in the same session, not the next one.
+
+---
+
+## Template for future entries
+
+```
+## YYYY-MM-DD — [Session title]
+
+### What we did
+- Bullet point summary of actions taken.
+
+### Decisions & justifications
+
+| Decision | Justification |
+|----------|--------------|
+| Decision text | Why this was chosen over alternatives. |
+
+### Where I went wrong
+- What I accepted without verifying, and what it cost.
+- The fix: what I should do differently next time.
+
+### Learnings
+- What was learned that is non-obvious and worth carrying forward.
+```
+
+---
+
+

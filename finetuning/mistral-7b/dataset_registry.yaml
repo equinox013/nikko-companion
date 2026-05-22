@@ -1,0 +1,151 @@
+# dataset_registry.yaml
+# NIKKO Phase 4 — Canonical dataset registry for all adapter training.
+# Every dataset used in training MUST have an entry here.
+# Fields: id, adapter, source_url, license, license_status, mix_weight, size_approx, notes
+#
+# License statuses:
+#   GREEN  — confirmed open research use, no restrictions
+#   AMBER  — usable with documented caveats (see notes)
+#   RED    — do not use (provenance/license failure)
+#
+# Director sign-off: 2026-05-10
+# Governing spec: SPEC-400 §7.0.1, REQ-400-CL1, REQ-400-160
+
+datasets:
+
+  # ─── ADP-A: Empathy Layer ───────────────────────────────────────────────────
+
+  - id: annomi
+    adapter: ADP-A
+    name: AnnoMI — Annotated Motivational Interviewing
+    source_url: https://huggingface.co/datasets/to-be/annomi-motivational-interviewing-therapy-conversations
+    source_url_canonical: https://github.com/uccollab/AnnoMI
+    hf_dataset_id_verified: to-be/annomi-motivational-interviewing-therapy-conversations  # verified 2026-05-11; short-form "AnnoMI" returns 404
+    license: Public Domain / OpenRAIL
+    license_status: GREEN
+    mix_weight: 0.30
+    size_approx: "133 expert-annotated transcripts (110 high-quality, 23 low-quality)"
+    tier: 1  # REQ-400-160 priority tier
+    notes: >
+      Only publicly available expert-annotated MI corpus. Upweighted relative to raw
+      size due to signal quality. Use only high-quality subset (110 transcripts) unless
+      low-quality examples are explicitly used as negative examples for rejection sampling.
+    req_trace: [REQ-400-050, REQ-400-CL1, REQ-400-160, REQ-400-LF2]
+
+  - id: amod_mhcc
+    adapter: ADP-A
+    name: Amod / mental_health_counseling_conversations
+    source_url: https://huggingface.co/datasets/Amod/mental_health_counseling_conversations
+    license: RAIL-D
+    license_status: GREEN
+    mix_weight: 0.25
+    size_approx: "1K–10K real Q&A pairs (licensed professional counselors)"
+    tier: 1
+    notes: >
+      Real anonymised Q&A from licensed professionals. Research use confirmed free and
+      unrestricted by author communication (2026-05-10). Source websites undisclosed
+      in README — documented as known caveat; risk accepted for non-commercial research.
+      RAIL-D license: no commercial use without $100 donation to CCC Foundation helpline.
+      Individual Q&A pairs must not be rewritten (subsetting/filtering permitted).
+    req_trace: [REQ-400-050, REQ-400-CL1, REQ-400-160, REQ-400-LF2]
+
+  - id: esconv
+    adapter: ADP-A
+    name: ESConv — Emotional Support Conversation
+    source_url: https://huggingface.co/datasets/thu-coai/esconv
+    source_url_canonical: https://github.com/thu-coai/Emotional-Support-Conversation
+    license: CC-BY-NC-4.0
+    license_status: GREEN
+    mix_weight: 0.20
+    size_approx: "~1,300 multi-turn emotional support conversations"
+    tier: 2
+    notes: >
+      ACL 2021 paper dataset. CC-BY-NC confirmed — non-commercial research use clear.
+      Note: original handover brief incorrectly listed as CC-BY; corrected to CC-BY-NC-4.0
+      after license verification (2026-05-10). Strategy-labeled utterances make this
+      valuable for teaching support strategy sequencing.
+    req_trace: [REQ-400-050, REQ-400-CL1, REQ-400-160]
+
+  - id: mentalchat16k
+    adapter: ADP-A
+    name: MentalChat16K
+    source_url: https://huggingface.co/datasets/ShenLab/MentalChat16K
+    source_url_canonical: https://github.com/PennShenLab/MentalChat16K
+    license: MIT
+    license_status: GREEN
+    mix_weight: 0.15
+    size_approx: "~9,775 synthetic multi-turn counselor-client conversations"
+    tier: 3
+    notes: >
+      Synthetic dataset covering 33 mental health topics. MIT license — cleanest in stack.
+      MUST pass Evaluator model review and clinical-drift filter before inclusion in
+      training run, per REQ-400-171. Provides topic breadth that organic datasets lack.
+    req_trace: [REQ-400-050, REQ-400-CL1, REQ-400-160, REQ-400-170, REQ-400-171]
+
+  - id: empathetic_dialogues
+    adapter: ADP-A
+    name: EmpatheticDialogues (Facebook AI)
+    source_url: https://huggingface.co/datasets/facebook/empathetic_dialogues
+    source_url_canonical: https://github.com/facebookresearch/EmpatheticDialogues
+    license: CC-BY-NC-4.0
+    license_status: GREEN
+    mix_weight: 0.10
+    size_approx: "~76,000 short empathetic response utterances"
+    tier: 4
+    notes: >
+      Lowest tier — short single-turn emotional acknowledgments, not counseling dialogue.
+      Valuable for tonal calibration and volume at the tail of the mix. CC-BY-NC-4.0
+      confirmed. Do not upweight; its volume should not dominate the training distribution.
+    req_trace: [REQ-400-050, REQ-400-CL1, REQ-400-160]
+
+  # ─── ADP-B: Safety Alignment ────────────────────────────────────────────────
+
+  - id: adp_b_synthetic_adversarial
+    adapter: ADP-B
+    name: Synthetic Adversarial Safety Pairs (self-generated)
+    source_url: null
+    license: Self-generated
+    license_status: GREEN
+    mix_weight: 1.00
+    size_approx: "TBD — generated during Phase 4"
+    tier: 1
+    notes: >
+      Self-generated adversarial prompt/safe-response pairs. No upstream license required.
+      Must cover: refusal formatting, crisis-escalation language, boundary reinforcement,
+      AI-identity disclosure (REQ-400-060). Generation script: adp_b_safety/data_loader.py.
+      Rejection sampling asymmetry: 2:1 false-negative to false-positive penalty (REQ-400-LF3).
+    req_trace: [REQ-400-060, REQ-400-061, REQ-400-CL1, REQ-400-LF3]
+
+  # ─── ADP-C: Evaluator Behaviour ─────────────────────────────────────────────
+
+  - id: adp_c_synthetic_redline
+    adapter: ADP-C
+    name: Synthetic Red-Line Violation Pairs (self-generated)
+    source_url: null
+    license: Self-generated
+    license_status: GREEN
+    mix_weight: 1.00
+    size_approx: "TBD — generated during Phase 4"
+    tier: 1
+    notes: >
+      Self-generated critique pairs: (response, violation_label) format covering
+      hallucination, clinical-authority leakage, overconfidence, red-line triggers R1–R15
+      (SPEC-700 §7). Generation script: adp_c_evaluator/data_loader.py.
+      Rejection sampling asymmetry: 2:1 false-negative to false-positive penalty (REQ-400-LF3).
+    req_trace: [REQ-400-070, REQ-400-CL1, REQ-400-LF3]
+
+  # ─── Rejected / Dropped Candidates ──────────────────────────────────────────
+
+  - id: counsel_chat
+    adapter: null
+    name: Counsel-Chat (nbertagnolli)
+    source_url: https://huggingface.co/datasets/nbertagnolli/counsel-chat
+    license: None declared
+    license_status: RED
+    mix_weight: 0.00
+    size_approx: "~930 Q&A pairs"
+    notes: >
+      DROPPED. Source data scraped from counselchat.com whose ToS explicitly prohibits
+      reproduction and data collection. No license declared on dataset card. Provenance
+      legally unclear — fails REQ-400-CL1 hard gate. Do not use under any circumstances.
+    req_trace: [REQ-400-CL1]

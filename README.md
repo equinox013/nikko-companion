@@ -187,7 +187,7 @@ Modal Serverless A10G (primary)  ──or──  HF Spaces ZeroGPU H200 (fallbac
     ├─ ADP-A  (Qwen3-4B base)            → empathetic response draft
     │
     └─ ADP-C  (Gemma-2 + adp_c adapter)  → evaluate draft; APPROVE or REGENERATE
-                                            (max 1 regen pass before safe fallback)
+                                            (max 2 regen passes before safe fallback)
     │
     │  { text, is_crisis, flags, verdict, regen, elapsed }
     ▼
@@ -343,7 +343,7 @@ The mood diary is a session-local feature with an optional durable channel via t
 ```
 nikko-companion/
 ├── docs/
-│   ├── specs/          # 8 authoritative specification documents (SPEC-000 through SPEC-700)
+│   ├── specs/          # 8 core specs (SPEC-000 through SPEC-700) + 3 supplementary (SPEC-800, SPEC-810, SPEC-850)
 │   ├── derived/        # Architecture, agent definitions, safety guardrails, evaluation criteria
 │   ├── schemas/        # Pydantic v2 inter-agent data schemas (acp_schemas.py, retrieval_schemas.py)
 │   └── integration/    # FRONTEND_INTEGRATION_SPEC.md — frontend ↔ backend API contract
@@ -389,7 +389,7 @@ Every design decision in Nikko traces to a named requirement in the spec. The ke
 - **Hard-coded crisis routing.** The Router's CRISIS assignment is a deterministic rule, not an LLM judgment. Once CRISIS is assigned, the evidence pipeline stops, ADP-A is skipped, and four Australian crisis resources are injected unconditionally. ADP-B makes the binary safety classification; the response is hardcoded, not generated.
 - **Fifteen safety red lines.** Before any response reaches the user, fifteen regex patterns check for diagnostic language, treatment recommendations, self-harm method disclosure, and clinical authority framing. These are deterministic — they cannot be confused or sweet-talked by the draft LLM.
 - **Structural integrity gate.** The Verification Supervisor checks that the pipeline ran correctly, not just that the response sounds safe. A CRISIS distress signal paired with a COMFORT mode response will be caught here even if the Evaluator passed it.
-- **Zero data retention.** No user conversation data enters the training pipeline. This constraint is permanent (REQ-000-P01) and is not overridable by any phase gate or instruction. Session data lives in `sessionStorage` and is cleared on refresh.
+- **Zero data retention.** No user conversation data enters the training pipeline. This constraint is permanent (REQ-000-P01) and is not overridable by any phase gate or instruction. Session data lives in React state only and is cleared on page refresh. `sessionStorage` is not used for conversation or mood data — React state provides the same refresh-clearing behaviour without any browser storage write.
 
 ---
 

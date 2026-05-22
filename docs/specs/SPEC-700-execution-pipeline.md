@@ -71,6 +71,25 @@ last_reviewed: 2026-05-08
 [REQ-700-024] The system MUST NOT pre-classify emotional state at ingestion.
 [REQ-700-025] The system MUST NOT pre-interpret intent at ingestion.
 
+### STEP 1.5 — Structural Signal Pre-Analysis (Qwen3-4B thinking mode)
+
+[REQ-700-SA1] Before the Psychological Signal Agent runs, a dedicated Structural Signal Pre-Analysis pass MUST execute against the sanitized user input. This pass uses Qwen3-4B in thinking mode (no LoRA adapter) as a reasoning layer over the message's structural and paralinguistic properties.
+
+[REQ-700-SA2] The Pre-Analysis pass MUST produce a compact annotation block conforming to the `[STRUCT:]` / `[PARA:]` tagging convention defined in [SPEC-100 §9.1](./SPEC-100-signal-ontology.md#91-uncertainty_notes-tagging-convention) and the canonical signal enums in [SPEC-100 §16](./SPEC-100-signal-ontology.md#16-paralinguistic-signal-detection). This annotation block MUST be injected into the Signal Agent's input context before the Signal Agent generates its JSON output.
+
+[REQ-700-SA3] The Pre-Analysis pass MUST evaluate:
+- Tone softener patterns (SPEC-100 §16.1)
+- Typographic register signals (SPEC-100 §16.2)
+- Structural distress signals (SPEC-100 §16.3) — only when conversation history ≥ 2 prior turns
+
+[REQ-700-SA4] The Pre-Analysis pass MUST NOT generate user-facing output. Its output is internal annotation only.
+
+[REQ-700-SA5] The Pre-Analysis pass runs within the same `@spaces.GPU` session as ADP-A, ADP-B, and ADP-C. Qwen3-4B is already loaded for the ADP-A pass — the Pre-Analysis pass executes as a prior call on the same loaded model. No additional model load is required.
+
+[REQ-700-SA6] On first turn (no prior history), the Pre-Analysis pass MUST emit `[STRUCT: suppressed_no_history]` as per [REQ-100-161](./SPEC-100-signal-ontology.md#164-first-turn-limitation) and confine its analysis to §16.1 and §16.2 signals.
+
+[REQ-700-SA7] If the Pre-Analysis pass fails (model error, timeout), the pipeline MUST continue without annotation. The Signal Agent MUST proceed with raw text only. The failure MUST be logged in the execution trace. Pre-Analysis failure is non-fatal.
+
 ### STEP 2 — Psychological Signal Detection (SPEC-100)
 
 [REQ-700-030] Sanitized input MUST be passed to the Signal Agent.
@@ -289,6 +308,36 @@ The system is successful when:
 - the Evaluator consistently enforces safety boundaries,
 - outputs remain stable under repeated testing.
 
-## 16. Closing Principle
+## 16. Pipeline Stage Labels (User-Facing)
+
+[REQ-700-162] Each pipeline stage MUST have a canonical user-facing label. These labels are surfaced in the `AgentRibbon` component (see [FRONTEND_INTEGRATION_SPEC §13](../integration/FRONTEND_INTEGRATION_SPEC.md)) as a subtle, secondary-weight status indicator on the active message bubble during processing.
+
+[REQ-700-163] Labels MUST be short (≤5 words), present-participle in form, and non-technical. They MUST NOT expose adapter names, model identifiers, or internal pipeline terminology to end users.
+
+[REQ-700-164] The canonical label set is:
+
+| Pipeline Stage | Canonical Label |
+|---------------|-----------------|
+| Content Moderation Gate | *(no label — hard block, no processing indicator)* |
+| Scope Classifier (IN_SCOPE / AMBIGUOUS) | `checking relevance` |
+| Structural Pre-Analysis (Step 1.5) | `reading between the lines` |
+| Signal Agent — ADP-B (Step 2) | `understanding your message` |
+| Router → Comfort Mode | `comfort mode` |
+| Router → Guidance Mode | `guidance mode` |
+| Router → Crisis Mode | *(no label — crisis banner activates instead)* |
+| Evidence Retrieval (Guidance only) | `searching health resources` |
+| Evidence Synthesis | `reviewing the evidence` |
+| ADP-A — response draft (Step 10) | `forming a response` |
+| ADP-C — Evaluator pass (Step 11) | `making sure this is right` |
+| Verification Supervisor (Step 12) | `final check` |
+| Complete | *(label replaced by summary ribbon — see FRONTEND_INTEGRATION_SPEC §13)* |
+
+[REQ-700-165] Labels are emitted by the backend as `stage` fields on SSE progress chunks. The frontend MUST display the most recent `stage` value while processing is active. On completion, the ribbon transitions to the summary state (see FRONTEND_INTEGRATION_SPEC §13.2).
+
+[REQ-700-166] The label display MUST be visually subtle — secondary typography weight, muted colour, not competing with message content. It communicates system activity without drawing attention from the conversation.
+
+---
+
+## 17. Closing Principle
 
 > SPEC-700 is the final layer of structure. It ensures that Nikko behaves not like a probabilistic chatbot, but like a governed, auditable, safety-constrained AI system.

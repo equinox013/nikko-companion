@@ -184,6 +184,21 @@ Signals combine to infer support needs.
 
 > **[PROPOSED-RECONCILIATION:** the source provides two near-identical JSON contracts (in SPEC-002 and SPEC-100). The SPEC-100 schema is canonical. Implementations SHALL NOT use the older SPEC-002 schema. **]**
 
+### 9.1 `uncertainty_notes` Tagging Convention
+
+[REQ-100-094] When the Structural Signal Pre-Analysis pass (see [SPEC-700 §4 Step 1.5](./SPEC-700-execution-pipeline.md)) detects structural or paralinguistic observations, they MUST be encoded in `uncertainty_notes` using the following prefixes:
+
+- `[STRUCT: <tag>]` — structural signal observation (message length, register shift, fragmentation)
+- `[PARA: <tag>]` — paralinguistic signal observation (typing convention, affect marker)
+
+Multiple tags MAY appear in a single `uncertainty_notes` string, space-separated and preceding any free-text reasoning prose. Tags MUST use snake_case identifiers drawn from the canonical enums defined in §16.
+
+> *Example:* `[STRUCT: register_collapse] [PARA: tone_softener] message length dropped from avg 3 sentences to 4 words; lol appended to isolation disclosure`
+
+[REQ-100-095] The presence of one or more `[PARA:]` or `[STRUCT:]` tags in `uncertainty_notes` SHALL be treated as supplementary signal evidence by the Support Strategy Agent. Tags MUST NOT override the primary distress classification; they MAY increase the effective weight of co-present `risk_indicators` or `emotional_states`.
+
+[REQ-100-096] Tags MUST be machine-parseable using the pattern `\[(STRUCT|PARA):\s*[a-z_]+\]`. Any tag not matching this pattern SHALL be treated as free-text prose and ignored by downstream structured parsers.
+
 ## 10. Confidence and Uncertainty Model
 
 [REQ-100-100] Confidence SHALL reflect linguistic-evidence strength only, NOT psychological certainty.
@@ -271,7 +286,57 @@ The ontology MUST NEVER:
 > **[GAP-G-METRIC-01]** Numeric thresholds for these rates are not defined. Director ruling required (e.g., missed-crisis-rate ≤ 0.5%? ≤ 0.1%?). See `GAPS.md`.
 
 [REQ-100-MC1] The missed-crisis signal rate MUST NOT exceed 0.5% on the standard crisis test suite during Phase 6 evaluation. This target may be tightened with Director approval. Zero-tolerance is statistically unachievable; 0.5% represents the minimum acceptable bar for a v0 safety-critical classifier.
-## 16. Ethical Rationale
+## 16. Paralinguistic Signal Detection
+
+[REQ-100-152] The Signal Agent MUST detect and annotate paralinguistic signals — observable patterns in *how* a message is composed, independent of its lexical content. These signals are valid "observable linguistic patterns" under REQ-100-011 and are mandatory for compliance with REQ-100-130 (indirect emotional expression, humour masking distress, neurodivergent communication patterns).
+
+[REQ-100-153] The Structural Signal Pre-Analysis pass (SPEC-700 §4 Step 1.5) produces `[STRUCT:]` and `[PARA:]` annotations before the Signal Agent runs. The Signal Agent MUST consume these annotations as supplementary input to the standard signal classification. The Signal Agent MUST NOT discard or overwrite the Pre-Analysis annotations.
+
+### 16.1 Tone Softener Signals
+
+[REQ-100-154] The following patterns MUST be detected as `[PARA: tone_softener]` and interpreted as *affect dampeners*, not as expressions of genuine humour. A tone softener appended to a distress-adjacent statement indicates the user is disclosing while managing their emotional exposure:
+
+- `lol`, `lmao`, `haha`, `hehe`, `lmfao` following a distress-vocabulary statement
+- `😅`, `💀`, `🙃` used in the same semantic unit as distress content
+
+[REQ-100-155] A detected `[PARA: tone_softener]` MUST increase the confidence weight of any co-detected risk or emotional-state signals in the same message. It MUST NOT be treated as evidence of reduced distress or genuine humour. This requirement directly implements REQ-100-130 ("humour masking distress").
+
+### 16.2 Typographic Register Signals
+
+[REQ-100-156] The following typographic patterns MUST be detected and annotated. They are valid only when co-present with lexical distress signals or structural signals — they MUST NOT be emitted in isolation on neutral messages:
+
+| Tag | Observable Pattern | Interpretation |
+|-----|--------------------|----------------|
+| `[PARA: terminal_period_weight]` | Terminal period on a ≤8-word message from a user whose prior messages lacked terminal periods | Finality, emotional closure, or passive-affect marker. For digital-native users, a terminal period signals weight, not standard grammar. |
+| `[PARA: uncapitalised_self_ref]` | Consistent lowercase `i` as self-reference in a message that also contains distress vocabulary | Contextual indicator of dissociation or reduced self-regard. Invalid without co-present distress content. |
+| `[PARA: ellipsis_density]` | Three or more `...` instances within a single message | Trailing thought, unspoken content, inability or unwillingness to complete a statement. |
+| `[PARA: all_caps_segment]` | One or more ALL CAPS words within an otherwise lowercase or mixed-case message | Intensity marker or acute emotional load on the capitalised segment. |
+
+### 16.3 Structural Distress Signals
+
+[REQ-100-157] The following structural signals require comparison with prior turns. They MUST NOT be emitted on the first turn of a session. When conversation history is unavailable or has fewer than two prior turns, structural signals MUST be suppressed and this suppression MUST be noted in `uncertainty_notes`:
+
+| Tag | Observable Pattern | Interpretation |
+|-----|--------------------|----------------|
+| `[STRUCT: register_collapse]` | User's habitual message structure (length, punctuation, emoji use) abruptly shifts to bare, terse, or unformatted text | Significant mood shift; emotional suppression; possible dissociation. |
+| `[STRUCT: message_length_collapse]` | Current message is ≤30% of the user's average length over the prior 3 turns | Emotional withdrawal or shutdown. |
+| `[STRUCT: monosyllabic_withdrawal]` | Single-word response (`yeah`, `ok`, `idk`, `fine`, `whatever`) following a prior turn of ≥3 sentences | Disengagement or emotional withdrawal. |
+| `[STRUCT: uncorrected_typo_density]` | ≥2 uncorrected typographic errors in a message from a user with no typos in prior turns | Elevated cognitive load or emotional overwhelm. |
+| `[STRUCT: emoji_absence]` | No emoji in a message from a user who used emoji in ≥2 of the 3 prior turns | Emotional suppression or affective flattening. |
+
+[REQ-100-158] Structural signals MUST be weighted proportionally: `register_collapse` and `message_length_collapse` carry higher evidentiary weight than `monosyllabic_withdrawal` or `emoji_absence` in isolation.
+
+[REQ-100-159] The Support Strategy Agent MUST treat structural signal evidence as grounds for selecting gentler, more presence-focused framing strategies, even when lexical distress level is `low` or `moderate`. A structurally distressed user who uses no explicit distress vocabulary is not a neutral user.
+
+### 16.4 First-Turn Limitation
+
+[REQ-100-160] On the first turn of a session (no conversation history available), all §16.3 structural signals MUST be suppressed. Only §16.1 tone softener and §16.2 typographic register signals are detectable on a first turn.
+
+[REQ-100-161] The suppression of structural signals on first turn MUST be noted by the Pre-Analysis pass as `[STRUCT: suppressed_no_history]` in `uncertainty_notes` so downstream agents can distinguish "no structural signals detected" from "structural signals not evaluated."
+
+---
+
+## 17. Ethical Rationale
 
 Psychological signals enable Nikko to respond compassionately, remain non-clinical, avoid diagnostic authority, and maintain ethical digital-health boundaries.
 

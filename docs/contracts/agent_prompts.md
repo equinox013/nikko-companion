@@ -17,7 +17,9 @@ last_reviewed: 2026-05-09
 
 ## About this document
 
-This file defines the **system prompt** and **instruction template** for each of the nine agents in the NIKKO pipeline. Together they constitute the prompt contract for Phase 3 implementers.
+This file defines the **system prompt** and **instruction template** for each of the nine prompt-bearing pipeline components in NIKKO. Together they constitute the prompt contract for Phase 3 implementers.
+
+> **Agent count note:** README.md cites "7 specialist agents" — this refers to the seven Python modules in `agents/` (Scope Classifier, Signal Agent, Router, Support Strategy Agent, Evidence Synthesizer, Evaluator, Verification Supervisor). This document additionally covers the Evidence Retrieval Agent and the Interaction Model (ADP-A), which operate as pipeline components but are not encapsulated in `agents/` modules. Total prompt-bearing components: 9.
 
 **System prompt** — loaded once per session as the agent's immutable identity and constraint set.
 
