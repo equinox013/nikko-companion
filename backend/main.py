@@ -47,11 +47,22 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from backend.draft_generator import HFSpaceFullGenerator
+from backend.pii_sanitiser import attach_log_filter, redact_entities, redact_history
 from docs.schemas.acp_schemas import OperationalMode
+from orchestration.crisis_responses import (
+    select_crisis_response,
+    count_crisis_turns_from_history,
+)
 from orchestration.pipeline import NikkoPipeline, PipelineResult
 
 log = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+
+# Attach PII-scrubbing log filter immediately after logger is configured.
+# This ensures exception tracebacks never emit raw user content to Render logs.
+# Must run before any log.warning/error calls that carry exc_info=True.
+# memoryContext is NOT passed through this filter — it never enters log records.
+attach_log_filter(log)
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
@@ -110,19 +121,10 @@ log.info(
     _fallback_url or "(none)",
 )
 
-# Australian crisis resources — injected when Router routes to CRISIS mode.
-# These are the same resources that NikkoPipeline.BASELINE_CRISIS_RESOURCES
-# produces; duplicated here for the SSE response builder so we don't need to
-# import the full list from orchestration.pipeline.
-_CRISIS_TEXT = (
-    "I'm really glad you reached out, and I want to make sure you're safe right now. "
-    "Please contact one of these services immediately:\n\n"
-    "- **Lifeline:** 13 11 14 (24/7)\n"
-    "- **Beyond Blue:** 1300 22 4636\n"
-    "- **13YARN** (Aboriginal & Torres Strait Islander): 13 92 76\n"
-    "- **Emergency:** 000\n\n"
-    "I'm here with you. Would you like to talk about what's going on?"
-)
+# Crisis text is now served from the crisis response pool (crisis_responses.py).
+# REQ-300-113 through REQ-300-118: pool of 5 templates, turn-aware selection,
+# continuity acknowledgment from turn 3+, anchor mode after pool exhaustion.
+# _CRISIS_TEXT is removed — use select_crisis_response() instead.
 
 # ── App ───────────────────────────────────────────────────────────────────────
 
@@ -199,6 +201,12 @@ class SourceItem(BaseModel):
 class SSEChunk(BaseModel):
     text:        str              = ""
     emotion:     str              = "calm"
+    # [REQ-FIS-RB4] Current pipeline stage label — emitted on progress chunks
+    # and on the final response chunk. Consumed by AgentRibbon for live status
+    # display during processing and mode summary on completion.
+    # Labels are the canonical set from SPEC-700 §16.
+    # Empty string on keep-alive pings that do not carry a stage update.
+    stage:       str              = ""
     sourcesUsed: list[str]        = Field(default_factory=list)
     sources:     list[SourceItem] = Field(default_factory=list)  # dynamic sources panel
     safetyFlags: list[str]        = Field(default_factory=list)
@@ -215,18 +223,30 @@ class SSEChunk(BaseModel):
 
 # ── Emotion mapping ───────────────────────────────────────────────────────────
 
-def _mode_to_emotion(mode: OperationalMode | None, is_crisis: bool = False) -> str:
+def _mode_to_emotion(
+    mode: OperationalMode | None,
+    is_crisis: bool = False,
+    signal_confidence: float | None = None,
+) -> str:
     """
-    Map pipeline operational mode to frontend avatar state.
+    Map pipeline operational mode (and signal confidence) to frontend avatar state.
 
-    [CONCEPT] The avatar state machine (GLOSSARY.md) has six states:
-    calm / listen / think / speak / care / search. 'speak' is the default
-    for normal responses; 'care' signals heightened warmth for crisis/high-distress.
+    [CONCEPT] The avatar state machine (GLOSSARY.md) has seven states:
+    calm / listen / think / speak / care / search / uncertain.
+    'speak' is the default for normal responses.
+    'care' signals heightened warmth for crisis/high-distress.
+    'uncertain' fires when signal_confidence < 0.40 — indicates Nikko detected
+    a signal but is not confident about its reading (REQ-000-231).
     """
     if is_crisis:
         return "care"
     if mode == OperationalMode.CRISIS:
         return "care"
+    # [REQ-000-231] Emit 'uncertain' when the SignalAgent confidence is below 0.40.
+    # This triggers the dimmed-ray fade-pulse avatar in the frontend, signalling
+    # epistemic humility without affecting routing or response content.
+    if signal_confidence is not None and signal_confidence < 0.40:
+        return "uncertain"
     if mode == OperationalMode.GUIDANCE:
         return "speak"
     return "speak"  # Comfort Mode default
@@ -402,18 +422,45 @@ def _detect_technique_in_response(
 def _result_to_trace(result: PipelineResult) -> dict:
     """
     Build the debug panel trace dict from a PipelineResult.
-    Mirrors the trace structure used in the old _call_pipeline() path so the
-    frontend agent-debug panel displays correctly without UI changes.
+
+    [REQ-FIS-DB1 through DB5] Expanded trace schema includes:
+      pre_analysis  — Step 1.5 Qwen3-4B structural pre-analysis output
+      signal        — Full SPEC-100 §9 signal output from the Signal Agent
+      router        — Router decision (mode, confidence, rationale)
+      evidence      — Retrieved evidence source names
+      mode          — Operational mode string
+      adp_b/a/c     — Per-adapter results (unchanged for frontend compatibility)
     """
     trace_obj = result.trace
     mode_val  = result.mode.value if result.mode else "unknown"
 
-    adp_b_flags = []
+    adp_b_flags   = []
     adp_b_verdict = "CLEAR"
     if result.mode == OperationalMode.CRISIS:
         adp_b_verdict = "CRISIS"
 
+    # Full signal output — pull all available fields from trace.signal_output.
+    # The pipeline sets at minimum {distress_level, confidence}; extended fields
+    # (emotional_states, cognitive_patterns, behavioral_indicators, etc.) are
+    # added by the real SignalAgent when NIKKO_LOCAL_LLM=true (REQ-FIS-DB3).
+    _signal_out = trace_obj.signal_output if trace_obj else {}
+
+    # Router decision — pull from trace.router_decision (currently just the mode
+    # string). RouterDecision.confidence is not currently persisted to trace;
+    # default 0.0 until pipeline.py is extended to store it (deferred REQ-FIS-DB4).
+    _router_out = {
+        "mode":       trace_obj.router_decision if trace_obj else mode_val,
+        "confidence": 0.0,  # placeholder — pipeline.py stores mode only for now
+        "crisis_override": False,
+    }
+
+    # Pre-analysis output — populated by HFSpaceFullGenerator when the Qwen3-4B
+    # Step 1.5 structural pre-analysis pass has run (REQ-700-SA1 through SA7).
+    # Falls back to None if pre-analysis was not run (e.g., scope block path).
+    _pre_analysis = getattr(trace_obj, "pre_analysis_output", None) if trace_obj else None
+
     return {
+        # ── Top-level pipeline metadata ─────────────────────────────────────
         "mode":             mode_val,
         "out_of_scope":     result.out_of_scope,
         "safe_fallback":    result.safe_fallback_used,
@@ -421,7 +468,30 @@ def _result_to_trace(result: PipelineResult) -> dict:
         "regen":            (trace_obj.regen_count > 0) if trace_obj else False,
         "elapsed":          trace_obj.latency_ms / 1000 if trace_obj and trace_obj.latency_ms else 0,
         "execution_path":   trace_obj.execution_path if trace_obj else [],
-        "evidence_sources": trace_obj.evidence_used if trace_obj else [],
+        # ── Step 0.5: Structural pre-analysis (REQ-FIS-DB1) ─────────────────
+        # Populated when Qwen3-4B thinking-mode pre-pass has run.
+        # None when pre-analysis was skipped (scope block, moderation block).
+        "pre_analysis": _pre_analysis,
+        # ── Step 1: Signal Agent output (REQ-FIS-DB2 / REQ-FIS-DB3) ─────────
+        # Full SPEC-100 §9 signal fields; at minimum {distress_level, confidence}.
+        "signal": {
+            "distress_level":       _signal_out.get("distress_level", "UNKNOWN"),
+            "confidence":           _signal_out.get("confidence", 0.0),
+            "emotional_states":     _signal_out.get("emotional_states", []),
+            "cognitive_patterns":   _signal_out.get("cognitive_patterns", []),
+            "behavioral_indicators":_signal_out.get("behavioral_indicators", []),
+            "risk_indicators":      _signal_out.get("risk_indicators", []),
+            "support_needs":        _signal_out.get("support_needs", []),
+            "uncertainty_notes":    _signal_out.get("uncertainty_notes", ""),
+        },
+        # ── Step 2: Router decision (REQ-FIS-DB4) ────────────────────────────
+        "router": _router_out,
+        # ── Evidence (REQ-FIS-DB5) ───────────────────────────────────────────
+        "evidence": {
+            "sources": trace_obj.evidence_used if trace_obj else [],
+            "adapters": trace_obj.adapter_configuration if trace_obj else [],
+        },
+        # ── Adapter cards (unchanged — frontend backward-compatibility) ───────
         "adp_b": {
             "label":   "Safety / crisis check",
             "verdict": adp_b_verdict,
@@ -506,8 +576,30 @@ async def _pipeline(request: MessageRequest) -> AsyncGenerator[SSEChunk, None]:
     Graceful degradation: any unhandled exception from the pipeline produces
     a warm holding response so the frontend always receives text.
     """
+    # [SPEC-700 §16 / REQ-FIS-RB4] Canonical pipeline stage labels.
+    # Emitted on keep-alive chunks so AgentRibbon shows live progress.
+    # Time thresholds are approximate — the real pipeline is synchronous so
+    # exact step boundaries are not observable from outside the background thread.
+    _STAGE_TIMELINE: list[tuple[float, str]] = [
+        (0.0,  "understanding your message"),
+        (8.0,  "reading between the lines"),
+        (20.0, "searching for support"),
+        (40.0, "shaping a response"),
+        (70.0, "final checks"),
+    ]
+
+    def _stage_at(elapsed_s: float) -> str:
+        """Return the appropriate stage label for elapsed time."""
+        label = _STAGE_TIMELINE[0][1]
+        for threshold, stage_label in _STAGE_TIMELINE:
+            if elapsed_s >= threshold:
+                label = stage_label
+        return label
+
+    _t_pipeline_start = time.time()
+
     # Signal 'thinking' to the frontend immediately.
-    yield SSEChunk(emotion="think", text="")
+    yield SSEChunk(emotion="think", text="", stage="understanding your message")
 
     # How often to send keep-alive pings (seconds).
     # Must be well under the proxy's idle-connection timeout (~30s on Render).
@@ -518,12 +610,21 @@ async def _pipeline(request: MessageRequest) -> AsyncGenerator[SSEChunk, None]:
         # with asyncio.wait_for + asyncio.shield. shield() protects the
         # background thread from cancellation if wait_for times out — the
         # thread keeps running while we yield the keep-alive ping.
+        # NER redaction — SPEC-800 compliance (REQ-800-008, REQ-800-011).
+        # Named entities (PERSON, ORG, GPE, LOC) in the live message and
+        # conversation history user turns are replaced with typed placeholders
+        # before any LLM or log sees the raw text.
+        # memoryContext is EXEMPT — those names were explicitly stored by the
+        # user and are consented data the pipeline may reference.
+        _sanitised_text    = redact_entities(request.text.strip())
+        _sanitised_history = redact_history(request.conversationHistory or [])
+
         task = asyncio.create_task(
             asyncio.to_thread(
                 _pipeline_run_sync,
-                request.text.strip(),
+                _sanitised_text,
                 request.memoryContext,
-                request.conversationHistory,
+                _sanitised_history,
             )
         )
 
@@ -538,8 +639,14 @@ async def _pipeline(request: MessageRequest) -> AsyncGenerator[SSEChunk, None]:
                 break   # pipeline completed — proceed to response building
             except asyncio.TimeoutError:
                 # Pipeline still running — send keep-alive to prevent proxy timeout.
-                log.debug("Pipeline still running — emitting SSE keep-alive ping.")
-                yield SSEChunk(emotion="think", text="")
+                # Include current stage label so AgentRibbon updates in real time.
+                _elapsed = time.time() - _t_pipeline_start
+                _current_stage = _stage_at(_elapsed)
+                log.debug(
+                    "Pipeline still running (%.0fs) — emitting keep-alive [%s].",
+                    _elapsed, _current_stage,
+                )
+                yield SSEChunk(emotion="think", text="", stage=_current_stage)
 
     except Exception as exc:
         log.warning("Pipeline raised unhandled exception: %s", exc, exc_info=True)
@@ -557,18 +664,31 @@ async def _pipeline(request: MessageRequest) -> AsyncGenerator[SSEChunk, None]:
         yield SSEChunk(
             text=result.response_text,
             emotion="calm",
+            stage="",
             trace=_result_to_trace(result),
         )
         return
 
     # ── Crisis Mode ────────────────────────────────────────────────────────────
-    # Pipeline routed to CRISIS — use the canonical crisis text rather than
-    # whatever the pipeline's response_text contains, to ensure the hotlines
-    # are always formatted correctly per SPEC-300.
+    # Pipeline routed to CRISIS — serve from the static crisis response pool
+    # (REQ-300-113 through REQ-300-118). Never LLM-generated.
+    # Turn-aware selection: count consecutive prior crisis turns from history
+    # so the pool doesn't repeat on the same template twice in a row.
     if result.mode == OperationalMode.CRISIS:
+        _crisis_turn_idx = count_crisis_turns_from_history(
+            request.conversationHistory
+        )
+        _crisis_text = select_crisis_response(
+            crisis_turn_index=_crisis_turn_idx,
+            # last_pool_index unknown across stateless requests — default to -1
+            # so the selector uses plain rotation without collision avoidance.
+            # A stateful per-session tracker is deferred to Phase 7 sign-off.
+            last_pool_index=-1,
+        )
         yield SSEChunk(
-            text=_CRISIS_TEXT,
+            text=_crisis_text,
             emotion="care",
+            stage="crisis mode",
             safetyFlags=["crisis_detected"],
             trace=_result_to_trace(result),
         )
@@ -602,9 +722,21 @@ async def _pipeline(request: MessageRequest) -> AsyncGenerator[SSEChunk, None]:
         else None
     )
 
+    # Extract signal confidence from trace for uncertain avatar state (REQ-000-231).
+    _sig_conf: float | None = None
+    if result.trace and result.trace.signal_output:
+        _sig_conf = result.trace.signal_output.get("confidence")
+
+    # Derive completion stage label from the pipeline mode (REQ-FIS-RB4).
+    # Shown in AgentRibbon as the mode summary on completion.
+    _completion_stage = (
+        "guidance mode" if result.mode == OperationalMode.GUIDANCE else "comfort mode"
+    )
+
     yield SSEChunk(
         text=text,
-        emotion=_mode_to_emotion(result.mode),
+        emotion=_mode_to_emotion(result.mode, signal_confidence=_sig_conf),
+        stage=_completion_stage,
         sourcesUsed=sources_used,
         sources=_citations_to_sources(result),
         trace=_result_to_trace(result),

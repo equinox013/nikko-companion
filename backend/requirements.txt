@@ -10,6 +10,11 @@
 #   - ddgs: DuckDuckGo search backend for WebSearchAdapter (G-RETRIEVAL-01)
 #   - beautifulsoup4 + lxml: HTML parsing for WebSearchAdapter sanctioned-domain scrape
 #
+# NER-based PII redaction (SPEC-800 REQ-800-008 / REQ-800-011)
+# en_core_web_sm must also be downloaded at deploy time — add to Render build command:
+#   pip install -r backend/requirements.txt && python -m spacy download en_core_web_sm
+spacy>=3.7,<4.0
+
 # NOT needed in this container -- inference runs on HF Spaces ZeroGPU, not here.
 # transformers, peft, torch, bitsandbytes are all omitted intentionally.
 

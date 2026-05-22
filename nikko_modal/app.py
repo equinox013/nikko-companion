@@ -21,17 +21,23 @@ Key differences from hf_space/app.py:
     reason for "auto" (it routes through accelerate's safetensors loader
     patched by ZeroGPU) does not apply on Modal.
 
-Pipeline flow (identical to hf_space/app.py):
+Pipeline flow (Director-approved reorder 2026-05-22):
   User message
       │
       ▼
-  ADP-B (Gemma-2 + adp_b adapter)  → crisis check          (SPEC-300)
+  Pass 0   (Qwen3-4B)               → moderation + scope check
       │
       ▼
-  ADP-A (Qwen3-4B base)            → empathetic response draft  (SPEC-200)
+  Step 1.5 (Qwen3-4B, thinking mode) → structural pre-analysis  (SPEC-100 §16)
       │
       ▼
-  ADP-C (Gemma-2 + adp_c adapter)  → evaluate draft; approve or regen  (SPEC-500)
+  ADP-A    (Qwen3-4B base)           → empathetic response draft  (SPEC-200)
+      │
+      ▼
+  ADP-B    (Gemma-2 + adp_b adapter) → crisis check; annotations injected  (SPEC-300)
+      │
+      ▼
+  ADP-C    (Gemma-2 + adp_c adapter) → evaluate draft; approve or regen  (SPEC-500)
       │
       ▼
   Render backend receives result; streams SSE to frontend
@@ -99,6 +105,11 @@ ANALYSIS_GEN_PARAMS = {
     # regex pre-gate on Render. Kept short (128 tokens) because the output is a
     # compact JSON object; longer output budgets are wasted here.
     "moderation_scope": dict(max_new_tokens=128, temperature=0.1,  do_sample=False),
+    # [REQ-700-SA1] Step 1.5 structural pre-analysis pass.
+    # Qwen3-4B with thinking enabled (enable_thinking=True at template time).
+    # Slightly more tokens than moderation_scope to accommodate <think> block +
+    # annotation output. Near-deterministic temperature to keep annotations stable.
+    "structural_pre_analysis": dict(max_new_tokens=256, temperature=0.15, do_sample=False),
     # Legacy scope-only pass (was Pass 0a for AMBIGUOUS cases). Retained for
     # reference; its logic is now absorbed into the moderation_scope pass above.
     "scope":    dict(max_new_tokens=64,  temperature=0.1,  do_sample=False),
@@ -278,6 +289,58 @@ _STRATEGY_SYSTEM = (
     '"framing_note": "one sentence on specific framing approach"}'
 )
 
+# ── Structural Pre-Analysis system prompt (REQ-700-SA1 through SA7) ──────────
+# Runs as Step 1.5: AFTER Pass 0 (moderation+scope) and BEFORE ADP-A.
+# Uses Qwen3-4B in thinking mode to detect paralinguistic and typographic signals
+# as defined in SPEC-100 §16. Output is a compact annotation block injected into
+# ADP-B's context so the safety classifier can make a more informed verdict.
+#
+# Signal taxonomy (SPEC-100 §16, REQ-100-152 through REQ-100-161):
+#   [PARA: tone_softener]       — "lol", "haha", "jk" after/alongside distress
+#   [PARA: typographic_register]— rapid shift from formal to informal register
+#   [STRUCT: register_collapse] — formal → single word → emoji degradation
+#   [STRUCT: fragmented_syntax] — incomplete sentences, trailing ellipses under load
+#   [STRUCT: all_caps_segment]  — isolated ALL CAPS in otherwise lowercase text
+#   [PARA: minimisation]        — distress immediately followed by "it's fine", "nvm"
+#   [PARA: mixed_affect]        — contradictory emotional signals in one message
+#
+# Encoding convention (Schema Option A — SPEC-100 §9, no new top-level field):
+#   Signals are encoded as tagged strings in uncertainty_notes using
+#   [STRUCT: tag] / [PARA: tag] prefixes. Machine-parseable by regex.
+#   Backward-compatible: ADP-B ignores the note field if it cannot parse it.
+#
+# Output format: compact JSON with a single "annotations" string.
+# Example: {"annotations": "[PARA: tone_softener] [STRUCT: fragmented_syntax]"}
+# Empty annotations: {"annotations": ""}
+_PRE_ANALYSIS_SYSTEM = (
+    "You are a paralinguistic and structural signal detector for a mental health AI. "
+    "Analyse the user message for the following signals and output ONLY a JSON object "
+    "with key 'annotations' containing a space-separated list of detected tags, or an "
+    "empty string if none are detected.\n\n"
+    "SIGNALS TO DETECT:\n"
+    "[PARA: tone_softener] — humour, 'lol', 'haha', 'jk', 'kidding' "
+    "IMMEDIATELY AFTER or within the same clause as a distress statement. "
+    "Example: 'I hate my life lol' → YES. 'That movie was hilarious lol' → NO.\n"
+    "[PARA: minimisation] — distress followed by 'it's fine', 'nvm', 'doesn't matter', "
+    "'forget it', 'not a big deal'. Example: 'I've been really struggling, it's fine' → YES.\n"
+    "[PARA: mixed_affect] — contradictory emotional signals in one message. "
+    "Example: 'I'm so happy but I keep crying and I don't know why'.\n"
+    "[PARA: typographic_register] — abrupt shift within the message from formal/complete "
+    "sentences to very casual abbreviations or slang. "
+    "Example: 'I have been experiencing significant distress ... idk man whatever'.\n"
+    "[STRUCT: fragmented_syntax] — incomplete sentences, multiple trailing ellipses, "
+    "or sentences that stop mid-thought. Example: 'I just feel like... I don't know...'.\n"
+    "[STRUCT: all_caps_segment] — isolated ALL CAPS in otherwise lowercase message. "
+    "Example: 'I can't do this anymore I JUST WANT IT TO STOP but yeah'.\n"
+    "[STRUCT: register_collapse] — message degrades from full sentences to single "
+    "words or emoji only by the end. Example: 'I've been trying so hard. Nothing works. ugh. 😔'.\n\n"
+    "IMPORTANT: Only tag signals that are CLEARLY present. When uncertain, omit the tag. "
+    "A false positive here could cause over-sensitivity in the safety check. "
+    "Output ONLY the JSON object. No explanation. No preamble.\n"
+    'Example output: {"annotations": "[PARA: tone_softener] [STRUCT: fragmented_syntax]"}\n'
+    'No signals: {"annotations": ""}'
+)
+
 
 # ── GPU inference class ───────────────────────────────────────────────────────
 
@@ -384,11 +447,21 @@ class NikkoInference:
     # Ported verbatim from hf_space/app.py. Do not diverge — identical prompts
     # ensure consistent model behaviour between Modal (primary) and HF Space (fallback).
 
-    def _build_qwen_prompt(self, messages: list[dict], system: str = "") -> str:
+    def _build_qwen_prompt(self, messages: list[dict], system: str = "", enable_thinking: bool = False) -> str:
         """
-        Applies Qwen3-4B's chat template. enable_thinking=False suppresses the
-        internal <think> reasoning scratchpad — saves ~100 tokens per turn.
-        See hf_space/app.py _build_qwen_prompt() for full explanation.
+        Applies Qwen3-4B's chat template.
+
+        enable_thinking=False (default) suppresses the internal <think> reasoning
+        scratchpad — saves ~100 tokens per turn for standard generation passes.
+        enable_thinking=True activates chain-of-thought for analytical passes
+        (e.g. Step 1.5 structural pre-analysis) where CoT improves accuracy.
+
+        [CONCEPT] Qwen3-4B supports two generation modes controlled at template time:
+          thinking=False → standard generation, no scratchpad
+          thinking=True  → model emits <think>...</think> before its final answer;
+                           the caller must strip the <think> block to get clean output.
+
+        See hf_space/app.py _build_qwen_prompt() for full explanation. Kept in sync.
         """
         chat = list(messages)
         if system:
@@ -397,7 +470,7 @@ class NikkoInference:
             chat,
             tokenize=False,
             add_generation_prompt=True,
-            enable_thinking=False,
+            enable_thinking=enable_thinking,
         )
 
     def _build_gemma_prompt(self, messages: list[dict], system: str = "") -> str:
@@ -484,7 +557,9 @@ class NikkoInference:
 
     # ── Analysis helpers (Qwen3-4B, same GPU session as ADP-A) ──────────────
 
-    def _infer_qwen_analysis(self, user_content: str, system: str, gen_params: dict) -> str:
+    def _infer_qwen_analysis(
+        self, user_content: str, system: str, gen_params: dict, enable_thinking: bool = False
+    ) -> str:
         """
         Single-turn Qwen3-4B call for lightweight analysis passes.
 
@@ -492,16 +567,21 @@ class NikkoInference:
         VRAM or cold-start cost. max_length=1024 keeps the context window short;
         analysis prompts are simple enough not to need the full 2048 budget.
 
+        enable_thinking=True activates Qwen3's chain-of-thought scratchpad for
+        the Step 1.5 pre-analysis pass. The <think>...</think> block is stripped
+        from the output before returning so callers always receive clean JSON.
+
         [CONCEPT] This is a convenience wrapper around _infer_raw's Qwen path.
         It exists as a separate method because analysis passes:
           (a) use a different gen_params dict (ANALYSIS_GEN_PARAMS, not ADAPTER_GEN_PARAMS)
           (b) are always single-turn (no chat history)
           (c) accept caller-supplied gen_params so each pass can tune tokens/temp
+          (d) optionally activate thinking mode with automatic <think> stripping
         """
         import torch
 
         messages = [{"role": "user", "content": user_content}]
-        prompt   = self._build_qwen_prompt(messages, system=system)
+        prompt   = self._build_qwen_prompt(messages, system=system, enable_thinking=enable_thinking)
         inputs   = self._qwen_tokenizer(
             prompt, return_tensors="pt", truncation=True, max_length=1024
         ).to(self._qwen_model.device)
@@ -513,7 +593,18 @@ class NikkoInference:
                 pad_token_id=self._qwen_tokenizer.eos_token_id,
             )
         new_ids = output_ids[0][inputs["input_ids"].shape[1]:]
-        return self._qwen_tokenizer.decode(new_ids, skip_special_tokens=True).strip()
+        raw = self._qwen_tokenizer.decode(new_ids, skip_special_tokens=True).strip()
+
+        # [CONCEPT] When thinking mode is enabled, Qwen3 prepends a <think>...</think>
+        # block containing its internal reasoning before the final answer. We strip it
+        # here so all callers receive clean JSON output regardless of thinking mode.
+        # split on </think> and take the trailing portion — the final answer always
+        # follows the closing tag, even if the think block spans multiple lines.
+        if enable_thinking and "<think>" in raw:
+            parts = raw.split("</think>", 1)
+            raw = parts[-1].strip() if len(parts) > 1 else raw
+
+        return raw
 
     def _analyze_moderation_scope(
         self,
@@ -698,6 +789,76 @@ class NikkoInference:
             log.warning(f"[signal_llm] failed ({exc}), returning no-op enrichment")
             return {"tone_note": "", "distress_nudge": None, "confidence_adjustment": 0.0}
 
+    def _run_structural_pre_analysis(self, user_text: str) -> dict:
+        """
+        Step 1.5: Qwen3-4B structural pre-analysis pass (REQ-700-SA1 through SA7).
+
+        Runs AFTER Pass 0 (moderation + scope) and BEFORE ADP-A.
+        Uses Qwen3-4B with enable_thinking=True so the model can reason about
+        the message's paralinguistic and structural signals before annotating.
+
+        Returns a dict:
+            {"annotations": "[PARA: tone_softener] [STRUCT: fragmented_syntax]"}
+        or {"annotations": ""} if no signals detected.
+
+        On error, returns {"annotations": "", "error": "<reason>"} —
+        asymmetric error policy: a failed pre-analysis never blocks the pipeline.
+        The injection into ADP-B is skipped when annotations is empty or errored.
+
+        [CONCEPT] Why thinking mode here but not for ADP-A?
+        The pre-analysis task is ANALYTICAL (detect subtle signals that may be
+        counterintuitive — e.g., "lol" after distress = minimisation, not humour).
+        Chain-of-thought helps the model reason through the nuance before committing
+        to a tag. ADP-A's task is GENERATIVE (empathetic response) where CoT adds
+        latency and tends to produce more analytical-sounding prose, not better empathy.
+        """
+        try:
+            raw = self._infer_qwen_analysis(
+                user_content=f'User message to analyse: "{user_text}"',
+                system=_PRE_ANALYSIS_SYSTEM,
+                gen_params=ANALYSIS_GEN_PARAMS["structural_pre_analysis"],
+                enable_thinking=True,
+            )
+            result      = self._parse_json(raw)
+            annotations = str(result.get("annotations", "")).strip()
+            log.info("[pre_analysis] annotations=%r", annotations or "(none)")
+            return {"annotations": annotations}
+        except Exception as exc:
+            log.warning("[pre_analysis] failed (%s) — skipping injection (asymmetric error policy).", exc)
+            return {"annotations": "", "error": str(exc)}
+
+    @staticmethod
+    def _build_adp_b_system_with_context(base_system: str, annotations: str) -> str:
+        """
+        Inject pre-analysis annotations into the ADP-B safety system prompt.
+
+        [REQ-700-SA5] ADP-B MUST receive the pre-analysis annotation block as
+        additional context so the safety classifier can account for paralinguistic
+        signals when determining crisis=true/false.
+
+        When annotations is empty, returns base_system unchanged — no context
+        injection occurs and ADP-B runs with its standard prompt.
+
+        Why prepend rather than append?
+        Gemma-2 is sensitive to context position — instructions near the start of
+        the system block have higher weight in the model's attention. The annotations
+        are signal-level context that should influence the crisis verdict, not a
+        footnote. Prepending ensures ADP-B weights them appropriately.
+        """
+        if not annotations:
+            return base_system
+        annotation_block = (
+            f"PARALINGUISTIC / STRUCTURAL SIGNALS DETECTED IN THIS MESSAGE:\n"
+            f"{annotations}\n\n"
+            "These signals MAY indicate masked or minimised distress. "
+            "A tone softener (e.g. 'lol' after distress language) does NOT make the "
+            "message safe — it may indicate the user is downplaying their state. "
+            "Weight these signals when determining the crisis verdict, but do not let "
+            "them override explicit content: if the message contains no direct self-harm "
+            "language, crisis MUST still be false.\n\n"
+        )
+        return annotation_block + base_system
+
     def _enrich_strategy(
         self,
         user_text:       str,
@@ -791,8 +952,11 @@ class NikkoInference:
           base_strategy_text : The RESPONSE GUIDANCE block from the ADP-A system
                                prompt. Used by Pass 0c strategy enrichment.
 
-        Original behaviour (ADP-B → ADP-A → ADP-C) is unchanged and identical
-        to hf_space/app.py _run_full_pipeline(). All analysis output is additive.
+        Pipeline order (Director-approved 2026-05-22): Pass 0 (mod+scope) →
+        Step 1.5 (pre-analysis, Qwen3 thinking mode) → ADP-A (Qwen3 draft) →
+        ADP-B (Gemma safety, annotations injected) → ADP-C (Gemma evaluation).
+        All analysis output is additive; safety guarantee is preserved since
+        ADP-B still discards the draft when crisis=True.
 
         [CONCEPT] Unlike the HF Space (where @spaces.GPU allocates/releases the
         GPU per decorated function call), Modal keeps the GPU allocated for the
@@ -809,11 +973,12 @@ class NikkoInference:
         scope_verdict:     str  | None = None
         enhanced_signal:   dict | None = None
         enhanced_strategy: dict | None = None
+        pre_analysis_raw:  str         = ""   # Step 1.5 annotation string (may be empty)
 
         # ── Analysis preamble (Qwen3-4B, zero extra cold-start cost) ──────────
-        # Three passes run before Stage 1 (ADP-B). Each is wrapped in try/except
+        # Analysis passes run before the adapter stages. Each is wrapped in try/except
         # — any failure is logged and skipped without aborting the pipeline.
-        # The ADP-B → ADP-A → ADP-C flow is always the safety net.
+        # The ADP-A → ADP-B → ADP-C flow is always the safety net.
         if run_analysis and _user_text:
 
             # ── Pass 0: Combined moderation + scope (runs for ALL messages) ───
@@ -842,7 +1007,7 @@ class NikkoInference:
                     "moderation_block": True, "scope_block": False,
                     "harm_category": mod_scope["harm_category"],
                     "adp_b_raw": "", "adp_a_raw": "", "adp_c_raw": "",
-                    "scope_verdict": None,
+                    "scope_verdict": None, "pre_analysis_raw": "",
                     "enhanced_signal": None, "enhanced_strategy": None,
                     "elapsed": round(time.time() - start, 2),
                 }
@@ -858,10 +1023,19 @@ class NikkoInference:
                     "moderation_block": False, "scope_block": True,
                     "oos_reason": mod_scope["oos_reason"],
                     "adp_b_raw": "", "adp_a_raw": "", "adp_c_raw": "",
-                    "scope_verdict": "OUT_OF_SCOPE",
+                    "scope_verdict": "OUT_OF_SCOPE", "pre_analysis_raw": "",
                     "enhanced_signal": None, "enhanced_strategy": None,
                     "elapsed": round(time.time() - start, 2),
                 }
+
+            # ── Step 1.5: Structural pre-analysis (Qwen3-4B, thinking mode) ───
+            # [REQ-700-SA1] Detect paralinguistic and structural signals (SPEC-100 §16)
+            # BEFORE running the adapter stages. Annotations are injected into ADP-B's
+            # context so the safety classifier sees masked/minimised distress cues.
+            # Runs in thinking mode (chain-of-thought) for higher signal accuracy.
+            # Any failure is silently skipped — annotations default to "" (no injection).
+            pre_result      = self._run_structural_pre_analysis(_user_text)
+            pre_analysis_raw = pre_result.get("annotations", "")
 
             # ── Pass 1: Signal enrichment ─────────────────────────────────────
             # rule_signal carries the deterministic baseline. Risk indicators
@@ -880,28 +1054,45 @@ class NikkoInference:
                 )
                 system = self._inject_enhanced_strategy(system, enhanced_strategy)
 
-        # Stage 1: ADP-B safety classification (Gemma-2 + adp_b adapter)
-        adp_b_raw = self._infer_raw(messages, safety_system, "adp_b")
+        # ── Reordered pipeline: ADP-A → ADP-B → ADP-C ────────────────────────
+        # [Director-approved 2026-05-22] New execution order groups both Qwen3
+        # passes together (pre-analysis + ADP-A draft) before switching to Gemma
+        # (ADP-B safety check + ADP-C evaluation). This minimises context-switch
+        # overhead between the two model families.
+        #
+        # Safety is preserved: ADP-B still discards the draft on crisis=True.
+        # The draft simply hasn't been delivered to the user yet when ADP-B fires;
+        # the CRISIS return path exits early and delivers crisis resources instead.
+
+        # Stage 1: ADP-A empathy response draft (Qwen3-4B base)
+        # [CONCEPT] ADP-A now runs BEFORE ADP-B safety classification. The draft is
+        # generated here but only returned to the caller if ADP-B approves it.
+        # If ADP-B fires crisis=True, this draft is silently discarded.
+        draft = self._infer_raw(messages, system, "adp_a")
+        log.info(f"[adp_a] {len(draft)} chars")
+
+        # Stage 2: ADP-B safety classification (Gemma-2 + adp_b adapter)
+        # Inject pre-analysis annotations into the safety system prompt so ADP-B
+        # can account for paralinguistic signals (tone softeners, minimisation, etc.).
+        adp_b_safety_system = self._build_adp_b_system_with_context(safety_system, pre_analysis_raw)
+        adp_b_raw = self._infer_raw(messages, adp_b_safety_system, "adp_b")
         log.info(f"[adp_b] {len(adp_b_raw)} chars: {adp_b_raw[:120]}")
         safety    = self._parse_json(adp_b_raw)
         is_crisis = bool(safety.get("crisis", False))
         flags     = safety.get("flags", [])
 
         if is_crisis:
+            # Draft is discarded — ADP-B's crisis verdict takes priority.
             return {
                 "text": "", "is_crisis": True, "flags": flags,
                 "verdict": "CRISIS", "regen": False,
                 "moderation_block": False, "scope_block": False,
                 "adp_b_raw": adp_b_raw, "adp_a_raw": "", "adp_c_raw": "",
-                "scope_verdict": scope_verdict,
+                "scope_verdict": scope_verdict, "pre_analysis_raw": pre_analysis_raw,
                 "enhanced_signal": enhanced_signal,
                 "enhanced_strategy": enhanced_strategy,
                 "elapsed": round(time.time() - start, 2),
             }
-
-        # Stage 2: ADP-A empathy response draft (Qwen3-4B base)
-        draft = self._infer_raw(messages, system, "adp_a")
-        log.info(f"[adp_a] {len(draft)} chars")
 
         # Stage 3: ADP-C evaluation (Gemma-2 + adp_c adapter)
         eval_messages = [
@@ -963,6 +1154,7 @@ class NikkoInference:
             "adp_a_raw":          draft,
             "adp_c_raw":          adp_c_raw,
             "scope_verdict":      scope_verdict,
+            "pre_analysis_raw":   pre_analysis_raw,
             "enhanced_signal":    enhanced_signal,
             "enhanced_strategy":  enhanced_strategy,
             "elapsed":            round(time.time() - start, 2),
@@ -984,9 +1176,13 @@ def pipeline(request: dict):
     HTTP entry point for the full pipeline. Mirrors POST /pipeline in hf_space/app.py.
     Called by backend/draft_generator.py via the MODAL_URL environment variable.
 
-    Request shape:  { messages, system, safety_system, eval_system, token }
+    Request shape:  { messages, system, safety_system, eval_system, token,
+                      user_text?, run_analysis?, scope_ambiguous?, rule_signal?,
+                      base_strategy_text? }
     Response shape: { text, is_crisis, flags, verdict, regen, elapsed,
-                      adp_b_raw, adp_a_raw, adp_c_raw }
+                      adp_b_raw, adp_a_raw, adp_c_raw,
+                      pre_analysis_raw, scope_verdict,
+                      enhanced_signal, enhanced_strategy }
 
     Token auth: NIKKO_INTERNAL_TOKEN shared between this endpoint and Render.
     Set via: modal secret create nikko-config NIKKO_INTERNAL_TOKEN=<value>

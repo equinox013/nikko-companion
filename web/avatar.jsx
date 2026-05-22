@@ -7,14 +7,18 @@ const NIKKO_SUN = '#CE844C';
 
 const NIKKO_EMOTIONS = {
   // idle — sun body only, no glyph, no ray motion
-  calm:    { rays: 'idle',  glyph: null,         active: false },
-  idle:    { rays: 'idle',  glyph: null,         active: false },
+  calm:    { rays: 'idle',     glyph: null,            active: false },
+  idle:    { rays: 'idle',     glyph: null,            active: false },
   // active states
-  listen:  { rays: 'idle',  glyph: 'question',   active: true },
-  search:  { rays: 'spin',  glyph: 'squiggle',   active: true },
-  speak:   { rays: 'pulse', glyph: 'smile',      active: true },
-  care:    { rays: 'idle',  glyph: 'softsmile',  active: true },
-  think:   { rays: 'pulse', glyph: 'pulse',      active: true },
+  listen:  { rays: 'idle',     glyph: 'question',      active: true },
+  search:  { rays: 'spin',     glyph: 'squiggle',      active: true },
+  speak:   { rays: 'pulse',    glyph: 'smile',         active: true },
+  care:    { rays: 'idle',     glyph: 'softsmile',     active: true },
+  think:   { rays: 'pulse',    glyph: 'pulse',         active: true },
+  // [REQ-000-231] Uncertainty state — confidence < 0.40 on signal output.
+  // Dimmed rays at 40% base opacity, slow fade-pulse animation, ? glyph.
+  // Signals epistemic humility: Nikko detected a signal but is not confident.
+  uncertain: { rays: 'uncertain', glyph: 'question',  active: true },
 };
 
 // Pre-computed ray endpoints around a 32-radius ring at center (40,40)
@@ -123,11 +127,20 @@ function NikkoAvatar({ emotion = 'calm', size = 36, style: styleProp, showHalo =
               : { transformOrigin: '40px 40px' }}>
             {RAYS.map(r => (
               <line key={r.key} x1={r.x1} y1={r.y1} x2={r.x2} y2={r.y2}
-                    stroke={sun} strokeWidth="1.6" strokeLinecap="round" opacity="0.85">
+                    stroke={sun} strokeWidth="1.6" strokeLinecap="round"
+                    opacity={e.rays === 'uncertain' ? '0.40' : '0.85'}>
                 {e.rays === 'pulse' && (
                   <animate attributeName="opacity"
                            values="0.4;0.95;0.4" dur="2.4s"
                            begin={`${r.key * 0.08}s`} repeatCount="indefinite" />
+                )}
+                {/* [REQ-000-231] Uncertain state: slow fade-pulse at dimmed opacity (0.15–0.45).
+                    Duration 4s is intentionally slower than normal pulse (2.4s) to convey
+                    hesitancy rather than activity. Base opacity stays low (max 0.45). */}
+                {e.rays === 'uncertain' && (
+                  <animate attributeName="opacity"
+                           values="0.15;0.45;0.15" dur="4s"
+                           begin={`${r.key * 0.15}s`} repeatCount="indefinite" />
                 )}
               </line>
             ))}

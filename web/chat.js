@@ -99,7 +99,30 @@ function SafetyBanner({ onDismiss }) {
     expanded ? "Show less" : "More tailored support"
   )), /* @__PURE__ */ React.createElement("button", { className: "dismiss", onClick: onDismiss, "aria-label": "Dismiss" }, /* @__PURE__ */ React.createElement("svg", { viewBox: "0 0 12 12", fill: "none", stroke: "currentColor", strokeWidth: "1.5", strokeLinecap: "round" }, /* @__PURE__ */ React.createElement("path", { d: "m3 3 6 6M9 3l-6 6" }))));
 }
-function Composer({ onSend, disabled }) {
+const CHAR_LIMIT_DEFAULT = 1e3;
+const CHAR_LIMIT_EXTENDED = 1500;
+const _VERBOSE_SIGNALS = [
+  "ramble",
+  "rambles",
+  "tend to write",
+  "write a lot",
+  "write quite a lot",
+  "verbose",
+  "verbosity",
+  "lengthy",
+  "long messages",
+  "long message",
+  "write long",
+  "quite a lot to say"
+];
+function deriveCharLimit(memContent) {
+  if (!memContent) return CHAR_LIMIT_DEFAULT;
+  const lower = memContent.toLowerCase();
+  const isVerbose = _VERBOSE_SIGNALS.some((sig) => lower.includes(sig));
+  return isVerbose ? CHAR_LIMIT_EXTENDED : CHAR_LIMIT_DEFAULT;
+}
+function Composer({ onSend, disabled, maxLength }) {
+  const limit = maxLength || CHAR_LIMIT_DEFAULT;
   const [val, setVal] = useState("");
   const ref = useRef(null);
   const autosize = useCallback(() => {
@@ -113,10 +136,13 @@ function Composer({ onSend, disabled }) {
   }, [val, autosize]);
   const submit = () => {
     const t = val.trim();
-    if (!t || disabled) return;
+    if (!t || disabled || val.length > limit) return;
     onSend(t);
     setVal("");
   };
+  const remaining = limit - val.length;
+  const showCounter = val.length >= limit * 0.6;
+  const counterClass = val.length > limit ? "composer-count over" : val.length >= limit * 0.8 ? "composer-count warn" : "composer-count";
   return /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(
     "div",
     {
@@ -131,7 +157,9 @@ function Composer({ onSend, disabled }) {
       {
         ref,
         value: val,
-        onChange: (e) => setVal(e.target.value),
+        onChange: (e) => {
+          setVal(e.target.value);
+        },
         onKeyDown: (e) => {
           if (e.key === "Enter" && !e.shiftKey) {
             e.preventDefault();
@@ -143,8 +171,8 @@ function Composer({ onSend, disabled }) {
         "aria-label": "Message Nikko"
       }
     ),
-    /* @__PURE__ */ React.createElement("button", { className: "send", onClick: submit, disabled: !val.trim() || disabled, "aria-label": "Send message" }, /* @__PURE__ */ React.createElement("svg", { viewBox: "0 0 14 14", fill: "none", stroke: "currentColor", strokeWidth: "1.6", strokeLinecap: "round", strokeLinejoin: "round" }, /* @__PURE__ */ React.createElement("path", { d: "M2 7h10" }), /* @__PURE__ */ React.createElement("path", { d: "m8 3 4 4-4 4" })))
-  ), /* @__PURE__ */ React.createElement("div", { className: "composer-foot" }, /* @__PURE__ */ React.createElement("span", null, /* @__PURE__ */ React.createElement("span", { className: "kbd" }, "Enter"), " to send \xB7 ", /* @__PURE__ */ React.createElement("span", { className: "kbd" }, "Shift"), "+", /* @__PURE__ */ React.createElement("span", { className: "kbd" }, "Enter"), " for newline \xB7 type ", /* @__PURE__ */ React.createElement("span", { className: "kbd" }, "/help"), " for the tutorial"), /* @__PURE__ */ React.createElement("span", null, "Cleared on refresh")));
+    /* @__PURE__ */ React.createElement("button", { className: "send", onClick: submit, disabled: !val.trim() || disabled || val.length > limit, "aria-label": "Send message" }, /* @__PURE__ */ React.createElement("svg", { viewBox: "0 0 14 14", fill: "none", stroke: "currentColor", strokeWidth: "1.6", strokeLinecap: "round", strokeLinejoin: "round" }, /* @__PURE__ */ React.createElement("path", { d: "M2 7h10" }), /* @__PURE__ */ React.createElement("path", { d: "m8 3 4 4-4 4" })))
+  ), /* @__PURE__ */ React.createElement("div", { className: "composer-foot" }, /* @__PURE__ */ React.createElement("span", null, /* @__PURE__ */ React.createElement("span", { className: "kbd" }, "Enter"), " to send \xB7 ", /* @__PURE__ */ React.createElement("span", { className: "kbd" }, "Shift"), "+", /* @__PURE__ */ React.createElement("span", { className: "kbd" }, "Enter"), " for newline \xB7 type ", /* @__PURE__ */ React.createElement("span", { className: "kbd" }, "/help"), " for the tutorial"), /* @__PURE__ */ React.createElement("span", { className: "composer-foot-right" }, showCounter && /* @__PURE__ */ React.createElement("span", { className: counterClass, "aria-live": "polite", "aria-label": `${remaining} characters remaining` }, remaining < 0 ? `${Math.abs(remaining)} over` : remaining), /* @__PURE__ */ React.createElement("span", null, "Cleared on refresh"))));
 }
 function MemBanner({ type, onDismiss, onOpenLoad }) {
   return /* @__PURE__ */ React.createElement("div", { className: "mem-banner", role: "status", "aria-live": "polite" }, /* @__PURE__ */ React.createElement("span", { className: "mem-banner-icon", "aria-hidden": "true" }, type === "loaded" ? (
@@ -220,6 +248,47 @@ const AFFIRMATIONS = [
   "Reading between the lines\u2026",
   "You deserve a thoughtful reply."
 ];
+const CHECKIN_EMOTIONS = ["calm", "content", "anxious", "low", "overwhelmed", "sad", "numb", "hopeful", "irritable", "tired"];
+function MoodCheckInPopup({ onLog, onSkip }) {
+  const [rating, setRating] = React.useState(null);
+  const [selected, setSelected] = React.useState([]);
+  const toggleEmotion = (e) => {
+    setSelected((prev) => prev.includes(e) ? prev.filter((x) => x !== e) : [...prev, e]);
+  };
+  const handleLog = () => {
+    if (!rating) return;
+    onLog({ rating, emotions: selected });
+  };
+  return /* @__PURE__ */ React.createElement("div", { className: "mood-checkin-popup", role: "form", "aria-label": "Quick mood check-in" }, /* @__PURE__ */ React.createElement("div", { className: "mood-checkin-header" }, /* @__PURE__ */ React.createElement("span", { className: "mood-checkin-title" }, "Quick check-in"), /* @__PURE__ */ React.createElement("span", { className: "mood-checkin-sub" }, "How are you feeling right now?")), /* @__PURE__ */ React.createElement("div", { className: "mood-checkin-rating", "aria-label": "Mood rating 1 to 10" }, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      key: n,
+      className: "mood-checkin-num" + (rating === n ? " active" : ""),
+      onClick: () => setRating(n),
+      "aria-pressed": rating === n,
+      "aria-label": `${n} out of 10`
+    },
+    n
+  ))), /* @__PURE__ */ React.createElement("div", { className: "mood-checkin-scale-hint" }, /* @__PURE__ */ React.createElement("span", null, "1 = very low"), /* @__PURE__ */ React.createElement("span", null, "10 = great")), /* @__PURE__ */ React.createElement("div", { className: "mood-checkin-chips", "aria-label": "Emotion chips, optional" }, CHECKIN_EMOTIONS.map((e) => /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      key: e,
+      className: "mood-chip" + (selected.includes(e) ? " active" : ""),
+      onClick: () => toggleEmotion(e),
+      "aria-pressed": selected.includes(e)
+    },
+    e
+  ))), /* @__PURE__ */ React.createElement("div", { className: "mood-checkin-actions" }, /* @__PURE__ */ React.createElement("button", { className: "mood-checkin-skip", onClick: onSkip }, "Skip"), /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      className: "mood-checkin-log",
+      onClick: handleLog,
+      disabled: !rating,
+      "aria-disabled": !rating
+    },
+    "Log mood"
+  )));
+}
 function ThinkingBubble({ coldStart = false }) {
   const [elapsed, setElapsed] = React.useState(0);
   const [affIdx, setAffIdx] = React.useState(0);
@@ -318,6 +387,8 @@ function Chat({ theme, onToggleTheme }) {
   const [memBanner, setMemBanner] = useState(null);
   const memBannerAutoRef = useRef(null);
   const hintShownRef = useRef(false);
+  const moodCheckInShownRef = useRef(false);
+  const [moodCheckIn, setMoodCheckIn] = useState(null);
   useEffect(() => {
     if (!memPop) return;
     const onDoc = (e) => {
@@ -352,14 +423,19 @@ function Chat({ theme, onToggleTheme }) {
       const greeting = userName ? `Welcome back, ${userName}.` : "Welcome back.";
       chatText = `${greeting} Your memory file is loaded \u2014 I'll keep what's there in mind, but the live conversation is what I'll really listen to. You're in charge of what stays.`;
     }
+    const wbId = "wb-" + Date.now();
     setMessages((prev) => [...prev, {
-      id: "wb-" + Date.now(),
+      id: wbId,
       role: "assistant",
       emotion: "care",
       streaming: false,
       text: chatText
     }]);
     setTimeout(scrollToBottom, 30);
+    if (!isNew && sessionKey && !moodCheckInShownRef.current) {
+      moodCheckInShownRef.current = true;
+      setTimeout(() => setMoodCheckIn({ wbId }), 200);
+    }
     clearTimeout(memBannerAutoRef.current);
     setMemBanner("loaded");
     memBannerAutoRef.current = setTimeout(() => setMemBanner(null), 7e3);
@@ -451,6 +527,18 @@ function Chat({ theme, onToggleTheme }) {
     }
     setTechniqueCheckIn(null);
   }, [techniqueCheckIn]);
+  const onMoodCheckInLog = useCallback(({ rating, emotions }) => {
+    const today = (/* @__PURE__ */ new Date()).toISOString().split("T")[0];
+    const entry = { mood: rating, emotions, triggers: "" };
+    setMoodEntry(today, entry);
+    const formatted = typeof formatDiaryEntry === "function" ? formatDiaryEntry(today, entry) : `${today} | mood: ${rating} | emotions: ${emotions.join(", ")} | triggers: `;
+    setPendingEntries((prev) => [...prev, {
+      section: "## Mood Diary",
+      entry: formatted,
+      ts: Date.now()
+    }]);
+    setMoodCheckIn(null);
+  }, [setMoodEntry]);
   useEffect(() => {
     if (!pendingEntries.length) return;
     const handler = (e) => {
@@ -467,6 +555,7 @@ function Chat({ theme, onToggleTheme }) {
     setMessages((prev) => [...prev, { id, role: "assistant", text: "", emotion: "listen", streaming: true, traceId: id, sources: [] }]);
     scrollToBottom();
     setCurrentEmotion("think");
+    NikkoAgentLog.add({ id, userText, _processing: true, _stage: "understanding your message" });
     coldStartTimerRef.current = setTimeout(() => setIsColdStart(true), 12e3);
     try {
       const cappedText = applyInputCap(userText);
@@ -513,6 +602,7 @@ function Chat({ theme, onToggleTheme }) {
               setCurrentEmotion(data.emotion || "listen");
             } else if (currentEvent === "chunk") {
               if (data.safetyFlags && data.safetyFlags.includes("crisis_detected")) setSafetyVisible(true);
+              if (data.stage) NikkoAgentLog.update(id, { _stage: data.stage });
               if (data.text) {
                 const emotion = data.emotion || "speak";
                 setCurrentEmotion(emotion);
@@ -530,7 +620,7 @@ function Chat({ theme, onToggleTheme }) {
                 }
                 accText = target;
                 if (data.trace) {
-                  NikkoAgentLog.add({ id, userText, ...data.trace, liveData: true });
+                  NikkoAgentLog.update(id, { ...data.trace, liveData: true, _processing: false });
                 }
                 if (data.sources && data.sources.length > 0) {
                   setMessages((prev) => prev.map(
@@ -564,7 +654,7 @@ function Chat({ theme, onToggleTheme }) {
       const pattern = matchNikkoPattern(userText);
       if (pattern.safety) setSafetyVisible(true);
       const trace = buildAgentTrace(id, userText, pattern);
-      NikkoAgentLog.add(trace);
+      NikkoAgentLog.update(id, { ...trace, _processing: false });
       setMessages((prev) => prev.map(
         (m) => m.id === id ? { ...m, emotion: pattern.chunks[0].emotion } : m
       ));
@@ -606,10 +696,10 @@ function Chat({ theme, onToggleTheme }) {
   }, [scrollToBottom, streamReply]);
   const liveEmotion = streaming ? currentEmotion : "calm";
   const showSuggestions = messages.length === 1 && !streaming;
-  const lastCompletedAssistantId = React.useMemo(() => {
+  const lastAssistantId = React.useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i--) {
       const m = messages[i];
-      if (m.role === "assistant" && !m.streaming && m.traceId) return m.id;
+      if (m.role === "assistant" && m.traceId) return m.id;
     }
     return null;
   }, [messages]);
@@ -708,7 +798,7 @@ function Chat({ theme, onToggleTheme }) {
       if (m.role === "user") {
         return /* @__PURE__ */ React.createElement("div", { className: "msg user", key: m.id }, /* @__PURE__ */ React.createElement("div", { className: "body" }, /* @__PURE__ */ React.createElement("div", { className: "bubble" }, m.text)));
       }
-      return /* @__PURE__ */ React.createElement("div", { className: "msg assistant", key: m.id }, /* @__PURE__ */ React.createElement("div", { className: "avatar-slot" }, /* @__PURE__ */ React.createElement(NikkoAvatar, { emotion: m.emotion || "calm", size: 42 })), /* @__PURE__ */ React.createElement("div", { className: "body" }, m.text === "" && m.streaming ? /* @__PURE__ */ React.createElement(ThinkingBubble, { coldStart: isColdStart }) : /* @__PURE__ */ React.createElement("div", { className: "bubble" }, /* @__PURE__ */ React.createElement(
+      return /* @__PURE__ */ React.createElement(React.Fragment, { key: m.id }, /* @__PURE__ */ React.createElement("div", { className: "msg assistant" }, /* @__PURE__ */ React.createElement("div", { className: "avatar-slot" }, /* @__PURE__ */ React.createElement(NikkoAvatar, { emotion: m.emotion || "calm", size: 42 })), /* @__PURE__ */ React.createElement("div", { className: "body" }, m.text === "" && m.streaming ? /* @__PURE__ */ React.createElement(ThinkingBubble, { coldStart: isColdStart }) : /* @__PURE__ */ React.createElement("div", { className: "bubble" }, /* @__PURE__ */ React.createElement(
         MessageBody,
         {
           text: m.text,
@@ -728,7 +818,13 @@ function Chat({ theme, onToggleTheme }) {
         " source",
         m.sources.length !== 1 ? "s" : "",
         " used"
-      ), idx === 0 && showSuggestions && /* @__PURE__ */ React.createElement("div", { className: "suggest-row" }, NIKKO_SUGGESTIONS.map((s) => /* @__PURE__ */ React.createElement("button", { key: s, className: "suggest", onClick: () => onSend(s) }, s)))));
+      ), idx === 0 && showSuggestions && /* @__PURE__ */ React.createElement("div", { className: "suggest-row" }, NIKKO_SUGGESTIONS.map((s) => /* @__PURE__ */ React.createElement("button", { key: s, className: "suggest", onClick: () => onSend(s) }, s))), m.traceId && m.id === lastAssistantId && /* @__PURE__ */ React.createElement(AgentRibbon, { traceId: m.traceId }))), moodCheckIn && m.id === moodCheckIn.wbId && /* @__PURE__ */ React.createElement(
+        MoodCheckInPopup,
+        {
+          onLog: onMoodCheckInLog,
+          onSkip: () => setMoodCheckIn(null)
+        }
+      ));
     }))
   ), /* @__PURE__ */ React.createElement("div", { className: "composer-wrap" }, /* @__PURE__ */ React.createElement("div", { className: "composer-inner" }, techniqueCheckIn && /* @__PURE__ */ React.createElement(
     TechniqueCheckInBanner,
@@ -759,7 +855,7 @@ function Chat({ theme, onToggleTheme }) {
         setLoadOpen(true);
       }
     }
-  ), safetyVisible && /* @__PURE__ */ React.createElement(SafetyBanner, { onDismiss: () => setSafetyVisible(false) }), /* @__PURE__ */ React.createElement(Composer, { onSend, disabled: streaming }), /* @__PURE__ */ React.createElement(AiDisclaimer, null)))), rightTab === "sources" && /* @__PURE__ */ React.createElement(
+  ), safetyVisible && /* @__PURE__ */ React.createElement(SafetyBanner, { onDismiss: () => setSafetyVisible(false) }), /* @__PURE__ */ React.createElement(Composer, { onSend, disabled: streaming, maxLength: deriveCharLimit(memContentRef.current) }), /* @__PURE__ */ React.createElement(AiDisclaimer, null)))), rightTab === "sources" && /* @__PURE__ */ React.createElement(
     SourcesPanel,
     {
       sourceOrder: sourceOrderRef.current,

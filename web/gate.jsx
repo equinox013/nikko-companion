@@ -25,7 +25,10 @@ const GATE_DISCLOSURES = [
   {
     icon: 'beaker',
     title: 'Research preview',
-    body: 'Nikko is a non-diagnostic wellbeing companion. It does not replace a clinician, and it cannot make care decisions on your behalf.',
+    // [REQ-300-119 through REQ-300-121] Onboarding expectation-setting.
+    // Transparent statement about crisis behaviour — framed as a design choice,
+    // not a warning. Placed in the non-diagnostic disclosure per spec.
+    body: 'Nikko is a non-diagnostic wellbeing companion. It does not replace a clinician, and it cannot make care decisions on your behalf. If Nikko detects that you might be in crisis, it will prioritise connecting you with real people rather than continuing the conversation — that\'s by design.',
   },
 ];
 

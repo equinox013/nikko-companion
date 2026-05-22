@@ -25,6 +25,10 @@ function useTraceLog() {
 }
 
 // ── Fallback trace builder (backend unreachable) ─────────────────────
+// [REQ-FIS-RB4] buildAgentTrace produces a synthetic trace with the new
+// pre_analysis / signal / router / evidence fields so the expanded overlay
+// renders consistently whether data comes from the live pipeline or the
+// local fallback.
 function classifyTurn(userText, pattern) {
   const t = (userText || '').toLowerCase();
   const crisis = ['kill myself','suicide','want to die','end it all',"don't want to be here",'hurt myself'];
@@ -38,22 +42,62 @@ function classifyTurn(userText, pattern) {
 function buildAgentTrace(messageId, userText, pattern) {
   const { mode, distress } = classifyTurn(userText, pattern);
   return {
-    id: messageId, userText, liveData: false,
+    id: messageId, userText, liveData: false, _processing: false,
     is_crisis: mode === 'CRISIS', flags: mode === 'CRISIS' ? ['crisis_detected'] : [],
-    verdict: 'APPROVE', regen: false, elapsed: null,
+    verdict: 'APPROVE', regen: false, elapsed: null, _mode: mode,
+    // New trace fields — fallback synthetic values for the expanded overlay cards.
+    pre_analysis: { annotations: '' },
+    signal: {
+      distress_level: distress, confidence: null,
+      emotional_states: [], cognitive_patterns: [],
+      behavioral_indicators: [], risk_indicators: [],
+      support_needs: [], uncertainty_notes: '',
+    },
+    router: { mode, confidence: null, crisis_override: mode === 'CRISIS' },
+    evidence: { sources: [], adapters: 0 },
     adp_b: { label: 'Safety / crisis check', verdict: mode === 'CRISIS' ? 'CRISIS' : 'CLEAR', flags: mode === 'CRISIS' ? ['crisis_detected'] : [] },
     adp_a: { label: 'Empathy response draft', chars: null },
     adp_c: { label: 'Quality gate (evaluator)', verdict: 'APPROVE', regen: false },
-    _mode: mode, _distress: distress,
   };
 }
 
 // ── Public ribbon ────────────────────────────────────────────────────
+// [REQ-FIS-RB4] AgentRibbon shows pipeline stage during processing and
+// the final mode label after completion.
+//
+// During processing (_processing=true): shows trace._stage (live stage label
+// from keep-alive SSE chunks) in secondary typography.
+// After completion: shows the operational mode ("guidance mode" / "comfort mode").
 function AgentRibbon({ traceId }) {
   useTraceLog();
   if (!traceId) return null;
   const trace = NikkoAgentLog.get(traceId);
   if (!trace) return null;
+
+  // ── Processing state: show live pipeline stage ─────────────────
+  if (trace._processing) {
+    return (
+      <div className="agent-ribbon processing" role="note">
+        <span className="agent-ribbon-glyph" aria-hidden="true">
+          <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="3" cy="3" r="1.4"/><circle cx="9" cy="3" r="1.4"/><circle cx="6" cy="9" r="1.4"/>
+            <path d="M3 3 9 3M3 3 6 9M9 3 6 9" opacity="0.5"/>
+          </svg>
+        </span>
+        <span className="agent-ribbon-stage">{trace._stage || 'processing…'}</span>
+      </div>
+    );
+  }
+
+  // ── Completed state: show operational mode ──────────────────────
+  const mode = trace._mode || (trace.is_crisis ? 'CRISIS' : 'COMFORT');
+  const modeLabels = {
+    GUIDANCE: 'guidance mode',
+    CRISIS:   'crisis mode',
+    COMFORT:  'comfort mode',
+  };
+  const modeLabel = modeLabels[mode] || 'comfort mode';
+
   return (
     <div className="agent-ribbon" role="note">
       <span className="agent-ribbon-glyph" aria-hidden="true">
@@ -62,7 +106,7 @@ function AgentRibbon({ traceId }) {
           <path d="M3 3 9 3M3 3 6 9M9 3 6 9" opacity="0.5"/>
         </svg>
       </span>
-      <span className="agent-ribbon-count">3 adapters</span>
+      <span className="agent-ribbon-count">{modeLabel}</span>
     </div>
   );
 }
@@ -129,7 +173,36 @@ function AdapterCard({ step, name, role, verdict, detail, running }) {
   );
 }
 
+// ── Analysis card (pre-analysis, signal, router) ─────────────────────
+// A lighter card for the Qwen3 analysis preamble steps — no adapter label,
+// no verdict badge, just a label and a brief value summary.
+function AnalysisCard({ step, name, role, value, empty }) {
+  return (
+    <div className="adp-card adp-card--analysis">
+      <div className="adp-card-step">{step}</div>
+      <div className="adp-card-body">
+        <div className="adp-card-head">
+          <span className="adp-card-name">{name}</span>
+          <span className="adp-card-role">{role}</span>
+        </div>
+        <div className="adp-card-result">
+          {empty
+            ? <span className="adp-card-detail" style={{fontStyle:'italic'}}>no signals</span>
+            : <span className="adp-card-detail">{value}</span>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Debug overlay ─────────────────────────────────────────────────────
+// [REQ-FIS-DB6] Expanded overlay now shows Pre-Analysis (Step 0.5),
+// Signal (Step 1), and Router (Step 2) cards above the adapter cards.
+// Mode badge shows live mode from trace._mode (COMFORT / GUIDANCE / CRISIS).
+// Adapter steps renumbered to reflect the new pipeline execution order:
+//   ADP-A (empathy) → Step 3
+//   ADP-B (safety)  → Step 4
+//   ADP-C (eval)    → Step 5
 function AgentDebugOverlay({ open, onClose }) {
   useTraceLog();
   const [selectedId, setSelectedId] = ad_useState(null);
@@ -174,9 +247,13 @@ function AgentDebugOverlay({ open, onClose }) {
             </div>
 
             <div className="debug-meta">
-              <span className={`debug-mode mode-${current.is_crisis ? 'CRISIS' : 'COMFORT'}`}>
-                {current.is_crisis ? 'CRISIS' : 'COMFORT'}
-              </span>
+              {/* Mode badge driven by live trace._mode — handles COMFORT / GUIDANCE / CRISIS */}
+              {(() => {
+                const mode = current._mode || (current.is_crisis ? 'CRISIS' : 'COMFORT');
+                return (
+                  <span className={`debug-mode mode-${mode}`}>{mode}</span>
+                );
+              })()}
               {current.liveData
                 ? <span className="debug-meta-pill live">● live data</span>
                 : <span className="debug-meta-pill sim">simulated</span>}
@@ -185,17 +262,78 @@ function AgentDebugOverlay({ open, onClose }) {
             </div>
 
             <div className="adp-cards">
-              <AdapterCard step="1" name="ADP-B" role="Gemma-2-2b-it · Safety / crisis"
-                verdict={current.adp_b?.verdict}
-                detail={current.adp_b?.flags?.length ? `flags: ${current.adp_b.flags.join(', ')}` : 'no flags'}
-                running={false}
+              {/* ── Pre-Analysis (Step 0.5) ─────────────────────────────
+                  Qwen3-4B structural pre-analysis (SPEC-100 §16 / REQ-700-SA1).
+                  Detects paralinguistic and structural signals before the adapter
+                  stack runs. Shown even when empty to make the pipeline visible. */}
+              <AnalysisCard
+                step="0.5"
+                name="Pre-Analysis"
+                role="Qwen3-4B · Structural signals (SPEC-100 §16)"
+                value={current.pre_analysis?.annotations || ''}
+                empty={!current.pre_analysis?.annotations}
               />
-              <AdapterCard step="2" name="ADP-A" role="Qwen3-4B · Empathy response"
+
+              {/* ── Signal (Step 1) ─────────────────────────────────────
+                  Combined rule-engine + LLM signal output.
+                  Shows distress level and confidence from the signal object. */}
+              <AnalysisCard
+                step="1"
+                name="Signal"
+                role="Qwen3-4B · Distress / affect signal"
+                value={(() => {
+                  const s = current.signal;
+                  if (!s) return 'no signal data';
+                  const level = s.distress_level || 'UNKNOWN';
+                  const conf  = s.confidence != null ? ` · conf ${(s.confidence * 100).toFixed(0)}%` : '';
+                  const tone  = s.uncertainty_notes ? ` · ${s.uncertainty_notes.slice(0, 60)}` : '';
+                  return `${level}${conf}${tone}`;
+                })()}
+                empty={!current.signal}
+              />
+
+              {/* ── Router (Step 2) ─────────────────────────────────────
+                  Deterministic routing decision (COMFORT / GUIDANCE / CRISIS).
+                  crisis_override=true means ADP-B forced the CRISIS path. */}
+              <AnalysisCard
+                step="2"
+                name="Router"
+                role="Rule-engine · Mode decision"
+                value={(() => {
+                  const r = current.router;
+                  if (!r) return 'no router data';
+                  const mode   = r.mode || 'COMFORT';
+                  const conf   = r.confidence != null ? ` · conf ${(r.confidence * 100).toFixed(0)}%` : '';
+                  const crisis = r.crisis_override ? ' · crisis override' : '';
+                  return `${mode}${conf}${crisis}`;
+                })()}
+                empty={!current.router}
+              />
+
+              {/* ── ADP-A (Step 3) ───────────────────────────────────────
+                  Qwen3-4B empathy response draft. Runs BEFORE ADP-B in the
+                  reordered pipeline (Director-approved 2026-05-22). Draft is
+                  discarded if ADP-B fires crisis=True. */}
+              <AdapterCard step="3" name="ADP-A" role="Qwen3-4B · Empathy response"
                 verdict={current.is_crisis ? 'BYPASSED' : 'GENERATED'}
                 detail={current.adp_a?.chars ? `${current.adp_a.chars} chars` : null}
                 running={false}
               />
-              <AdapterCard step="3" name="ADP-C" role="Gemma-2-2b-it · Quality evaluator"
+
+              {/* ── ADP-B (Step 4) ───────────────────────────────────────
+                  Gemma-2-2b-it safety classifier. Now runs AFTER ADP-A.
+                  Receives pre-analysis annotations injected into its system prompt.
+                  crisis=True discards the ADP-A draft and returns crisis resources. */}
+              <AdapterCard step="4" name="ADP-B" role="Gemma-2-2b-it · Safety / crisis"
+                verdict={current.adp_b?.verdict}
+                detail={current.adp_b?.flags?.length ? `flags: ${current.adp_b.flags.join(', ')}` : 'no flags'}
+                running={false}
+              />
+
+              {/* ── ADP-C (Step 5) ───────────────────────────────────────
+                  Gemma-2-2b-it quality evaluator. APPROVE / REGENERATE verdict.
+                  REGENERATE triggers a second ADP-A pass (regen=True). */}
+              <AdapterCard step="5" name="ADP-C" role="Gemma-2-2b-it · Quality evaluator"
                 verdict={current.adp_c?.verdict}
                 detail={current.adp_c?.regen ? 'regen pass triggered' : null}
                 running={false}
@@ -205,8 +343,11 @@ function AgentDebugOverlay({ open, onClose }) {
             <details className="debug-raw">
               <summary className="debug-raw-toggle">Raw pipeline payload</summary>
               <pre className="debug-detail-json">{JSON.stringify({
-                is_crisis: current.is_crisis, flags: current.flags,
+                mode: current._mode, is_crisis: current.is_crisis, flags: current.flags,
                 verdict: current.verdict, regen: current.regen, elapsed: current.elapsed,
+                pre_analysis: current.pre_analysis,
+                signal: current.signal,
+                router: current.router,
                 adp_b: current.adp_b, adp_a: current.adp_a, adp_c: current.adp_c,
               }, null, 2)}</pre>
             </details>

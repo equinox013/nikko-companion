@@ -166,8 +166,36 @@ function SafetyBanner({ onDismiss }) {
   );
 }
 
+// ── Character limit helper ────────────────────────────────────────
+// Derives the composer character limit from loaded memory content.
+// Default: 1000. Extended to 1500 if memory signals the user tends to
+// write at length (e.g. "I tend to ramble", "I'm quite verbose").
+//
+// WHY HERE not in Composer: the limit is derived from memContentRef,
+// which lives in Chat. Composer is a stateless child — it just receives
+// maxLength as a prop and enforces it. This keeps signal derivation
+// close to the data it reads.
+const CHAR_LIMIT_DEFAULT  = 1000;
+const CHAR_LIMIT_EXTENDED = 1500;
+
+// Keywords in memory that indicate the user writes at length.
+// Lowercase match against the full memory text.
+const _VERBOSE_SIGNALS = [
+  'ramble', 'rambles', 'tend to write', 'write a lot', 'write quite a lot',
+  'verbose', 'verbosity', 'lengthy', 'long messages', 'long message',
+  'write long', 'quite a lot to say',
+];
+
+function deriveCharLimit(memContent) {
+  if (!memContent) return CHAR_LIMIT_DEFAULT;
+  const lower = memContent.toLowerCase();
+  const isVerbose = _VERBOSE_SIGNALS.some(sig => lower.includes(sig));
+  return isVerbose ? CHAR_LIMIT_EXTENDED : CHAR_LIMIT_DEFAULT;
+}
+
 // ── Composer ──────────────────────────────────────────────────────
-function Composer({ onSend, disabled }) {
+function Composer({ onSend, disabled, maxLength }) {
+  const limit = maxLength || CHAR_LIMIT_DEFAULT;
   const [val, setVal] = useState('');
   const ref = useRef(null);
   const autosize = useCallback(() => {
@@ -178,9 +206,19 @@ function Composer({ onSend, disabled }) {
   useEffect(() => { autosize(); }, [val, autosize]);
   const submit = () => {
     const t = val.trim();
-    if (!t || disabled) return;
+    if (!t || disabled || val.length > limit) return;
     onSend(t); setVal('');
   };
+
+  // Counter state: hidden below 60% of limit, warning from 80%, over at 100%.
+  const remaining = limit - val.length;
+  const showCounter = val.length >= limit * 0.6;
+  const counterClass = val.length > limit
+    ? 'composer-count over'
+    : val.length >= limit * 0.8
+      ? 'composer-count warn'
+      : 'composer-count';
+
   return (
     <div>
       <div
@@ -196,13 +234,18 @@ function Composer({ onSend, disabled }) {
         <textarea
           ref={ref}
           value={val}
-          onChange={(e) => setVal(e.target.value)}
+          onChange={(e) => {
+            // Allow typing past limit so the user can see the overage in red
+            // and edit back — hard-blocking input mid-sentence is disorienting.
+            // Send is disabled while over limit.
+            setVal(e.target.value);
+          }}
           onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); } }}
           placeholder="Take your time…"
           rows={1}
           aria-label="Message Nikko"
         />
-        <button className="send" onClick={submit} disabled={!val.trim() || disabled} aria-label="Send message">
+        <button className="send" onClick={submit} disabled={!val.trim() || disabled || val.length > limit} aria-label="Send message">
           <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
             <path d="M2 7h10" /><path d="m8 3 4 4-4 4" />
           </svg>
@@ -210,7 +253,14 @@ function Composer({ onSend, disabled }) {
       </div>
       <div className="composer-foot">
         <span><span className="kbd">Enter</span> to send · <span className="kbd">Shift</span>+<span className="kbd">Enter</span> for newline · type <span className="kbd">/help</span> for the tutorial</span>
-        <span>Cleared on refresh</span>
+        <span className="composer-foot-right">
+          {showCounter && (
+            <span className={counterClass} aria-live="polite" aria-label={`${remaining} characters remaining`}>
+              {remaining < 0 ? `${Math.abs(remaining)} over` : remaining}
+            </span>
+          )}
+          <span>Cleared on refresh</span>
+        </span>
       </div>
     </div>
   );
@@ -379,6 +429,87 @@ const AFFIRMATIONS = [
   'You deserve a thoughtful reply.',
 ];
 
+// ── MoodCheckInPopup ──────────────────────────────────────────────────────────
+// [REQ-FIS-MC1 through MC8] Inline mood check-in card rendered in the chat
+// thread after the welcome-back message when a memory file is loaded.
+//
+// Triggered once per session when an existing encrypted file is loaded
+// (sessionKey present). Skipped for newly generated files (isNew=true path).
+//
+// On Log:
+//   - Updates moodEntries state (in-memory diary, session-scoped per SPEC-800)
+//   - Queues a pendingEntries write-back for the user to save to disk
+// On Skip: dismisses without writing anything.
+//
+// [REQ-FIS-MC4] Emotion chips are advisory — multi-select, never required.
+// [REQ-FIS-MC5] Rating is 1–10 inclusive.
+// [REQ-FIS-MC7] The popup renders without requiring user login or data upload.
+// [REQ-FIS-MC8] State guard (moodCheckInShownRef) prevents re-triggering.
+
+const CHECKIN_EMOTIONS = ['calm','content','anxious','low','overwhelmed','sad','numb','hopeful','irritable','tired'];
+
+function MoodCheckInPopup({ onLog, onSkip }) {
+  const [rating, setRating] = React.useState(null);
+  const [selected, setSelected] = React.useState([]);
+
+  const toggleEmotion = (e) => {
+    setSelected(prev => prev.includes(e) ? prev.filter(x => x !== e) : [...prev, e]);
+  };
+
+  const handleLog = () => {
+    if (!rating) return;   // rating required — button is disabled below when null
+    onLog({ rating, emotions: selected });
+  };
+
+  return (
+    <div className="mood-checkin-popup" role="form" aria-label="Quick mood check-in">
+      <div className="mood-checkin-header">
+        <span className="mood-checkin-title">Quick check-in</span>
+        <span className="mood-checkin-sub">How are you feeling right now?</span>
+      </div>
+
+      {/* 1–10 numeric rating */}
+      <div className="mood-checkin-rating" aria-label="Mood rating 1 to 10">
+        {[1,2,3,4,5,6,7,8,9,10].map(n => (
+          <button
+            key={n}
+            className={'mood-checkin-num' + (rating === n ? ' active' : '')}
+            onClick={() => setRating(n)}
+            aria-pressed={rating === n}
+            aria-label={`${n} out of 10`}
+          >{n}</button>
+        ))}
+      </div>
+      <div className="mood-checkin-scale-hint">
+        <span>1 = very low</span><span>10 = great</span>
+      </div>
+
+      {/* Emotion chips — multi-select, optional */}
+      <div className="mood-checkin-chips" aria-label="Emotion chips, optional">
+        {CHECKIN_EMOTIONS.map(e => (
+          <button
+            key={e}
+            className={'mood-chip' + (selected.includes(e) ? ' active' : '')}
+            onClick={() => toggleEmotion(e)}
+            aria-pressed={selected.includes(e)}
+          >{e}</button>
+        ))}
+      </div>
+
+      {/* Actions */}
+      <div className="mood-checkin-actions">
+        <button className="mood-checkin-skip" onClick={onSkip}>Skip</button>
+        <button
+          className="mood-checkin-log"
+          onClick={handleLog}
+          disabled={!rating}
+          aria-disabled={!rating}
+        >Log mood</button>
+      </div>
+    </div>
+  );
+}
+
 function ThinkingBubble({ coldStart = false }) {
   const [elapsed, setElapsed] = React.useState(0);
   const [affIdx, setAffIdx]   = React.useState(0);
@@ -539,6 +670,13 @@ function Chat({ theme, onToggleTheme }) {
   const [memBanner, setMemBanner] = useState(null);   // null | 'loaded' | 'hint'
   const memBannerAutoRef = useRef(null);               // auto-dismiss timer for 'loaded'
   const hintShownRef = useRef(false);                  // true once hint has been shown
+  // [REQ-FIS-MC8] Mood check-in popup: shown once per session after a non-new
+  // memory file load (encrypted file loaded → sessionKey present). The ref gates
+  // the trigger so it fires at most once even if onMemoryLoaded is called twice.
+  const moodCheckInShownRef = useRef(false);
+  // { wbId: string } when active — wbId is the welcome-back message id to render
+  // the popup after. null when dismissed or not yet triggered.
+  const [moodCheckIn, setMoodCheckIn] = useState(null);
 
   // Close memory popover on outside click
   useEffect(() => {
@@ -608,14 +746,25 @@ function Chat({ theme, onToggleTheme }) {
       chatText = `${greeting} Your memory file is loaded — I'll keep what's there in mind, but the live conversation is what I'll really listen to. You're in charge of what stays.`;
     }
 
+    const wbId = 'wb-' + Date.now();
     setMessages(prev => [...prev, {
-      id: 'wb-' + Date.now(),
+      id: wbId,
       role: 'assistant',
       emotion: 'care',
       streaming: false,
       text: chatText,
     }]);
     setTimeout(scrollToBottom, 30);
+
+    // [REQ-FIS-MC1] Mood check-in: trigger once per session when the user loads
+    // an existing encrypted file (sessionKey present means it came from disk, not
+    // a freshly generated one). isNew=true suppresses it on first-time file creation.
+    // moodCheckInShownRef prevents re-triggering if the user loads a second file.
+    if (!isNew && sessionKey && !moodCheckInShownRef.current) {
+      moodCheckInShownRef.current = true;
+      // Defer slightly so the wb message renders before the popup appears.
+      setTimeout(() => setMoodCheckIn({ wbId }), 200);
+    }
 
     // Show the memory-loaded banner for 7s, then auto-dismiss.
     // Cancel any prior auto-dismiss timer (e.g. if user loads a second file).
@@ -771,6 +920,32 @@ function Chat({ theme, onToggleTheme }) {
     setTechniqueCheckIn(null);
   }, [techniqueCheckIn]);
 
+  // [REQ-FIS-MC2] Handle mood check-in Log action.
+  // Writes the rating + emotions to in-memory moodEntries state and queues
+  // a diary write-back in pendingEntries so the user can save it to their file.
+  // The diary entry format matches the round-trip contract in CLAUDE.md §5a.
+  const onMoodCheckInLog = useCallback(({ rating, emotions }) => {
+    const today = new Date().toISOString().split('T')[0];
+    const entry = { mood: rating, emotions, triggers: '' };
+
+    // Update in-memory diary state (session-scoped, cleared on refresh per SPEC-800).
+    setMoodEntry(today, entry);
+
+    // Queue a write-back pending entry so the user can save it to the encrypted file.
+    // Section '## Mood Diary' matches the parseDiaryEntries() / formatDiaryEntry() contract.
+    // formatDiaryEntry is exported to window from panels.jsx.
+    const formatted = (typeof formatDiaryEntry === 'function')
+      ? formatDiaryEntry(today, entry)
+      : `${today} | mood: ${rating} | emotions: ${emotions.join(', ')} | triggers: `;
+    setPendingEntries(prev => [...prev, {
+      section: '## Mood Diary',
+      entry:   formatted,
+      ts:      Date.now(),
+    }]);
+
+    setMoodCheckIn(null);
+  }, [setMoodEntry]);
+
   // Warn on tab close when there are unsaved pending entries (REQ-850-093).
   // The browser shows a generic "Leave site?" dialog — we can't customise the text.
   useEffect(() => {
@@ -792,6 +967,11 @@ function Chat({ theme, onToggleTheme }) {
     setMessages(prev => [...prev, { id, role: 'assistant', text: '', emotion: 'listen', streaming: true, traceId: id, sources: [] }]);
     scrollToBottom();
     setCurrentEmotion('think');
+    // [REQ-FIS-RB4] Add a placeholder trace entry immediately so AgentRibbon can
+    // show live stage labels during the pipeline run. Populated by SSE stage updates;
+    // replaced with real trace data on pipeline completion. _processing=true signals
+    // the ribbon to render the stage label rather than the completion mode label.
+    NikkoAgentLog.add({ id, userText, _processing: true, _stage: 'understanding your message' });
 
     // Start the cold-start detection timer. If no message_start SSE event
     // arrives within 12 seconds, the backend (Render) or HF Space is still
@@ -879,6 +1059,10 @@ function Chat({ theme, onToggleTheme }) {
               // Safety flag check — show banner if crisis detected.
               if (data.safetyFlags && data.safetyFlags.includes('crisis_detected')) setSafetyVisible(true);
 
+              // [REQ-FIS-RB4] Update ribbon stage label from keep-alive SSE chunks.
+              // Both text and non-text chunks may carry a stage field.
+              if (data.stage) NikkoAgentLog.update(id, { _stage: data.stage });
+
               if (data.text) {
                 const emotion = data.emotion || 'speak';
                 setCurrentEmotion(emotion);
@@ -896,10 +1080,12 @@ function Chat({ theme, onToggleTheme }) {
                   await sleep(14 + Math.random() * 10);
                 }
                 accText = target;
-                // If this chunk carries real pipeline trace data, push it to the
-                // agent debug panel so the user can inspect adapter results.
+                // If this chunk carries real pipeline trace data, update the trace
+                // entry (already created as a placeholder above) with the full results.
+                // update() merges patch into the existing entry — _processing → false
+                // signals the ribbon to switch from stage label to mode label.
                 if (data.trace) {
-                  NikkoAgentLog.add({ id, userText, ...data.trace, liveData: true });
+                  NikkoAgentLog.update(id, { ...data.trace, liveData: true, _processing: false });
                 }
                 // Store retrieved evidence sources on the message for the badge.
                 // data.sources is populated only when the pipeline ran in GUIDANCE
@@ -959,7 +1145,9 @@ function Chat({ theme, onToggleTheme }) {
       const pattern = matchNikkoPattern(userText);
       if (pattern.safety) setSafetyVisible(true);
       const trace = buildAgentTrace(id, userText, pattern);
-      NikkoAgentLog.add(trace);
+      // update() instead of add() because the placeholder was added at message-create
+      // time (above). Merging into the existing entry preserves the id→message binding.
+      NikkoAgentLog.update(id, { ...trace, _processing: false });
       // Update initial message emotion to match fallback pattern.
       setMessages(prev => prev.map(m =>
         m.id === id ? { ...m, emotion: pattern.chunks[0].emotion } : m
@@ -1008,14 +1196,13 @@ function Chat({ theme, onToggleTheme }) {
   const liveEmotion = streaming ? currentEmotion : 'calm';
   const showSuggestions = messages.length === 1 && !streaming;
 
-  // Only show AgentRibbon on the most recent completed assistant message.
-  // Showing it on every message is repetitive — the ribbon's purpose is to
-  // confirm the current response ran through the adapter stack, not to
-  // annotate the entire conversation history.
-  const lastCompletedAssistantId = React.useMemo(() => {
+  // The most recent assistant message with a traceId — shows AgentRibbon on
+  // BOTH streaming (processing) and completed messages. During streaming the
+  // ribbon shows the live pipeline stage; after completion it shows the mode label.
+  const lastAssistantId = React.useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i--) {
       const m = messages[i];
-      if (m.role === 'assistant' && !m.streaming && m.traceId) return m.id;
+      if (m.role === 'assistant' && m.traceId) return m.id;
     }
     return null;
   }, [messages]);
@@ -1232,7 +1419,8 @@ function Chat({ theme, onToggleTheme }) {
                   );
                 }
                 return (
-                  <div className="msg assistant" key={m.id}>
+                  <React.Fragment key={m.id}>
+                  <div className="msg assistant">
                     <div className="avatar-slot">
                       <NikkoAvatar emotion={m.emotion || 'calm'} size={42} />
                     </div>
@@ -1274,8 +1462,24 @@ function Chat({ theme, onToggleTheme }) {
                           ))}
                         </div>
                       )}
+                      {/* AgentRibbon — shows live pipeline stage (processing) or
+                          mode label (completed). Only on the most recent assistant
+                          message with a traceId. [REQ-FIS-RB4] */}
+                      {m.traceId && m.id === lastAssistantId && (
+                        <AgentRibbon traceId={m.traceId} />
+                      )}
                     </div>
                   </div>
+                  {/* [REQ-FIS-MC1] Mood check-in popup — inline in thread after
+                      welcome-back message when an existing encrypted file is loaded.
+                      Dismissed via Log (writes diary entry) or Skip (no-op). */}
+                  {moodCheckIn && m.id === moodCheckIn.wbId && (
+                    <MoodCheckInPopup
+                      onLog={onMoodCheckInLog}
+                      onSkip={() => setMoodCheckIn(null)}
+                    />
+                  )}
+                  </React.Fragment>
                 );
               })}
             </div>
@@ -1321,7 +1525,9 @@ function Chat({ theme, onToggleTheme }) {
                 />
               )}
               {safetyVisible && <SafetyBanner onDismiss={() => setSafetyVisible(false)} />}
-              <Composer onSend={onSend} disabled={streaming} />
+              {/* maxLength is derived from memContentRef — extended to 1500 if
+                  memory signals the user tends to write at length, otherwise 1000. */}
+              <Composer onSend={onSend} disabled={streaming} maxLength={deriveCharLimit(memContentRef.current)} />
               {/* G-UI-01: persistent AI disclaimer — always visible per REQ-300-164 */}
               <AiDisclaimer />
             </div>

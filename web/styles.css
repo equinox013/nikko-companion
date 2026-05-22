@@ -1098,6 +1098,30 @@ body::before {
   text-transform: uppercase;
   padding: 0 4px;
 }
+/* Right-side slot in composer footer — groups the counter + "Cleared on refresh" */
+.composer-foot-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Character counter — hidden below 60% of limit (controlled via React).
+   Transitions smoothly between states so the colour shift isn't jarring. */
+.composer-count {
+  font-variant-numeric: tabular-nums;
+  color: var(--faint);
+  transition: color 0.2s ease;
+}
+/* 80%–100% of limit — amber warning */
+.composer-count.warn {
+  color: var(--accent);
+}
+/* Over limit — red, slightly bold so it reads as an error */
+.composer-count.over {
+  color: #e05252;
+  font-weight: 600;
+}
+
 .composer-foot .kbd {
   display: inline-flex;
   height: 16px;
@@ -2088,6 +2112,141 @@ body::before {
   font-weight: 500;
 }
 .agent-ribbon-sep { color: var(--faint); margin-right: 2px; }
+
+/* AgentRibbon processing state: live stage label in secondary typography */
+.agent-ribbon.processing .agent-ribbon-stage {
+  font-weight: 400;
+  color: var(--ink-2);
+  font-style: italic;
+  text-transform: none;
+  letter-spacing: 0.02em;
+}
+/* Completed: mode label */
+.agent-ribbon-count {
+  text-transform: lowercase;
+  letter-spacing: 0.04em;
+  color: var(--ink-2);
+  font-weight: 500;
+}
+
+/* ── Mood check-in popup ────────────────────────────────────────────────── */
+/* [REQ-FIS-MC1–MC8] Inline card shown in the chat thread after welcome-back
+   message on encrypted memory file load. Appears as a distinct card so the
+   user sees it as an action item, not just more assistant text. */
+.mood-checkin-popup {
+  background: var(--surface-2, var(--surface));
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 18px 20px 16px;
+  margin: 8px 0 8px 54px;  /* indent to align with message bubbles */
+  max-width: 440px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.mood-checkin-header {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.mood-checkin-title {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.mood-checkin-sub {
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+/* 1–10 rating row */
+.mood-checkin-rating {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+.mood-checkin-num {
+  width: 34px; height: 34px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--ink-2);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+  display: flex; align-items: center; justify-content: center;
+}
+.mood-checkin-num:hover { border-color: var(--accent); color: var(--accent); }
+.mood-checkin-num.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+.mood-checkin-scale-hint {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10.5px;
+  color: var(--faint);
+  margin-top: -8px;
+}
+/* Emotion chips */
+.mood-checkin-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+.mood-chip {
+  padding: 5px 12px;
+  border-radius: 99px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--ink-2);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.mood-chip:hover { border-color: var(--accent); color: var(--accent); }
+.mood-chip.active {
+  background: var(--accent-muted, rgba(206,132,76,0.15));
+  color: var(--accent);
+  border-color: var(--accent);
+  font-weight: 500;
+}
+/* Skip / Log buttons */
+.mood-checkin-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+.mood-checkin-skip {
+  background: none;
+  border: none;
+  color: var(--ink-2);
+  font-size: 12.5px;
+  cursor: pointer;
+  padding: 6px 10px;
+  border-radius: 8px;
+}
+.mood-checkin-skip:hover { background: var(--hover-bg, rgba(0,0,0,0.06)); }
+.mood-checkin-log {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 6px 18px;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.12s;
+}
+.mood-checkin-log:disabled { opacity: 0.38; cursor: default; }
+.mood-checkin-log:not(:disabled):hover { opacity: 0.88; }
+
+/* Mobile: full width on narrow viewports */
+@media (max-width: 600px) {
+  .mood-checkin-popup { margin-left: 0; max-width: 100%; }
+  .mood-checkin-num { width: 30px; height: 30px; font-size: 12px; }
+}
 
 /* ── Debug trigger (top-left sun) ── */
 .debug-trigger {
