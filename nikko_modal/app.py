@@ -114,16 +114,12 @@ ANALYSIS_GEN_PARAMS = {
     # compact JSON object; longer output budgets are wasted here.
     "moderation_scope": dict(max_new_tokens=128, temperature=0.1,  do_sample=False),
     # [REQ-700-SA1] Step 1.5 structural pre-analysis pass.
-    # Qwen3-4B with thinking enabled (enable_thinking=True at template time).
-    # Token budget raised 256 → 512 (Director-approved 2026-05-23): with thinking
-    # mode active, the <think> scratchpad alone can consume 200–250 tokens before
-    # the model starts the JSON output. At 256, the generation gets truncated
-    # mid-think, _parse_json receives an incomplete response, and annotations
-    # silently default to "" — making pre_analysis appear to fire with no signals
-    # even on messages with obvious cues (all-lowercase, multiple ellipsis clusters).
-    # 512 gives the scratchpad room without materially impacting latency (~1–2s
-    # extra on a warm A10G — well within the 5s structural pre_analysis budget).
-    "structural_pre_analysis": dict(max_new_tokens=512, temperature=0.15, do_sample=False),
+    # enable_thinking=False (Director-approved 2026-05-23): CoT thinking mode was
+    # causing Qwen3-4B to hedge on obvious signals and return empty annotations.
+    # Direct pattern-matching with thinking disabled is faster and more accurate
+    # for this task. Token budget stays at 256 — no <think> scratchpad overhead,
+    # and a full annotation set (all 14 tags) is well under 100 tokens.
+    "structural_pre_analysis": dict(max_new_tokens=256, temperature=0.15, do_sample=False),
     # Legacy scope-only pass (was Pass 0a for AMBIGUOUS cases). Retained for
     # reference; its logic is now absorbed into the moderation_scope pass above.
     "scope":    dict(max_new_tokens=64,  temperature=0.1,  do_sample=False),
@@ -877,8 +873,17 @@ class NikkoInference:
         Step 1.5: Qwen3-4B structural pre-analysis pass (REQ-700-SA1 through SA7).
 
         Runs AFTER Pass 0 (moderation + scope) and BEFORE ADP-A.
-        Uses Qwen3-4B with enable_thinking=True so the model can reason about
-        the message's paralinguistic and structural signals before annotating.
+
+        enable_thinking is now FALSE (Director-approved 2026-05-23, changed from True):
+        Pre-analysis is a direct pattern-matching task — the signals are either
+        present in the text or they are not. CoT thinking mode was actively hurting
+        performance: Qwen3-4B reasoned itself out of firing obvious signals
+        (all_lowercase, ellipsis_trail) by hedging — "this might just be casual style"
+        — and returned empty annotations consistently. Disabling thinking forces
+        direct pattern-to-tag mapping, which is the correct approach for a
+        deterministic signal-detection task. Token budget reduced back to 256 —
+        the <think> scratchpad no longer needs headroom, and JSON output for a
+        full annotation set is well under 100 tokens.
 
         Returns a dict:
             {"annotations": "[PARA: tone_softener] [STRUCT: fragmented_syntax]"}
@@ -900,7 +905,7 @@ class NikkoInference:
                 user_content=f'User message to analyse: "{user_text}"',
                 system=_PRE_ANALYSIS_SYSTEM,
                 gen_params=ANALYSIS_GEN_PARAMS["structural_pre_analysis"],
-                enable_thinking=True,
+                enable_thinking=False,  # Direct pattern-match task — CoT hurts. See docstring.
             )
             result      = self._parse_json(raw)
             annotations = str(result.get("annotations", "")).strip()
