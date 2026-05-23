@@ -146,6 +146,7 @@ class Router:
         self,
         signal:        SignalPayload,
         attempt_count: int = 1,
+        force_guidance: bool = False,
     ) -> RouterDecision:
         """
         Assign exactly one operational mode for this turn.
@@ -181,7 +182,8 @@ class Router:
         distress_is_crisis   = signal.distress_level == DistressLevel.CRISIS
 
         # --- Rule 1: CRISIS — active/acute risk (REQ-200-124/125, REQ-100-060) ---
-        # This check MUST run first. No other condition can override it.
+        # This check MUST run first. No other condition can override it — including
+        # the force_guidance flag from a \guide command. Safety is non-negotiable.
         # "Any active or acute risk indicator MUST trigger crisis flow."
         if has_active_or_acute:
             return self._make_decision(
@@ -212,6 +214,28 @@ class Router:
                 attempt_count=attempt_count,
             )
 
+        # --- Rule 2.5: GUIDANCE — explicit user intent via \guide command (REQ-200-163) ---
+        # [REQ-200-163] When the user prefixes their message with \guide (or /guide),
+        # the pipeline sets force_guidance=True as a high-confidence explicit intent
+        # signal. The Router MUST honour it by assigning GUIDANCE, subject to:
+        #   - Rules 1 and 2 (CRISIS) always take priority — non-negotiable.
+        #   - The low-confidence fallback (Rule 3) is bypassed: the user's explicit
+        #     intent is a more reliable signal than the keyword engine's confidence.
+        # Spec trace: SPEC-200 §6 Rule 2.5 (Director-approved 2026-05-23).
+        # GAPS.md: G-GUIDE-01 documents the SPEC-200 amendment.
+        if force_guidance:
+            return self._make_decision(
+                mode=OperationalMode.GUIDANCE,
+                rationale=(
+                    "GUIDANCE: user explicitly requested guidance mode via \\guide command. "
+                    "force_guidance=True overrides confidence fallback. "
+                    "(REQ-200-163, SPEC-200 §6 Rule 2.5)"
+                ),
+                signal=signal,
+                passive_risk_flag=has_passive,
+                attempt_count=attempt_count,
+            )
+
         # --- Rule 3: COMFORT fallback — low signal confidence (REQ-000-F01) ---
         # If the Signal Agent is uncertain, we cannot safely assign GUIDANCE.
         # COMFORT is the conservative default: validation-only, no evidence injection.
@@ -233,19 +257,65 @@ class Router:
         # --- Rule 4: GUIDANCE — user shows readiness for information ---
         # GUIDANCE is appropriate when the user's expressed support needs or
         # behavioural indicators signal that they want information, not just
-        # validation. Crisis flow is ruled out by Rules 1-2 above, so we know
-        # no active/acute risk is present at this point.
-        if self._guidance_intent_present(signal):
+        # validation. Crisis flow is ruled out by Rules 1-2 above.
+        #
+        # Confidence-and-distress gating (Issues 1 + 2, Director-approved 2026-05-23):
+        #
+        # STRONG intent (BOTH support_needs AND behavioral_indicators fire):
+        #   → GUIDANCE at any confidence, any distress level.
+        #   Rationale: two independent signal types converging on guidance intent
+        #   is high-fidelity evidence the user wants information, not just support.
+        #
+        # WEAK intent (EITHER fires, but not both):
+        #   → GUIDANCE only if distress < HIGH AND confidence ≥ 0.60.
+        #   Rationale: a single ambiguous signal ("I don't know how to cope" looks
+        #   like help_seeking but is often venting) should NOT override COMFORT when
+        #   the user is in high distress OR when the signal engine is uncertain.
+        #   High distress + single intent signal = emotional need dominates → COMFORT.
+        #   Low confidence + single intent signal = unreliable → COMFORT.
+        #
+        # NONE: fall through to Rule 5 (COMFORT default).
+        intent_strength = self._guidance_intent_strength(signal)
+        band = get_confidence_band(signal.confidence)
+
+        if intent_strength == "strong":
             return self._make_decision(
                 mode=OperationalMode.GUIDANCE,
                 rationale=(
-                    f"GUIDANCE: guidance-oriented support need or behavioural indicator "
-                    f"detected. Distress={signal.distress_level.value}, "
+                    f"GUIDANCE: strong guidance intent — both support_needs and "
+                    f"behavioral_indicators match. Distress={signal.distress_level.value}, "
                     f"confidence={signal.confidence:.2f}. Evidence retrieval active."
                 ),
                 signal=signal,
                 passive_risk_flag=has_passive,
                 attempt_count=attempt_count,
+            )
+
+        if intent_strength == "weak":
+            distress_permits = signal.distress_level != DistressLevel.HIGH
+            confidence_permits = signal.confidence >= 0.60
+            if distress_permits and confidence_permits:
+                return self._make_decision(
+                    mode=OperationalMode.GUIDANCE,
+                    rationale=(
+                        f"GUIDANCE: weak guidance intent — single signal match, but "
+                        f"distress={signal.distress_level.value} (< HIGH) and "
+                        f"confidence={signal.confidence:.2f} (≥ 0.60) permit routing. "
+                        f"Evidence retrieval active."
+                    ),
+                    signal=signal,
+                    passive_risk_flag=has_passive,
+                    attempt_count=attempt_count,
+                )
+            # Weak intent blocked — log the specific reason for auditability.
+            _blocked_reason = []
+            if not distress_permits:
+                _blocked_reason.append(f"distress={signal.distress_level.value} (HIGH suppresses weak intent)")
+            if not confidence_permits:
+                _blocked_reason.append(f"confidence={signal.confidence:.2f} (< 0.60 threshold)")
+            logger.info(
+                "Router: weak guidance intent blocked → COMFORT. Reasons: %s",
+                "; ".join(_blocked_reason),
             )
 
         # --- Rule 5: COMFORT — safe default ---
@@ -292,19 +362,25 @@ class Router:
         return any(k.startswith(_PASSIVE_PREFIX) for k in risk_indicators)
 
     @staticmethod
-    def _guidance_intent_present(signal: SignalPayload) -> bool:
+    def _guidance_intent_strength(signal: SignalPayload) -> str:
         """
-        Return True if the signal indicates the user wants information or
-        structured guidance rather than pure emotional validation.
+        Return the strength of guidance intent in the signal: "strong", "weak", or "none".
 
-        Two positive signals:
-        1. A guidance-oriented support need (psychoeducation, normalization,
-           reflective exploration, or encouragement toward external support).
-        2. A behavioural indicator of help-seeking or self-reflection capacity.
+        STRONG — BOTH a guidance support need AND a guidance behavioral indicator
+                 are present. Two independent signal types converging is high-fidelity
+                 evidence the user wants information. Routes to GUIDANCE at any
+                 confidence or distress level.
 
-        Either alone is sufficient to assign GUIDANCE MODE. The evidence
-        retrieval chain is only activated in this mode — so this rule is the
-        gate for all evidence injection.
+        WEAK   — EITHER a guidance support need OR a guidance behavioral indicator
+                 is present, but not both. Ambiguous — "I don't know how to cope"
+                 looks like help_seeking but is often pure venting. Routes to GUIDANCE
+                 only when distress < HIGH AND confidence ≥ 0.60 (checked in Rule 4).
+
+        NONE   — Neither fires. Route falls through to COMFORT (Rule 5).
+
+        Replaces _guidance_intent_present() — which returned a bool and treated
+        strong and weak intent identically. The split is the core of the
+        confidence-aware guidance gate (Issues 1 + 2, Director-approved 2026-05-23).
         """
         support_match = bool(
             _GUIDANCE_SUPPORT_NEEDS & set(signal.support_needs)
@@ -312,7 +388,11 @@ class Router:
         behavioral_match = bool(
             _GUIDANCE_BEHAVIORAL_INDICATORS & set(signal.behavioral_indicators)
         )
-        return support_match or behavioral_match
+        if support_match and behavioral_match:
+            return "strong"
+        if support_match or behavioral_match:
+            return "weak"
+        return "none"
 
     @staticmethod
     def _make_decision(

@@ -133,13 +133,22 @@ def _c3_mode_distress_alignment(
 
     Hard rules:
       DistressLevel.CRISIS → OperationalMode MUST be CRISIS.
-      DistressLevel.HIGH → OperationalMode MUST be GUIDANCE or CRISIS.
-      DistressLevel.LOW     → any mode is valid.
-      DistressLevel.LOW     → CRISIS mode would be anomalous (flag, not hard fail).
+      DistressLevel.HIGH   → any mode is valid (COMFORT, GUIDANCE, or CRISIS).
+      DistressLevel.LOW    → any mode is valid.
+      DistressLevel.LOW    → CRISIS mode would be anomalous (flag, not hard fail).
 
-    Note: NONE → CRISIS is flagged as a failure because routing a non-distress
-    input into Crisis Mode bypasses evidence retrieval (REQ-200-124) and would
-    deliver crisis hotlines to a user who did not need them.
+    [PROPOSED-RECONCILIATION: 2026-05-23] The original HIGH→COMFORT block
+    ("ELEVATED distress MUST route to GUIDANCE or CRISIS") has been removed.
+    Rationale: HIGH distress + COMFORT is a valid and common routing outcome.
+    A user venting exhaustion or hopelessness ("just gotten off a shitty shift...
+    nothing ever gets better") is seeking emotional validation, not guidance or
+    resources. Forcing GUIDANCE on every HIGH-distress message is paternalistic
+    and produces jarring responses that miss what the user actually needs.
+    The Router has full context (guidance_intent, distress level, signal
+    confidence) and is the correct decision-maker for COMFORT vs GUIDANCE.
+    C3 now only enforces the single hard safety constraint: CRISIS distress
+    must route to CRISIS mode so hotlines are always delivered.
+    Logged in GAPS.md as G-VS-C3-01 for Director review.
     """
     mode = context.mode
     distress = context.signals.distress_level
@@ -149,11 +158,7 @@ def _c3_mode_distress_alignment(
             f"[C3/REQ-200-VS1] CRITICAL distress but mode='{mode.value}' — "
             "CRITICAL distress MUST route to CRISIS mode."
         )
-    if distress == DistressLevel.HIGH and mode == OperationalMode.COMFORT:
-        return (
-            f"[C3/REQ-200-VS1] ELEVATED distress but mode='{mode.value}' — "
-            "ELEVATED distress MUST route to GUIDANCE or CRISIS mode."
-        )
+    # HIGH distress in COMFORT or GUIDANCE is intentional — no check here.
     if distress == DistressLevel.LOW and mode == OperationalMode.CRISIS:
         return (
             f"[C3/REQ-200-VS1] NONE distress but mode='{mode.value}' — "
@@ -193,6 +198,16 @@ def _c5_evidence_pipeline(
     A missing synthesized_evidence in GUIDANCE mode indicates a skipped step.
 
     Suspended in Crisis Mode (REQ-700-VS1).
+
+    NOTE on the `is None` check (Director-confirmed 2026-05-23):
+    `_steps4_7_guidance_evidence()` in pipeline.py NEVER returns None. It always
+    returns a SynthesizedEvidence object — either populated with real retrieved
+    evidence or with empty lists and a "respond from general clinical knowledge"
+    instruction. The `is None` guard here is therefore a last-resort safety net
+    for future code changes that might accidentally assign None. It does not fire
+    in normal operation and is correct as written. Do not remove or widen it to
+    catch empty SynthesizedEvidence — empty evidence is a valid, intentional state.
+    (See Issue 3, Director-approved 2026-05-23.)
     """
     if (
         context.mode == OperationalMode.GUIDANCE

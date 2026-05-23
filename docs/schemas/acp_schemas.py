@@ -385,6 +385,21 @@ class ResponseContextPayload(BaseModel):
             "(G-HYBRID-01 resolution)"
         ),
     )
+    # [REQ-100-PR2] Passive risk sustained flag — True when ≥2 of the last 5
+    # user turns contained passive risk signals AND current distress is not LOW.
+    # Resets to False when current distress is LOW (de-escalation reset).
+    # When True, context_prompt_builder injects a gentle professional-support
+    # nudge into the COMFORT mode instruction for ADP-A.
+    # Computed by NikkoPipeline.run() after step 3 routing. Never persisted.
+    passive_risk_sustained: bool = Field(
+        default=False,
+        description=(
+            "True when passive risk detected in ≥2 of last 5 user turns "
+            "and current distress is not LOW. Triggers gentle support nudge "
+            "in COMFORT mode. (REQ-100-PR2)"
+        ),
+    )
+
     # [MVP-INFRA] Session-scoped conversation history — prior turns from the
     # current browser session, forwarded by the frontend.  Used to build a
     # multi-turn messages list for ADP-A so the model can reference what was

@@ -557,6 +557,34 @@ Respond with ONLY a JSON object. No preamble. No explanation. No markdown fences
 
 
 # ---------------------------------------------------------------------------
+# Public helper — passive risk scan for multi-turn tracking
+# ---------------------------------------------------------------------------
+
+def has_passive_risk(text: str) -> bool:
+    """
+    Return True if the text contains at least one passive risk signal.
+
+    [REQ-100-PR2] Used by NikkoPipeline to scan the last N user turns for
+    sustained passive risk patterns without running a full signal analysis.
+    Reuses the same _RISK_PATTERNS table as _rule_analyze() — any key that
+    starts with "risk.passive." counts as a passive risk hit.
+
+    Passive risk indicators (SPEC-100 §4, risk.passive.*):
+      wishing_to_disappear, burden_ideation, hopelessness_passive,
+      escapism_ideation, anhedonia_severe, and related patterns.
+
+    Intentionally conservative: only named passive risk keys count.
+    General distress language (e.g. "nothing ever gets better") does NOT
+    trigger this function — that goes through the full _rule_analyze() path
+    so its distress weight is properly accounted for.
+    """
+    for key, pattern, _weight in _RISK_PATTERNS:
+        if key.startswith("risk.passive.") and pattern.search(text):
+            return True
+    return False
+
+
+# ---------------------------------------------------------------------------
 # Signal Agent
 # ---------------------------------------------------------------------------
 
@@ -986,6 +1014,35 @@ class SignalAgent:
             "crisis":   DistressLevel.CRISIS,
         }
         distress_level = distress_map.get(raw_distress, DistressLevel.LOW)
+
+        # [Issue 5, Director-approved 2026-05-23] LLM path CRISIS confidence cap.
+        #
+        # The rule-engine path is safe: has_active_or_acute always forces
+        # raw_distress="crisis" AND sets confidence=0.92 — no cap needed there.
+        #
+        # The LLM path can produce distress_level=CRISIS without a matching
+        # active/acute risk key (the LLM inferred crisis severity from phrasing
+        # alone). If that happens AND the Signal Agent's own confidence is low
+        # (< 0.75), the verdict is under-confident — a false CRISIS routes to
+        # mandatory crisis flow and may harm the user experience. Downgrade to
+        # HIGH so the Router still treats this as elevated distress but does not
+        # trigger the crisis override chain.
+        #
+        # The 0.75 threshold is deliberately conservative: genuine LLM-detected
+        # crisis (without a keyword trigger) should be allowed to stand when the
+        # model is confident, but penalised when it is uncertain.
+        if (
+            distress_level == DistressLevel.CRISIS
+            and not has_active_or_acute
+            and confidence < 0.75
+        ):
+            scrub_notes.append(
+                f"[SignalAgent] distress_level capped to HIGH: LLM emitted CRISIS but "
+                f"no active/acute risk key present and confidence={confidence:.2f} < 0.75. "
+                "Under-confident CRISIS verdict downgraded to prevent false crisis routing. "
+                "(Issue 5, Director-approved 2026-05-23)"
+            )
+            distress_level = DistressLevel.HIGH
 
         if scrub_notes:
             uncertainty = (uncertainty + "\n" + "\n".join(scrub_notes)).strip()

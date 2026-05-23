@@ -1389,6 +1389,15 @@ class NikkoPipeline:
         )
         logger.info("Pipeline.run() — session=%s regen=%d", trace.session_id, regen_count)
 
+        # ── \guide command detection ──────────────────────────────────────
+        # [REQ-200-163] Detected before moderation so the command token itself
+        # never enters the content scanner or signal engine. The stripped text
+        # is used for all downstream processing; force_guidance is passed to
+        # the Router at Step 3. CRISIS rules always override force_guidance.
+        force_guidance, user_input = self._detect_guide_command(user_input)
+        if force_guidance:
+            logger.info("Pipeline: \\guide command detected — force_guidance=True for this turn.")
+
         # ── Content moderation pre-gate ──────────────────────────────────
         # Runs on RAW input before sanitization or scope classification.
         # REQ-XXX-CM1: MUST fire before any agent or LLM processing.
@@ -1425,8 +1434,47 @@ class NikkoPipeline:
         # ── STEP 3: Routing ───────────────────────────────────────────────
         # REQ-700-040/041: Router evaluates signal; outputs one mode.
         # REQ-700-042: Mixed-mode execution SHALL NOT be permitted.
-        router_decision = self._step3_route(signal, regen_count, trace)
+        router_decision = self._step3_route(signal, regen_count, trace,
+                                            force_guidance=force_guidance)
         mode = router_decision.mode
+
+        # ── Passive risk sustained check (REQ-100-PR2) ───────────────────
+        # Scan the last 5 user turns for passive risk signals. If ≥2 turns
+        # carried passive risk AND current distress is not LOW, set
+        # passive_risk_sustained=True so context_prompt_builder can inject a
+        # gentle professional-support nudge into the COMFORT response.
+        #
+        # Reset rule: if current distress is LOW, the flag is False regardless
+        # of history — de-escalation should not trigger a nudge.
+        #
+        # Why 5 turns / 2 hits?
+        # - 5 turns ≈ ~2-3 minutes of a typical conversation. Recent signal
+        #   window: too-old passive risk (>5 turns) may no longer be relevant.
+        # - 2 hits avoids false-positives from a single ambiguous turn.
+        #
+        # Director-approved 2026-05-23 (Issue 4, Option 1: COMFORT + nudge).
+        passive_risk_sustained = False
+        if (
+            signal.distress_level != DistressLevel.LOW
+            and conversation_history
+        ):
+            from agents.signal_agent import has_passive_risk as _has_passive_risk
+            _last_user_turns = [
+                t.get("text", "")
+                for t in conversation_history
+                if t.get("role") == "user"
+            ][-5:]
+            _passive_hit_count = sum(
+                1 for turn_text in _last_user_turns
+                if _has_passive_risk(turn_text)
+            )
+            if _passive_hit_count >= 2:
+                passive_risk_sustained = True
+                logger.info(
+                    "Pipeline: passive_risk_sustained=True "
+                    "(%d/%d recent turns hit passive risk patterns).",
+                    _passive_hit_count, len(_last_user_turns),
+                )
 
         # ── STEPS 4–10: Mode execution ────────────────────────────────────
         evidence: Optional[SynthesizedEvidence] = None
@@ -1484,6 +1532,9 @@ class NikkoPipeline:
             # Session-scoped conversation history — React state only, never persisted.
             # Forwarded to HFSpaceFullGenerator so ADP-A sees multi-turn context.
             conversation_history=conversation_history,
+            # [REQ-100-PR2] True when ≥2 of last 5 user turns had passive risk
+            # signals AND current distress is not LOW. Triggers support nudge.
+            passive_risk_sustained=passive_risk_sustained,
         )
 
         # ── STEP 10: Draft generation (Interaction Model) ─────────────────
@@ -1706,6 +1757,45 @@ class NikkoPipeline:
         logger.debug("Scope: %s (confidence=%.2f)", decision.decision.value, decision.confidence)
         return decision
 
+    @staticmethod
+    def _detect_guide_command(text: str) -> tuple[bool, str]:
+        """
+        Detect and strip the \\guide (or /guide) explicit-guidance command.
+
+        [REQ-200-163] The user may prefix any message with \\guide or /guide to
+        explicitly request GUIDANCE mode for that turn. The command is stripped
+        from the text before any downstream processing so the signal agent and
+        LLM see only the actual message content.
+
+        Returns:
+            (force_guidance, stripped_text)
+            force_guidance=True  → Router Rule 2.5 will assign GUIDANCE mode
+                                   unless CRISIS signals are present.
+            force_guidance=False → normal routing applies.
+
+        Edge case: if the stripped text is empty (user sent just "\\guide"),
+        a minimal placeholder is substituted so the pipeline has non-empty input.
+        The GUIDANCE route will produce an open-ended "what would you like to
+        explore?" response from ADP-A in this case.
+
+        Command matching is case-insensitive and tolerates leading/trailing
+        whitespace around the command token.
+        """
+        import re as _re
+        # Match \guide or /guide at the very start of the message (optional leading
+        # whitespace), followed by optional whitespace before the message body.
+        # The \\b word boundary prevents \guidelines or /guided from matching.
+        _GUIDE_PATTERN = _re.compile(
+            r"^\s*[\\\/]guide\b\s*", _re.IGNORECASE
+        )
+        match = _GUIDE_PATTERN.match(text)
+        if not match:
+            return False, text
+        stripped = text[match.end():].strip()
+        if not stripped:
+            stripped = "[User requested guidance mode — please open the conversation]"
+        return True, stripped
+
     def _step1_sanitize(self, text: str) -> str:
         """
         STEP 1 — Input sanitization (REQ-700-021/022).
@@ -1818,16 +1908,29 @@ class NikkoPipeline:
         return signal
 
     def _step3_route(
-        self, signal: SignalPayload, attempt_count: int, trace: PipelineTrace
+        self,
+        signal:         SignalPayload,
+        attempt_count:  int,
+        trace:          PipelineTrace,
+        force_guidance: bool = False,
     ) -> RouterDecision:
         """
         STEP 3 — Routing (REQ-700-040 through REQ-700-042).
 
         REQ-700-123: on Router failure, default to Comfort Mode and suppress
         all evidence chains.
+
+        force_guidance: set True when the user prefixed their message with
+        \\guide or /guide. Passed through to Router Rule 2.5 (REQ-200-163).
+        CRISIS rules 1 and 2 still take priority — force_guidance is never
+        respected when crisis signals are present.
         """
         try:
-            decision = self._router.route(signal, attempt_count=attempt_count + 1)
+            decision = self._router.route(
+                signal,
+                attempt_count=attempt_count + 1,
+                force_guidance=force_guidance,
+            )
         except Exception as exc:
             logger.error("Router raised %s — defaulting to COMFORT Mode (REQ-700-123).", exc)
             from agents.router import RouterDecision

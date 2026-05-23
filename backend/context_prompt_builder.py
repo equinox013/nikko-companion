@@ -510,6 +510,33 @@ def build_adp_a_system(context: ResponseContextPayload) -> str:
             "or any generic apology opener. Start with the specific situation."
         )
 
+    # ── Passive risk sustained nudge (COMFORT mode only) ─────────────────────
+    # [REQ-100-PR2] When passive risk signals have been detected in ≥2 of the
+    # last 5 user turns AND current distress is not LOW, the pipeline sets
+    # passive_risk_sustained=True. ADP-A must include a single, warm, non-
+    # clinical sentence at the end of its response gently encouraging the user
+    # to consider speaking to someone — a trusted person or a professional.
+    #
+    # WHY ONLY COMFORT MODE: in GUIDANCE mode, the evidence pipeline may already
+    # surface professional resource links (e.g. BeyondBlue). In CRISIS mode, the
+    # crisis resources block handles this. Only COMFORT responses need the nudge.
+    #
+    # HOW TO PITCH IT: the user is not in crisis — this is background pattern
+    # detection, not an alarm. The tone must stay warm and non-prescriptive.
+    # "It might be worth talking to someone you trust about this" is the target
+    # register — not "I strongly recommend you seek professional help immediately."
+    if context.passive_risk_sustained and context.mode == OperationalMode.COMFORT:
+        parts.append(
+            "\nPASSIVE RISK NOTE: Over recent turns, this user has shown signs of "
+            "passive distress (e.g. hopelessness, burden ideation, or wishing to "
+            "disappear). You MUST include a single warm, gentle sentence at the end "
+            "of your response — after your main supportive content — suggesting they "
+            "consider talking to someone they trust or a professional. Keep it "
+            "non-prescriptive and warm, not clinical or alarming. Example register: "
+            "'It might be worth talking to someone you trust about what you're "
+            "carrying.' Do NOT open with it or make it the centrepiece of your reply."
+        )
+
     # ── Register-matching instruction (all modes) ─────────────────────────────
     # [REQ-700-SA7] The upstream pipeline (Qwen3 pre-analysis, ADP-B safety pass)
     # may inject signals indicating elevated arousal or distress. This is correct
