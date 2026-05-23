@@ -141,7 +141,7 @@ function SourcesPanel({ sourceOrder, activeKey, onClose, dynamicSources }) {
             </div>
           ))}
           <div style={{ fontSize: 11, color: 'var(--muted)', padding: '10px 4px 0' }}>
-            References formatted to APA 7th edition (best-effort — full author/volume metadata requires Phase 5 PubMed enrichment).
+            References formatted to APA 7th edition. Author and volume metadata sourced from PubMed where available.
           </div>
         </div>
       </aside>

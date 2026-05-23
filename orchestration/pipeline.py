@@ -413,14 +413,18 @@ class _StubScopeClassifier:
 
 class _StubSignalAgent:
     """
-    Stub Signal Agent — returns LOW distress with keyword-based guidance detection.
-    Used when the real SignalAgent cannot be imported (FUSE truncation).
+    Render-mode Signal Agent — pattern-based distress, emotional state, and
+    guidance detection. Used when NIKKO_LOCAL_LLM=false (Render has no GPU).
 
-    Previously returned all-empty signal arrays, which permanently suppressed
-    GUIDANCE routing. Now applies the same lightweight keyword scan used in the
-    _step2_signal exception path so explicit guidance-seeking messages still
-    reach GUIDANCE mode even without the real LLM-backed agent.
-    Replace with the real SignalAgent for production.
+    This agent handles pre-routing classification only. Nuanced signal enrichment
+    (tone analysis, confidence adjustment, strategy hints) is performed by
+    Qwen3-4B inside the Modal /pipeline call — see HFSpaceFullGenerator.
+
+    Safety contract (DO NOT VIOLATE):
+    - NEVER emits DistressLevel.CRISIS — would bypass ADP-B via Router Rule 2.
+    - NEVER emits risk_indicators — "risk.active.*" / "risk.acute.*" keys trigger
+      Router Rule 1 (CRISIS), which skips the ADP-B safety gate entirely.
+    - ADP-B on Modal is the sole authoritative crisis detector.
     """
 
     _GUIDANCE_KEYWORDS: frozenset = frozenset({
@@ -457,33 +461,150 @@ class _StubSignalAgent:
         re.I,
     )
 
+    # Moderate distress — significant but manageable distress vocabulary.
+    # Anchored tightly to avoid false-positives on mood ratings or casual use.
+    _MODERATE_DISTRESS_RE = re.compile(
+        r"("
+        # Direct mood descriptors after "feeling" / "been feeling"
+        r"feel(ing)?\s+(really\s+|a\s+bit\s+|kind\s+of\s+|quite\s+)?"
+        r"(down|low|sad|unhappy|anxious|worried|stressed|overwhelmed|"
+        r"lost|empty|lonely|isolated|exhausted|drained|numb|flat|rough)|"
+        # Explicit mood noun phrases
+        r"\blow\s+mood\b|\blow\s+energy\b|"
+        # Negated wellness phrases — anchored to prevent matching "not going well for you"
+        r"\bnot\s+(doing|feeling)\s+(well|great|good|okay|ok)\b|"
+        r"\bnot\s+been\s+(great|well|good|okay|ok|myself)\b|"
+        r"\bnot\s+myself\b|"
+        # Struggle / difficulty phrases
+        r"\b(really\s+)?(struggling|finding\s+it\s+hard)\b|"
+        r"\bhaving\s+a\s+(hard|rough|tough)\s+time\b|"
+        r"\b(hard|difficult|tough)\s+(lately|recently|at\s+the\s+moment|these\s+days)\b|"
+        r"\bcan't\s+seem\s+to\b|"
+        # Mild emotional descriptors — "a bit anxious", "feeling a bit off"
+        r"\b(a\s+bit\s+|kind\s+of\s+|quite\s+)(anxious|nervous|worried|stressed|overwhelmed|down|off|rough)\b"
+        r")",
+        re.I,
+    )
+
+    # High distress — acute or severe distress vocabulary.
+    # Deliberately narrow — does NOT include crisis/suicidal language (ADP-B's domain).
+    _HIGH_DISTRESS_RE = re.compile(
+        r"("
+        r"\bcan't\s+(cope|handle|take\s+it|deal\s+with\s+this)\b|"
+        r"\b(fall(ing)?\s+apart|break(ing)?\s+down)\b|"
+        r"\b(feel(ing)?\s+)?(completely\s+|absolutely\s+|utterly\s+)?"
+        r"(hopeless|worthless|pointless|helpless)\b|"
+        r"\bnothing\s+(ever\s+)?(helps|works|matters|gets\s+better)\b|"
+        r"\b(what('s|\s+is)\s+the\s+point|no\s+point\s+in)\b|"
+        r"\b(can't|cannot)\s+(bear|take|stand|face)\s+(it|this|anything)\b|"
+        r"\b(completely|totally|utterly)\s+(lost|broken|alone|empty)\b|"
+        r"\b(no\s+one|nobody)\s+(cares|understands)\b|"
+        r"\b(feels?\s+)?(so\s+)?(unbearable|impossible\s+to\s+(cope|handle))\b|"
+        r"\bdespa?ir(ing)?\b|despondent\b"
+        r")",
+        re.I,
+    )
+
+    # Emotional state patterns → SPEC-100 ontology tags.
+    # Each tuple is (compiled_pattern, tag_string).
+    # Tags must be valid SPEC-100 §9 emotional state keys.
+    _EMOTIONAL_STATE_PATTERNS: list = [
+        (re.compile(
+            r"\b(sad|unhappy|down|depressed|blue|miserable|low\s+mood|feeling\s+low)\b",
+            re.I), "sadness_spectrum"),
+        (re.compile(
+            r"\b(anxious|anxiety|worried|nervous|on\s+edge|panick(y|ing)|apprehensive)\b",
+            re.I), "anxiety_spectrum"),
+        (re.compile(
+            r"\b(stressed|overwhelmed|overloaded|under\s+(a\s+lot\s+of\s+)?pressure|burned?\s*out)\b",
+            re.I), "stress_overwhelm"),
+        (re.compile(
+            r"\b(alone|lonely|isolated|disconnected)\b",
+            re.I), "social_isolation"),
+        (re.compile(
+            r"\b(tired|exhausted|drained|fatigued|no\s+energy|empty|numb)\b",
+            re.I), "emotional_exhaustion"),
+        (re.compile(
+            r"\b(hopeless|worthless|pointless|no\s+point|no\s+hope|helpless)\b",
+            re.I), "hopelessness"),
+    ]
+
+    # Cognitive pattern patterns → SPEC-100 ontology tags.
+    _COGNITIVE_PATTERN_PATTERNS: list = [
+        (re.compile(
+            r"\b(can't\s+cope|can't\s+handle|nothing\s+(ever\s+)?helps|nothing\s+works|"
+            r"don't\s+know\s+what\s+to\s+do|no\s+idea\s+what\s+to\s+do)\b",
+            re.I), "helplessness_framing"),
+        (re.compile(
+            r"\b(my\s+fault|blame\s+myself|should\s+have\s+(known|done|been)|"
+            r"if\s+only\s+i\s+(had|was|hadn't)|should\s+be\s+able\s+to)\b",
+            re.I), "self_blame"),
+        (re.compile(
+            r"\b(nothing\s+ever\s+changes|always\s+(mess(ing)?\s+up|fail(ing)?|the\s+(problem|issue))|"
+            r"i('m|\s+am)\s+never\s+(good|right|enough))\b",
+            re.I), "absolutist_thinking"),
+    ]
+
     def analyze(self, text: str, **kwargs) -> SignalPayload:
         text_lower = text.lower()
-        # Suppress guidance routing when the message is acknowledgment/gratitude —
-        # technique keywords like "breathing" appear because the user is *referencing*
-        # a prior recommendation, not requesting new guidance. REQ-000-043.
+
+        # [REQ-000-043] Suppress guidance routing on acknowledgment/gratitude turns.
         is_acknowledgment = bool(self._ACKNOWLEDGMENT_RE.search(text))
         has_guidance_intent = (not is_acknowledgment) and any(
             kw in text_lower for kw in self._GUIDANCE_KEYWORDS
         )
+
+        # Distress level — pattern scan from high to low; first match wins.
+        # CRISIS is intentionally absent — ADP-B is the sole crisis detector.
+        has_high     = bool(self._HIGH_DISTRESS_RE.search(text))
+        has_moderate = bool(self._MODERATE_DISTRESS_RE.search(text))
+        if has_high:
+            distress_level = DistressLevel.HIGH
+        elif has_moderate:
+            distress_level = DistressLevel.MODERATE
+        else:
+            distress_level = DistressLevel.LOW
+
+        # Confidence calibration:
+        # ≥ 0.40 is required for the Router to reach Rules 4–5 (see Rule 3).
+        # Guidance intent detected → push to 0.60–0.65 so Rule 4 (GUIDANCE) fires.
+        # No guidance + HIGH distress → 0.55 (still COMFORT, but distress note in rationale).
+        # No guidance + MODERATE/LOW → 0.50 (COMFORT default via Rule 5).
+        if has_guidance_intent:
+            confidence = 0.65 if has_high else 0.60
+        elif has_high:
+            confidence = 0.55
+        else:
+            confidence = 0.50
+
+        # Emotional states — scan against SPEC-100 ontology patterns.
+        emotional_states = [
+            tag for pattern, tag in self._EMOTIONAL_STATE_PATTERNS
+            if pattern.search(text)
+        ]
+
+        # Cognitive patterns — only populated when matched.
+        cognitive_patterns = [
+            tag for pattern, tag in self._COGNITIVE_PATTERN_PATTERNS
+            if pattern.search(text)
+        ]
+
         return SignalPayload(
-            distress_level=DistressLevel.LOW,
-            # 0.6 when guidance intent detected — above Router's 0.40 low-band
-            # ceiling so Rule 4 (guidance check) is reached. 0.5 otherwise —
-            # still above threshold, COMFORT default via Rule 5.
-            confidence=0.6 if has_guidance_intent else 0.5,
-            emotional_states=[],
-            cognitive_patterns=[],
+            distress_level=distress_level,
+            confidence=confidence,
+            emotional_states=emotional_states,
+            cognitive_patterns=cognitive_patterns,
             behavioral_indicators=(
                 ["help_seeking_behavior"] if has_guidance_intent else []
             ),
+            # risk_indicators intentionally empty — see safety contract above.
             risk_indicators=[],
             support_needs=(
                 ["psychoeducation"] if has_guidance_intent else []
             ),
             uncertainty_notes=(
-                f"[STUB — real SignalAgent unavailable; "
-                f"guidance_intent={has_guidance_intent}]"
+                f"[Render · keyword analysis · "
+                f"distress={distress_level.value} guidance_intent={has_guidance_intent}]"
             ),
         )
 
