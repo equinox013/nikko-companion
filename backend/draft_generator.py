@@ -343,12 +343,16 @@ class HFSpaceFullGenerator:
                 (_enh_strat.get("tone_refinement") or "")[:80],
             )
 
+        # modal_load_ts comes from nikko_modal/app.py; hf_load_ts from hf_space/app.py.
+        # Both are cold-start timestamps that identify which deploy served this request.
+        _deploy_ts = result.get("modal_load_ts") or result.get("hf_load_ts") or "unknown"
         logger.info(
-            "HFSpaceFullGenerator: /pipeline done | verdict=%s regen=%s elapsed=%.1fs chars=%d",
+            "HFSpaceFullGenerator: /pipeline done | verdict=%s regen=%s elapsed=%.1fs chars=%d | deploy_ts=%s",
             result.get("verdict"),
             result.get("regen"),
             result.get("elapsed", 0),
             len(text),
+            _deploy_ts,
         )
         # Store full result for side-channel metadata read in _step10_draft().
         # Includes pre_analysis_raw, enhanced_signal, enhanced_strategy, and

@@ -64,6 +64,16 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 # memoryContext is NOT passed through this filter — it never enters log records.
 attach_log_filter(log)
 
+# ── Build / version info ──────────────────────────────────────────────────────
+# Render injects RENDER_GIT_COMMIT (full SHA) and RENDER_GIT_BRANCH at build
+# time. Logging them here makes them the first visible line in the Render log
+# stream after a cold start / dyno restart — trivial to cross-reference with
+# the GitHub commit when debugging a production issue.
+# RENDER_GIT_COMMIT will be empty string in local dev; that's fine.
+_GIT_COMMIT = os.getenv("RENDER_GIT_COMMIT", "local")[:12]   # short SHA is enough
+_GIT_BRANCH = os.getenv("RENDER_GIT_BRANCH", "unknown")
+log.info("Render backend starting | commit=%s branch=%s", _GIT_COMMIT, _GIT_BRANCH)
+
 # ── Config ────────────────────────────────────────────────────────────────────
 
 # Primary inference endpoint: Modal Serverless.

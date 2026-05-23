@@ -63,9 +63,17 @@ import json
 import logging
 import os
 import time
+from datetime import datetime, timezone
 
 import modal
 from fastapi.responses import JSONResponse
+
+# ── Module-load timestamp ─────────────────────────────────────────────────────
+# Captured once when the Modal container starts (cold start). Acts as a
+# per-deployment version stamp: Render logs it on every /pipeline call, making
+# it trivial to confirm which Modal deploy is serving a given request.
+# Format: ISO-8601 UTC, e.g. "2026-05-23T14:32:10Z"
+_MODAL_LOAD_TS = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 # ── Modal app + persistent Volume ────────────────────────────────────────────
 
@@ -1328,6 +1336,10 @@ def pipeline(request: dict):
         request.get("rule_signal") or None,
         request.get("base_strategy_text", ""),
     )
+    # Stamp the Modal container's load timestamp onto every response so Render
+    # can log which Modal deploy served this request. _MODAL_LOAD_TS is set once
+    # at module load (cold start) and is constant for the lifetime of the container.
+    result["modal_load_ts"] = _MODAL_LOAD_TS
     return JSONResponse(content=result)
 
 
