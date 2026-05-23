@@ -209,9 +209,12 @@ function formatDay(iso) {
 }
 
 // Most common first; rest revealed under "more"
+// Unified emotion list — must stay in sync with CHECKIN_EMOTIONS in chat.jsx.
+// Primary emotions (first 8) shown by default; remaining shown under "+N more".
+// 'sad' added to match the check-in popup; position after 'low' (semantically adjacent).
 const EMOTION_OPTIONS = [
-  'calm', 'tired', 'anxious', 'low', 'hopeful', 'content', 'irritable', 'overwhelmed',
-  'grateful', 'numb', 'lonely', 'angry', 'restless', 'focused'
+  'calm', 'tired', 'anxious', 'low', 'sad', 'hopeful', 'content', 'overwhelmed',
+  'numb', 'irritable', 'grateful', 'lonely', 'angry', 'restless', 'focused'
 ];
 const EMOTION_PRIMARY = 8;
 const TRIGGER_OPTIONS = [

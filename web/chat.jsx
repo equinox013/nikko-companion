@@ -446,7 +446,10 @@ const AFFIRMATIONS = [
 // [REQ-FIS-MC7] The popup renders without requiring user login or data upload.
 // [REQ-FIS-MC8] State guard (moodCheckInShownRef) prevents re-triggering.
 
-const CHECKIN_EMOTIONS = ['calm','content','anxious','low','overwhelmed','sad','numb','hopeful','irritable','tired'];
+// Must stay in sync with EMOTION_OPTIONS in panels.jsx (same ordering, same labels).
+// Showing all emotions here — the popup is compact enough to show the full set
+// without a "+N more" expander (10 chips is the natural cutoff for this layout).
+const CHECKIN_EMOTIONS = ['calm','tired','anxious','low','sad','hopeful','content','overwhelmed','numb','irritable'];
 
 function MoodCheckInPopup({ onLog, onSkip }) {
   const [rating, setRating] = React.useState(null);
@@ -468,11 +471,14 @@ function MoodCheckInPopup({ onLog, onSkip }) {
         <span className="mood-checkin-sub">How are you feeling right now?</span>
       </div>
 
-      {/* 1–10 numeric rating */}
+      {/* 1–10 numeric rating — data-r attr enables the same MOOD_COLORS
+          gradient scale used by the diary panel pips (styles.css).
+          This keeps colour language consistent across both surfaces. */}
       <div className="mood-checkin-rating" aria-label="Mood rating 1 to 10">
         {[1,2,3,4,5,6,7,8,9,10].map(n => (
           <button
             key={n}
+            data-r={n}
             className={'mood-checkin-num' + (rating === n ? ' active' : '')}
             onClick={() => setRating(n)}
             aria-pressed={rating === n}
@@ -702,6 +708,20 @@ function Chat({ theme, onToggleTheme }) {
   useEffect(() => {
     setTimeout(scrollToBottom, 50);
   }, [messages.length, scrollToBottom]);
+
+  // Auto-scroll when in-thread UI elements appear (banners, popups, proposals).
+  // Each of these inserts DOM content above the composer and pushes the viewport
+  // down — without a scroll trigger the bottom of the thread goes hidden.
+  // moodCheckIn: mood check-in popup in thread after memory load
+  // safetyVisible: crisis safety banner expands above composer
+  // memBanner: loaded/hint banner inserts above thread
+  // techniqueCheckIn: technique proposal card appended to thread
+  // pendingEntries.length: memory proposal cards appended to thread
+  useEffect(() => { setTimeout(scrollToBottom, 80); }, [moodCheckIn, scrollToBottom]);
+  useEffect(() => { setTimeout(scrollToBottom, 80); }, [safetyVisible, scrollToBottom]);
+  useEffect(() => { setTimeout(scrollToBottom, 80); }, [memBanner, scrollToBottom]);
+  useEffect(() => { setTimeout(scrollToBottom, 80); }, [techniqueCheckIn, scrollToBottom]);
+  useEffect(() => { setTimeout(scrollToBottom, 80); }, [pendingEntries.length, scrollToBottom]);
 
   // Welcome-back assistant message when memory loads.
   // Signature: (md, name) — md is the decrypted Markdown content, name is the
@@ -1003,8 +1023,11 @@ function Chat({ theme, onToggleTheme }) {
       // Excludes: the fixed opening message (id='open'), welcome-back messages
       // (id prefix 'wb-'), any messages still streaming, and the current turn
       // (which is being sent right now as `text`).
-      // Capped at the last 10 turns (5 user + 5 assistant) to stay within
-      // ADP-A's context budget.  Clears automatically on refresh (React state).
+      // Cap raised to the last 20 turns (10 user + 10 assistant) so ADP-A
+      // retains enough context to honour earlier disclosures (e.g. "I have no
+      // family/friends", stated preferences, named topics from earlier in the
+      // session). Server-side hard cap is 20 turns — matching this prevents
+      // silent silently dropping turns.  Clears on refresh (React state).
       const historyRaw = messages
         .filter(m =>
           m.id !== 'open' &&
@@ -1013,7 +1036,7 @@ function Chat({ theme, onToggleTheme }) {
           m.text &&
           (m.role === 'user' || m.role === 'assistant')
         )
-        .slice(-10)   // last 10 turns
+        .slice(-20)   // last 20 turns (up from 10 — more context, better memory)
         .map(m => ({ role: m.role, text: m.text }));
       if (historyRaw.length > 0) {
         reqBody.conversationHistory = historyRaw;
@@ -1085,7 +1108,17 @@ function Chat({ theme, onToggleTheme }) {
                 // update() merges patch into the existing entry — _processing → false
                 // signals the ribbon to switch from stage label to mode label.
                 if (data.trace) {
-                  NikkoAgentLog.update(id, { ...data.trace, liveData: true, _processing: false });
+                  // Bridge data.trace.mode ("guidance"/"comfort"/"crisis") to _mode
+                  // (uppercase "GUIDANCE" / "COMFORT" / "CRISIS") so AgentRibbon and
+                  // AgentDebugOverlay both use the correct key. Without this, _mode
+                  // stays undefined from the initial placeholder and the ribbon always
+                  // shows "comfort mode" regardless of the actual routing decision.
+                  NikkoAgentLog.update(id, {
+                    ...data.trace,
+                    _mode: (data.trace.mode || '').toUpperCase() || undefined,
+                    liveData: true,
+                    _processing: false,
+                  });
                 }
                 // Store retrieved evidence sources on the message for the badge.
                 // data.sources is populated only when the pipeline ran in GUIDANCE
@@ -1426,6 +1459,15 @@ function Chat({ theme, onToggleTheme }) {
                     </div>
                     <div className="body">
 
+                      {/* AgentRibbon — pinned to the TOP of the message body so
+                          the live pipeline stage / mode label is always the first
+                          thing visible above the content. [REQ-FIS-RB4]
+                          During processing (_processing=true): shows stage label.
+                          After completion: shows mode label (comfort / guidance / crisis). */}
+                      {m.traceId && m.id === lastAssistantId && (
+                        <AgentRibbon traceId={m.traceId} />
+                      )}
+
                       {m.text === '' && m.streaming ? (
                         <ThinkingBubble coldStart={isColdStart} />
                       ) : (
@@ -1461,12 +1503,6 @@ function Chat({ theme, onToggleTheme }) {
                             <button key={s} className="suggest" onClick={() => onSend(s)}>{s}</button>
                           ))}
                         </div>
-                      )}
-                      {/* AgentRibbon — shows live pipeline stage (processing) or
-                          mode label (completed). Only on the most recent assistant
-                          message with a traceId. [REQ-FIS-RB4] */}
-                      {m.traceId && m.id === lastAssistantId && (
-                        <AgentRibbon traceId={m.traceId} />
                       )}
                     </div>
                   </div>

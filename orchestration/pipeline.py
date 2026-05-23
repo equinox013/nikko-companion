@@ -438,9 +438,32 @@ class _StubSignalAgent:
         "psychoeducation", "mindfulness", "breathing",
     })
 
+    # [REQ-000-043] Acknowledgment/gratitude suppressor: if the user is
+    # *reporting* that a technique worked ("it helped", "thanks for that",
+    # "i tried it and it worked") rather than *requesting* guidance, keyword
+    # hits on technique words like "breathing" or "exercise" should NOT fire
+    # guidance routing. COMFORT is the correct mode for positive feedback turns.
+    _ACKNOWLEDGMENT_RE = re.compile(
+        r"\b("
+        r"(it|that|this).{0,20}(helped|worked|made.{0,10}(better|easier|calmer)|felt.{0,10}(better|calmer))|"
+        r"(helped|worked).{0,10}(a bit|a lot|well|great|nicely)|"
+        r"thank(s| you).{0,30}(for|that|recommend)|"
+        r"thanks.{0,10}(for.{0,20}(suggesting|recommend|showing|tip)|that was|that helped)|"
+        r"appreciate.{0,20}(suggest|recommend|tip|that)|"
+        r"(i('ve| have)) tried.{0,40}(helped|worked|better)|"
+        r"feeling (better|calmer|more (calm|relaxed))|"
+        r"(that|it) made.{0,15}(difference|sense|me feel)"
+        r")",
+        re.I,
+    )
+
     def analyze(self, text: str, **kwargs) -> SignalPayload:
         text_lower = text.lower()
-        has_guidance_intent = any(
+        # Suppress guidance routing when the message is acknowledgment/gratitude —
+        # technique keywords like "breathing" appear because the user is *referencing*
+        # a prior recommendation, not requesting new guidance. REQ-000-043.
+        is_acknowledgment = bool(self._ACKNOWLEDGMENT_RE.search(text))
+        has_guidance_intent = (not is_acknowledgment) and any(
             kw in text_lower for kw in self._GUIDANCE_KEYWORDS
         )
         return SignalPayload(
@@ -593,7 +616,17 @@ class PipelineTrace:
     session_id:           str  = field(default_factory=lambda: str(uuid.uuid4()))
     execution_path:       list[str] = field(default_factory=list)
     signal_output:        Optional[dict] = None
+    # pre_analysis_output: populated by HFSpaceFullGenerator Step 1.5 when
+    # Qwen3-4B thinking-mode structural pre-analysis runs (REQ-700-SA1–SA7).
+    # Format: {"annotations": "<free-text summary of paralinguistic signals>"}.
+    # None when skipped (scope block, moderation block, or not yet implemented).
+    pre_analysis_output:  Optional[dict] = None
     router_decision:      Optional[str] = None
+    # Full router output — mode + confidence + crisis_override.
+    # Stored so _result_to_trace can report actual routing confidence in the
+    # debug overlay (was previously hardcoded 0.0 because only the mode string
+    # was persisted). REQ-FIS-DB4.
+    router_output:        Optional[dict] = None
     agents_triggered:     list[str] = field(default_factory=list)
     evidence_used:        list[str] = field(default_factory=list)
     adapter_configuration:list[str] = field(default_factory=list)
@@ -802,6 +835,16 @@ _TOPIC_KEYWORD_PATTERNS: list[tuple[re.Pattern, str]] = [
     (re.compile(
         r"\b(lonely|alone|isolat|no one|disconnected|left out)", re.I),
      "loneliness social connection mental health"),
+    # [REQ-000-042] Self-directed / no-support-network context.
+    # Fires when the user explicitly states they lack a support network OR
+    # expresses a preference for self-directed strategies. Produces a query
+    # oriented toward self-help coping rather than "reach out to others" content.
+    (re.compile(
+        r"\b(no fam(ily)?|no friends?|no one (to talk to|around)|got no (fam|friends?)|"
+        r"fix (it|things?) (my|our)self|help my(self)?|sort (it|things?) out my(self)?|"
+        r"by my(self)?|on my (own|own terms)|self.relian|self.direct|cope on my own|"
+        r"deal with (it|this) my(self)?|figure (it|things?) out my(self)?)", re.I),
+     "self-reliant coping strategies building resilience without social support"),
 
     # ── Life domains ──────────────────────────────────────────────────────────
     (re.compile(
@@ -1270,9 +1313,20 @@ class NikkoPipeline:
 
         if mode == OperationalMode.GUIDANCE:
             # REQ-700-060: evidence first, tone second.
-            # Pass clean_input for two-pass query construction:
-            # signal keys give category, user_text gives specificity.
-            evidence = self._steps4_7_guidance_evidence(signal, clean_input, trace)
+            # Build a context-enriched query window: append the last 2 prior user
+            # turns to clean_input so the keyword scanner picks up context stated
+            # earlier in the conversation (e.g. "I have no family or friends") even
+            # when the current message is more specific ("I want to fix things myself").
+            # This prevents the query from losing relevant context across turns.
+            _prior_user_turns = [
+                t.get("text", "")
+                for t in (conversation_history or [])
+                if t.get("role") == "user"
+            ][-2:]
+            _query_context = " ".join(_prior_user_turns + [clean_input]).strip()
+            evidence = self._steps4_7_guidance_evidence(
+                signal, clean_input, trace, query_context=_query_context
+            )
 
         elif mode == OperationalMode.CRISIS:
             # REQ-700-070: inject mandatory Australian crisis resources.
@@ -1571,8 +1625,27 @@ class NikkoPipeline:
                 "help me", "advice", "tips", "resources", "skills",
                 "psychoeducation", "mindfulness", "breathing",
             })
+            # [REQ-000-043] Suppress guidance routing when the turn is an
+            # acknowledgment/gratitude — the user is *reporting* a technique
+            # worked, not requesting new guidance. Same logic as StubSignalAgent.
+            _ACK_RE = re.compile(
+                r"\b("
+                r"(it|that|this).{0,20}(helped|worked|made.{0,10}(better|easier|calmer)|felt.{0,10}(better|calmer))|"
+                r"(helped|worked).{0,10}(a bit|a lot|well|great|nicely)|"
+                r"thank(s| you).{0,30}(for|that|recommend)|"
+                r"thanks.{0,10}(for.{0,20}(suggesting|recommend|showing|tip)|that was|that helped)|"
+                r"appreciate.{0,20}(suggest|recommend|tip|that)|"
+                r"(i('ve| have)) tried.{0,40}(helped|worked|better)|"
+                r"feeling (better|calmer|more (calm|relaxed))|"
+                r"(that|it) made.{0,15}(difference|sense|me feel)"
+                r")",
+                re.I,
+            )
             text_lower = text.lower()
-            has_guidance_intent = any(kw in text_lower for kw in _GUIDANCE_KEYWORDS)
+            is_acknowledgment = bool(_ACK_RE.search(text))
+            has_guidance_intent = (not is_acknowledgment) and any(
+                kw in text_lower for kw in _GUIDANCE_KEYWORDS
+            )
             signal = SignalPayload(
                 distress_level=DistressLevel.LOW,
                 # [PROPOSED-RECONCILIATION: confidence must be >= 0.40 for the
@@ -1604,9 +1677,20 @@ class NikkoPipeline:
                 has_guidance_intent, text_lower[:80],
             )
         trace.step("signal_agent")
+        # Persist the full SignalPayload to the trace so the debug overlay can
+        # render all SPEC-100 §9 fields (emotional_states, cognitive_patterns,
+        # behavioral_indicators, risk_indicators, support_needs, uncertainty_notes).
+        # Previously only distress_level + confidence were stored here, which left
+        # every array field empty in the frontend debug panel. REQ-FIS-DB2/DB3.
         trace.signal_output = {
-            "distress_level": signal.distress_level.value,
-            "confidence": signal.confidence,
+            "distress_level":        signal.distress_level.value,
+            "confidence":            signal.confidence,
+            "emotional_states":      signal.emotional_states or [],
+            "cognitive_patterns":    signal.cognitive_patterns or [],
+            "behavioral_indicators": signal.behavioral_indicators or [],
+            "risk_indicators":       signal.risk_indicators or [],
+            "support_needs":         signal.support_needs or [],
+            "uncertainty_notes":     signal.uncertainty_notes or "",
         }
         logger.info("Signal: distress=%s confidence=%.2f",
                     signal.distress_level.value, signal.confidence)
@@ -1634,13 +1718,26 @@ class NikkoPipeline:
             )
         trace.step("router")
         trace.router_decision = decision.mode.value
+        # Persist full router output so the debug overlay can show real confidence.
+        # Previously only the mode string was stored, forcing _result_to_trace to
+        # default confidence to 0.0. REQ-FIS-DB4.
+        trace.router_output = {
+            "mode":           decision.mode.value,
+            "confidence":     decision.confidence,
+            "crisis_override": getattr(decision, "crisis_override", False),
+            "rationale":      getattr(decision, "routing_rationale", ""),
+        }
         logger.info("Router: mode=%s confidence=%.2f crisis_override=%s",
                     decision.mode.value, decision.confidence,
                     getattr(decision, "crisis_override", False))
         return decision
 
     def _steps4_7_guidance_evidence(
-        self, signal: SignalPayload, user_text: str, trace: PipelineTrace
+        self,
+        signal: SignalPayload,
+        user_text: str,
+        trace: PipelineTrace,
+        query_context: str = "",
     ) -> Optional[SynthesizedEvidence]:
         """
         STEPS 4–8 (Guidance Mode) — Evidence retrieval + synthesis.
@@ -1653,13 +1750,20 @@ class NikkoPipeline:
 
         Query construction: _build_evidence_query() does two-pass extraction:
         1. Signal keys (support_needs, emotional_states, cognitive_patterns)
-        2. Keyword scan of the raw sanitized user text via _TOPIC_KEYWORD_PATTERNS
-        This ensures "calming techniques to stop shaking" → a query like
-        "relaxation techniques anxiety management physical symptoms mental health"
-        rather than the raw conversational sentence or a generic "psychoeducation".
+        2. Keyword scan of query_context (defaults to user_text) via _TOPIC_KEYWORD_PATTERNS
+
+        query_context: optional enriched window containing recent prior user
+        turns prepended to the current message. When provided, the keyword
+        scanner operates over a richer text window so context stated earlier
+        in the conversation (e.g. "I have no family or friends") contributes
+        to query term selection even if it's absent from the current message.
+        Falls back to user_text when not provided.
         """
-        # Two-pass query: signal keys + keyword scan of user text.
-        query = _build_evidence_query(signal, user_text)
+        # Two-pass query: signal keys + keyword scan of context window.
+        # If the caller supplied query_context (multi-turn window), use that;
+        # otherwise fall back to the current message alone.
+        effective_text = query_context if query_context else user_text
+        query = _build_evidence_query(signal, effective_text)
         logger.info(
             "Evidence query: %r  (support_needs=%s emotional_states=%s user_text=%r)",
             query, signal.support_needs, signal.emotional_states, user_text[:60],
@@ -1813,6 +1917,24 @@ class NikkoPipeline:
             draft = SAFE_FALLBACK_RESPONSE
         trace.step("interaction_model")
         logger.debug("Draft generated (%d chars).", len(draft))
+
+        # [REQ-FIS-DB1] Side-channel: pull pre_analysis_raw and other metadata
+        # from HFSpaceFullGenerator._last_metadata (set after every generate() call).
+        # This avoids changing the DraftGeneratorProtocol return-type interface.
+        # Falls back gracefully when the generator is a stub (no _last_metadata).
+        _meta = getattr(self._draft_gen, "_last_metadata", {}) or {}
+        if _meta:
+            _raw_annotations = _meta.get("pre_analysis_raw", "")
+            if _raw_annotations:
+                # Format: {"annotations": "[PARA: ...] [STRUCT: ...]"} or {"annotations": ""}
+                trace.pre_analysis_output = {"annotations": _raw_annotations}
+            # Also log enhanced signal/strategy so they appear in Render logs.
+            if _meta.get("enhanced_signal"):
+                logger.debug(
+                    "_step10_draft: enhanced_signal from Modal — tone=%r",
+                    (_meta["enhanced_signal"].get("tone_note") or "")[:60],
+                )
+
         return draft
 
     def _step11_evaluate(

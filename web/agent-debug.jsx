@@ -78,12 +78,6 @@ function AgentRibbon({ traceId }) {
   if (trace._processing) {
     return (
       <div className="agent-ribbon processing" role="note">
-        <span className="agent-ribbon-glyph" aria-hidden="true">
-          <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="3" cy="3" r="1.4"/><circle cx="9" cy="3" r="1.4"/><circle cx="6" cy="9" r="1.4"/>
-            <path d="M3 3 9 3M3 3 6 9M9 3 6 9" opacity="0.5"/>
-          </svg>
-        </span>
         <span className="agent-ribbon-stage">{trace._stage || 'processing…'}</span>
       </div>
     );
@@ -100,12 +94,6 @@ function AgentRibbon({ traceId }) {
 
   return (
     <div className="agent-ribbon" role="note">
-      <span className="agent-ribbon-glyph" aria-hidden="true">
-        <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
-          <circle cx="3" cy="3" r="1.4"/><circle cx="9" cy="3" r="1.4"/><circle cx="6" cy="9" r="1.4"/>
-          <path d="M3 3 9 3M3 3 6 9M9 3 6 9" opacity="0.5"/>
-        </svg>
-      </span>
       <span className="agent-ribbon-count">{modeLabel}</span>
     </div>
   );
@@ -275,8 +263,10 @@ function AgentDebugOverlay({ open, onClose }) {
               />
 
               {/* ── Signal (Step 1) ─────────────────────────────────────
-                  Combined rule-engine + LLM signal output.
-                  Shows distress level and confidence from the signal object. */}
+                  Combined rule-engine + LLM signal output (SPEC-100 §9).
+                  Now shows all arrays persisted to trace: emotional_states,
+                  cognitive_patterns, behavioral_indicators, support_needs,
+                  risk_indicators. Empty arrays are suppressed for readability. */}
               <AnalysisCard
                 step="1"
                 name="Signal"
@@ -284,17 +274,27 @@ function AgentDebugOverlay({ open, onClose }) {
                 value={(() => {
                   const s = current.signal;
                   if (!s) return 'no signal data';
-                  const level = s.distress_level || 'UNKNOWN';
+                  const level = (s.distress_level || 'UNKNOWN').toUpperCase();
                   const conf  = s.confidence != null ? ` · conf ${(s.confidence * 100).toFixed(0)}%` : '';
-                  const tone  = s.uncertainty_notes ? ` · ${s.uncertainty_notes.slice(0, 60)}` : '';
-                  return `${level}${conf}${tone}`;
+                  // Build detail tokens from non-empty arrays.
+                  const parts = [];
+                  if (s.emotional_states?.length)      parts.push(`emotions: ${s.emotional_states.slice(0, 3).join(', ')}`);
+                  if (s.cognitive_patterns?.length)    parts.push(`cognition: ${s.cognitive_patterns.slice(0, 2).join(', ')}`);
+                  if (s.behavioral_indicators?.length) parts.push(`behavior: ${s.behavioral_indicators.slice(0, 2).join(', ')}`);
+                  if (s.support_needs?.length)         parts.push(`needs: ${s.support_needs.join(', ')}`);
+                  if (s.risk_indicators?.length)       parts.push(`⚠ risk: ${s.risk_indicators.slice(0, 2).join(', ')}`);
+                  const arrays = parts.join(' · ');
+                  // Fallback to uncertainty_notes when no arrays present (e.g. keyword fallback path).
+                  const note = !arrays && s.uncertainty_notes ? ` · ${s.uncertainty_notes.slice(0, 80)}` : '';
+                  return `${level}${conf}${arrays ? ' · ' + arrays : note}`;
                 })()}
                 empty={!current.signal}
               />
 
               {/* ── Router (Step 2) ─────────────────────────────────────
                   Deterministic routing decision (COMFORT / GUIDANCE / CRISIS).
-                  crisis_override=true means ADP-B forced the CRISIS path. */}
+                  Now shows real confidence (was hardcoded 0) and rationale
+                  from the full RouterDecision stored in trace.router. */}
               <AnalysisCard
                 step="2"
                 name="Router"
@@ -302,12 +302,43 @@ function AgentDebugOverlay({ open, onClose }) {
                 value={(() => {
                   const r = current.router;
                   if (!r) return 'no router data';
-                  const mode   = r.mode || 'COMFORT';
-                  const conf   = r.confidence != null ? ` · conf ${(r.confidence * 100).toFixed(0)}%` : '';
-                  const crisis = r.crisis_override ? ' · crisis override' : '';
-                  return `${mode}${conf}${crisis}`;
+                  const mode    = (r.mode || 'COMFORT').toUpperCase();
+                  const conf    = r.confidence != null ? ` · conf ${(r.confidence * 100).toFixed(0)}%` : '';
+                  const crisis  = r.crisis_override ? ' · ⚠ crisis override' : '';
+                  // Rationale provides the exact rule that fired — truncated for readability.
+                  const rationale = r.rationale ? ` · ${r.rationale.slice(0, 90)}` : '';
+                  return `${mode}${conf}${crisis}${rationale}`;
                 })()}
                 empty={!current.router}
+              />
+
+              {/* ── Evidence retrieval (Step 2.5) ────────────────────────
+                  Only active in GUIDANCE mode. Shows adapters used (e.g.
+                  WebSearchAdapter, PubMedAdapter) and number of sources
+                  retrieved. Empty in COMFORT / CRISIS mode. */}
+              <AnalysisCard
+                step="2.5"
+                name="Evidence"
+                role="WebSearch / PubMed · Source retrieval"
+                value={(() => {
+                  const ev = current.evidence;
+                  const modeUpper = (current._mode || (current.is_crisis ? 'CRISIS' : 'COMFORT'));
+                  if (modeUpper !== 'GUIDANCE') return 'skipped — comfort / crisis mode';
+                  if (!ev) return '0 sources (no retrieval data)';
+                  const adapterList = Array.isArray(ev.adapters) && ev.adapters.length
+                    ? ev.adapters.join(', ')
+                    : 'no adapters recorded';
+                  const srcCount = Array.isArray(ev.sources) ? ev.sources.length : 0;
+                  const srcNames = Array.isArray(ev.sources) && ev.sources.length
+                    ? ` · ${ev.sources.slice(0, 3).join(', ')}${ev.sources.length > 3 ? '…' : ''}`
+                    : '';
+                  return `${adapterList} · ${srcCount} sources${srcNames}`;
+                })()}
+                empty={
+                  (current._mode || (current.is_crisis ? 'CRISIS' : 'COMFORT')) !== 'GUIDANCE'
+                    ? false   // show "skipped" label, not "no signals"
+                    : !current.evidence?.sources?.length
+                }
               />
 
               {/* ── ADP-A (Step 3) ───────────────────────────────────────
@@ -343,12 +374,17 @@ function AgentDebugOverlay({ open, onClose }) {
             <details className="debug-raw">
               <summary className="debug-raw-toggle">Raw pipeline payload</summary>
               <pre className="debug-detail-json">{JSON.stringify({
-                mode: current._mode, is_crisis: current.is_crisis, flags: current.flags,
+                mode: current._mode, is_crisis: current.is_crisis,
                 verdict: current.verdict, regen: current.regen, elapsed: current.elapsed,
+                execution_path: current.execution_path,
+                flags: current.flags,
                 pre_analysis: current.pre_analysis,
                 signal: current.signal,
                 router: current.router,
-                adp_b: current.adp_b, adp_a: current.adp_a, adp_c: current.adp_c,
+                evidence: current.evidence,
+                adp_a: current.adp_a, adp_b: current.adp_b, adp_c: current.adp_c,
+                safe_fallback: current.safe_fallback,
+                out_of_scope: current.out_of_scope,
               }, null, 2)}</pre>
             </details>
           </div>

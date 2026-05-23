@@ -81,7 +81,7 @@ function AgentRibbon({ traceId }) {
   const trace = NikkoAgentLog.get(traceId);
   if (!trace) return null;
   if (trace._processing) {
-    return /* @__PURE__ */ React.createElement("div", { className: "agent-ribbon processing", role: "note" }, /* @__PURE__ */ React.createElement("span", { className: "agent-ribbon-glyph", "aria-hidden": "true" }, /* @__PURE__ */ React.createElement("svg", { viewBox: "0 0 12 12", fill: "none", stroke: "currentColor", strokeWidth: "1.4", strokeLinecap: "round", strokeLinejoin: "round" }, /* @__PURE__ */ React.createElement("circle", { cx: "3", cy: "3", r: "1.4" }), /* @__PURE__ */ React.createElement("circle", { cx: "9", cy: "3", r: "1.4" }), /* @__PURE__ */ React.createElement("circle", { cx: "6", cy: "9", r: "1.4" }), /* @__PURE__ */ React.createElement("path", { d: "M3 3 9 3M3 3 6 9M9 3 6 9", opacity: "0.5" }))), /* @__PURE__ */ React.createElement("span", { className: "agent-ribbon-stage" }, trace._stage || "processing\u2026"));
+    return /* @__PURE__ */ React.createElement("div", { className: "agent-ribbon processing", role: "note" }, /* @__PURE__ */ React.createElement("span", { className: "agent-ribbon-stage" }, trace._stage || "processing\u2026"));
   }
   const mode = trace._mode || (trace.is_crisis ? "CRISIS" : "COMFORT");
   const modeLabels = {
@@ -90,7 +90,7 @@ function AgentRibbon({ traceId }) {
     COMFORT: "comfort mode"
   };
   const modeLabel = modeLabels[mode] || "comfort mode";
-  return /* @__PURE__ */ React.createElement("div", { className: "agent-ribbon", role: "note" }, /* @__PURE__ */ React.createElement("span", { className: "agent-ribbon-glyph", "aria-hidden": "true" }, /* @__PURE__ */ React.createElement("svg", { viewBox: "0 0 12 12", fill: "none", stroke: "currentColor", strokeWidth: "1.4", strokeLinecap: "round", strokeLinejoin: "round" }, /* @__PURE__ */ React.createElement("circle", { cx: "3", cy: "3", r: "1.4" }), /* @__PURE__ */ React.createElement("circle", { cx: "9", cy: "3", r: "1.4" }), /* @__PURE__ */ React.createElement("circle", { cx: "6", cy: "9", r: "1.4" }), /* @__PURE__ */ React.createElement("path", { d: "M3 3 9 3M3 3 6 9M9 3 6 9", opacity: "0.5" }))), /* @__PURE__ */ React.createElement("span", { className: "agent-ribbon-count" }, modeLabel));
+  return /* @__PURE__ */ React.createElement("div", { className: "agent-ribbon", role: "note" }, /* @__PURE__ */ React.createElement("span", { className: "agent-ribbon-count" }, modeLabel));
 }
 function useDebugGesture(onActivate) {
   const stateRef = ad_useRef({ count: 0, timer: null, lastDown: 0 });
@@ -161,10 +161,17 @@ function AgentDebugOverlay({ open, onClose }) {
       value: (() => {
         const s = current.signal;
         if (!s) return "no signal data";
-        const level = s.distress_level || "UNKNOWN";
+        const level = (s.distress_level || "UNKNOWN").toUpperCase();
         const conf = s.confidence != null ? ` \xB7 conf ${(s.confidence * 100).toFixed(0)}%` : "";
-        const tone = s.uncertainty_notes ? ` \xB7 ${s.uncertainty_notes.slice(0, 60)}` : "";
-        return `${level}${conf}${tone}`;
+        const parts = [];
+        if (s.emotional_states?.length) parts.push(`emotions: ${s.emotional_states.slice(0, 3).join(", ")}`);
+        if (s.cognitive_patterns?.length) parts.push(`cognition: ${s.cognitive_patterns.slice(0, 2).join(", ")}`);
+        if (s.behavioral_indicators?.length) parts.push(`behavior: ${s.behavioral_indicators.slice(0, 2).join(", ")}`);
+        if (s.support_needs?.length) parts.push(`needs: ${s.support_needs.join(", ")}`);
+        if (s.risk_indicators?.length) parts.push(`\u26A0 risk: ${s.risk_indicators.slice(0, 2).join(", ")}`);
+        const arrays = parts.join(" \xB7 ");
+        const note = !arrays && s.uncertainty_notes ? ` \xB7 ${s.uncertainty_notes.slice(0, 80)}` : "";
+        return `${level}${conf}${arrays ? " \xB7 " + arrays : note}`;
       })(),
       empty: !current.signal
     }
@@ -177,12 +184,31 @@ function AgentDebugOverlay({ open, onClose }) {
       value: (() => {
         const r = current.router;
         if (!r) return "no router data";
-        const mode = r.mode || "COMFORT";
+        const mode = (r.mode || "COMFORT").toUpperCase();
         const conf = r.confidence != null ? ` \xB7 conf ${(r.confidence * 100).toFixed(0)}%` : "";
-        const crisis = r.crisis_override ? " \xB7 crisis override" : "";
-        return `${mode}${conf}${crisis}`;
+        const crisis = r.crisis_override ? " \xB7 \u26A0 crisis override" : "";
+        const rationale = r.rationale ? ` \xB7 ${r.rationale.slice(0, 90)}` : "";
+        return `${mode}${conf}${crisis}${rationale}`;
       })(),
       empty: !current.router
+    }
+  ), /* @__PURE__ */ React.createElement(
+    AnalysisCard,
+    {
+      step: "2.5",
+      name: "Evidence",
+      role: "WebSearch / PubMed \xB7 Source retrieval",
+      value: (() => {
+        const ev = current.evidence;
+        const modeUpper = current._mode || (current.is_crisis ? "CRISIS" : "COMFORT");
+        if (modeUpper !== "GUIDANCE") return "skipped \u2014 comfort / crisis mode";
+        if (!ev) return "0 sources (no retrieval data)";
+        const adapterList = Array.isArray(ev.adapters) && ev.adapters.length ? ev.adapters.join(", ") : "no adapters recorded";
+        const srcCount = Array.isArray(ev.sources) ? ev.sources.length : 0;
+        const srcNames = Array.isArray(ev.sources) && ev.sources.length ? ` \xB7 ${ev.sources.slice(0, 3).join(", ")}${ev.sources.length > 3 ? "\u2026" : ""}` : "";
+        return `${adapterList} \xB7 ${srcCount} sources${srcNames}`;
+      })(),
+      empty: (current._mode || (current.is_crisis ? "CRISIS" : "COMFORT")) !== "GUIDANCE" ? false : !current.evidence?.sources?.length
     }
   ), /* @__PURE__ */ React.createElement(
     AdapterCard,
@@ -217,16 +243,20 @@ function AgentDebugOverlay({ open, onClose }) {
   )), /* @__PURE__ */ React.createElement("details", { className: "debug-raw" }, /* @__PURE__ */ React.createElement("summary", { className: "debug-raw-toggle" }, "Raw pipeline payload"), /* @__PURE__ */ React.createElement("pre", { className: "debug-detail-json" }, JSON.stringify({
     mode: current._mode,
     is_crisis: current.is_crisis,
-    flags: current.flags,
     verdict: current.verdict,
     regen: current.regen,
     elapsed: current.elapsed,
+    execution_path: current.execution_path,
+    flags: current.flags,
     pre_analysis: current.pre_analysis,
     signal: current.signal,
     router: current.router,
-    adp_b: current.adp_b,
+    evidence: current.evidence,
     adp_a: current.adp_a,
-    adp_c: current.adp_c
+    adp_b: current.adp_b,
+    adp_c: current.adp_c,
+    safe_fallback: current.safe_fallback,
+    out_of_scope: current.out_of_scope
   }, null, 2)))), /* @__PURE__ */ React.createElement("footer", { className: "debug-foot" }, /* @__PURE__ */ React.createElement("span", null, "Trace stays on this device \xB7 cleared on refresh"))));
 }
 Object.assign(window, { AgentRibbon, AgentDebugOverlay, useDebugGesture, buildAgentTrace, NikkoAgentLog });

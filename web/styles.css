@@ -1092,7 +1092,7 @@ body::before {
   justify-content: space-between;
   align-items: center;
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: 9px;
   letter-spacing: 0.06em;
   color: var(--faint);
   text-transform: uppercase;
@@ -1124,16 +1124,16 @@ body::before {
 
 .composer-foot .kbd {
   display: inline-flex;
-  height: 16px;
-  padding: 0 5px;
+  height: 13px;
+  padding: 0 4px;
   align-items: center;
-  border-radius: 4px;
+  border-radius: 3px;
   background: var(--bg-3);
   border: 1px solid var(--line);
-  font-size: 10px;
+  font-size: 8.5px;
   letter-spacing: 0;
   color: var(--ink-2);
-  margin: 0 2px;
+  margin: 0 1px;
 }
 
 .caret {
@@ -2084,11 +2084,7 @@ body::before {
   font-size: 10.5px;
   letter-spacing: 0.04em;
   color: var(--muted);
-}
-.agent-ribbon-glyph {
-  display: inline-flex;
-  width: 12px; height: 12px;
-  color: var(--accent);
+  opacity: 0.5;
 }
 .agent-ribbon-count {
   text-transform: uppercase;
@@ -2177,11 +2173,37 @@ body::before {
   display: flex; align-items: center; justify-content: center;
 }
 .mood-checkin-num:hover { border-color: var(--accent); color: var(--accent); }
+/* Active state: use the same gradient colour scale as the diary panel pips
+   (MOOD_COLORS in panels.jsx / pip.on[data-r] rules) so both surfaces are
+   visually consistent. Unselected buttons also get a very soft tint so the
+   scale is readable before clicking. */
 .mood-checkin-num.active {
-  background: var(--accent);
   color: #fff;
-  border-color: var(--accent);
+  border-color: transparent;
+  font-weight: 600;
 }
+/* Unselected tints — very subtle so they don't compete with selected state */
+.mood-checkin-num[data-r="1"]  { border-color: rgba(201, 90, 90, 0.25); }
+.mood-checkin-num[data-r="2"]  { border-color: rgba(215,116, 82, 0.25); }
+.mood-checkin-num[data-r="3"]  { border-color: rgba(219,143, 78, 0.25); }
+.mood-checkin-num[data-r="4"]  { border-color: rgba(212,163, 82, 0.25); }
+.mood-checkin-num[data-r="5"]  { border-color: rgba(201,178, 96, 0.25); }
+.mood-checkin-num[data-r="6"]  { border-color: rgba(169,183,106, 0.25); }
+.mood-checkin-num[data-r="7"]  { border-color: rgba(136,179,120, 0.25); }
+.mood-checkin-num[data-r="8"]  { border-color: rgba(106,171,131, 0.25); }
+.mood-checkin-num[data-r="9"]  { border-color: rgba( 79,156,140, 0.25); }
+.mood-checkin-num[data-r="10"] { border-color: rgba( 61,138,142, 0.25); }
+/* Active: solid fill from the same scale */
+.mood-checkin-num.active[data-r="1"]  { background: #c95a5a; }
+.mood-checkin-num.active[data-r="2"]  { background: #d77452; }
+.mood-checkin-num.active[data-r="3"]  { background: #db8f4e; }
+.mood-checkin-num.active[data-r="4"]  { background: #d4a352; }
+.mood-checkin-num.active[data-r="5"]  { background: #c9b260; }
+.mood-checkin-num.active[data-r="6"]  { background: #a9b76a; }
+.mood-checkin-num.active[data-r="7"]  { background: #88b378; }
+.mood-checkin-num.active[data-r="8"]  { background: #6aab83; }
+.mood-checkin-num.active[data-r="9"]  { background: #4f9c8c; }
+.mood-checkin-num.active[data-r="10"] { background: #3d8a8e; }
 .mood-checkin-scale-hint {
   display: flex;
   justify-content: space-between;
@@ -2655,16 +2677,28 @@ body::before {
   color: #fff;
   font-weight: 500;
 }
-/* mood color scale (1=red-ish through 10=green-ish) */
-.mood-rating-row .pip.on[data-r="1"] { background: #c95a5a; }
-.mood-rating-row .pip.on[data-r="2"] { background: #d77452; }
-.mood-rating-row .pip.on[data-r="3"] { background: #db8f4e; }
-.mood-rating-row .pip.on[data-r="4"] { background: #d4a352; }
-.mood-rating-row .pip.on[data-r="5"] { background: #c9b260; }
-.mood-rating-row .pip.on[data-r="6"] { background: #a9b76a; }
-.mood-rating-row .pip.on[data-r="7"] { background: #88b378; }
-.mood-rating-row .pip.on[data-r="8"] { background: #6aab83; }
-.mood-rating-row .pip.on[data-r="9"] { background: #4f9c8c; }
+/* mood color scale (1=red-ish through 10=green-ish) — unselected get a subtle
+   border tint so the gradient is visible before selection (equal visual weight) */
+.mood-rating-row .pip[data-r="1"]  { border-color: rgba(201, 90, 90, 0.30); color: rgba(201, 90, 90, 0.70); }
+.mood-rating-row .pip[data-r="2"]  { border-color: rgba(215,116, 82, 0.30); color: rgba(215,116, 82, 0.70); }
+.mood-rating-row .pip[data-r="3"]  { border-color: rgba(219,143, 78, 0.30); color: rgba(219,143, 78, 0.70); }
+.mood-rating-row .pip[data-r="4"]  { border-color: rgba(212,163, 82, 0.30); color: rgba(212,163, 82, 0.70); }
+.mood-rating-row .pip[data-r="5"]  { border-color: rgba(201,178, 96, 0.30); color: rgba(201,178, 96, 0.70); }
+.mood-rating-row .pip[data-r="6"]  { border-color: rgba(169,183,106, 0.30); color: rgba(169,183,106, 0.70); }
+.mood-rating-row .pip[data-r="7"]  { border-color: rgba(136,179,120, 0.30); color: rgba(136,179,120, 0.70); }
+.mood-rating-row .pip[data-r="8"]  { border-color: rgba(106,171,131, 0.30); color: rgba(106,171,131, 0.70); }
+.mood-rating-row .pip[data-r="9"]  { border-color: rgba( 79,156,140, 0.30); color: rgba( 79,156,140, 0.70); }
+.mood-rating-row .pip[data-r="10"] { border-color: rgba( 61,138,142, 0.30); color: rgba( 61,138,142, 0.70); }
+/* Selected (on) — solid fill, white text */
+.mood-rating-row .pip.on[data-r="1"]  { background: #c95a5a; }
+.mood-rating-row .pip.on[data-r="2"]  { background: #d77452; }
+.mood-rating-row .pip.on[data-r="3"]  { background: #db8f4e; }
+.mood-rating-row .pip.on[data-r="4"]  { background: #d4a352; }
+.mood-rating-row .pip.on[data-r="5"]  { background: #c9b260; }
+.mood-rating-row .pip.on[data-r="6"]  { background: #a9b76a; }
+.mood-rating-row .pip.on[data-r="7"]  { background: #88b378; }
+.mood-rating-row .pip.on[data-r="8"]  { background: #6aab83; }
+.mood-rating-row .pip.on[data-r="9"]  { background: #4f9c8c; }
 .mood-rating-row .pip.on[data-r="10"] { background: #3d8a8e; }
 
 .mood-chips {
@@ -2758,10 +2792,10 @@ body::before {
 .ai-disclaimer {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 12px 2px;
+  gap: 5px;
+  padding: 4px 12px 2px;
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 8.5px;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--faint);
@@ -2769,8 +2803,8 @@ body::before {
 }
 .ai-disclaimer svg {
   flex-shrink: 0;
-  width: 14px;
-  height: 14px;
+  width: 11px;
+  height: 11px;
   opacity: 0.55;
 }
 [data-theme="dark"] .ai-disclaimer { color: var(--muted); }

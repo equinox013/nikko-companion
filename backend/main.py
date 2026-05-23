@@ -445,14 +445,19 @@ def _result_to_trace(result: PipelineResult) -> dict:
     # added by the real SignalAgent when NIKKO_LOCAL_LLM=true (REQ-FIS-DB3).
     _signal_out = trace_obj.signal_output if trace_obj else {}
 
-    # Router decision — pull from trace.router_decision (currently just the mode
-    # string). RouterDecision.confidence is not currently persisted to trace;
-    # default 0.0 until pipeline.py is extended to store it (deferred REQ-FIS-DB4).
-    _router_out = {
-        "mode":       trace_obj.router_decision if trace_obj else mode_val,
-        "confidence": 0.0,  # placeholder — pipeline.py stores mode only for now
-        "crisis_override": False,
-    }
+    # Router decision — prefer full router_output dict (mode + confidence +
+    # crisis_override + rationale). Falls back to the legacy mode-string-only
+    # path if router_output is not yet populated (older in-flight requests).
+    # REQ-FIS-DB4.
+    if trace_obj and getattr(trace_obj, "router_output", None):
+        _router_out = trace_obj.router_output
+    else:
+        _router_out = {
+            "mode":           trace_obj.router_decision if trace_obj else mode_val,
+            "confidence":     0.0,
+            "crisis_override": False,
+            "rationale":      "",
+        }
 
     # Pre-analysis output — populated by HFSpaceFullGenerator when the Qwen3-4B
     # Step 1.5 structural pre-analysis pass has run (REQ-700-SA1 through SA7).
@@ -762,7 +767,8 @@ def _pipeline_run_sync(
                            before forwarding — silently drops oldest beyond that.
                            Session-scoped only; never persisted (SPEC-800).
     """
-    # Cap history depth server-side as a safety net (frontend already caps at 10).
+    # Cap history depth server-side as a safety net.
+    # Frontend now sends up to 20 turns; server cap matches to avoid silent drops.
     history = conversation_history[-20:] if conversation_history else None
     return _nikko.run(
         user_input=user_text,

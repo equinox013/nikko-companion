@@ -103,6 +103,12 @@ class HFSpaceFullGenerator:
         self._url      = hf_space_url.rstrip("/")
         self._token    = token
         self._fallback = fallback_url.rstrip("/") if fallback_url else None
+        # Side-channel: full pipeline response dict from the last generate() call.
+        # Written before generate() returns so _step10_draft() in pipeline.py can
+        # read it to populate trace.pre_analysis_output without changing the
+        # DraftGeneratorProtocol return-type interface. Thread-safe at request
+        # granularity (one request per NikkoPipeline instance on Render).
+        self._last_metadata: dict = {}
 
     def generate(self, context: ResponseContextPayload) -> str:
         """
@@ -291,6 +297,7 @@ class HFSpaceFullGenerator:
                 "Returning ADPB_CRISIS_SENTINEL for pipeline re-route.",
                 result.get("flags"),
             )
+            self._last_metadata = result   # preserve for trace even on crisis path
             return ADPB_CRISIS_SENTINEL
 
         # Modal LLM moderation pass detected coded hate (antisemitism, Islamophobia,
@@ -302,6 +309,7 @@ class HFSpaceFullGenerator:
                 "Returning MODERATION_BLOCK_SENTINEL.",
                 result.get("harm_category", "unknown"),
             )
+            self._last_metadata = result
             return MODERATION_BLOCK_SENTINEL
 
         # Modal LLM scope pass determined the message is OUT_OF_SCOPE for Nikko
@@ -313,6 +321,7 @@ class HFSpaceFullGenerator:
                 "Returning SCOPE_BLOCK_SENTINEL.",
                 result.get("oos_reason", ""),
             )
+            self._last_metadata = result
             return SCOPE_BLOCK_SENTINEL
 
         text = result.get("text", "")
@@ -341,4 +350,8 @@ class HFSpaceFullGenerator:
             result.get("elapsed", 0),
             len(text),
         )
+        # Store full result for side-channel metadata read in _step10_draft().
+        # Includes pre_analysis_raw, enhanced_signal, enhanced_strategy, and
+        # raw adapter outputs for the debug trace panel. REQ-FIS-DB1.
+        self._last_metadata = result
         return text

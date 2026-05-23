@@ -248,7 +248,7 @@ const AFFIRMATIONS = [
   "Reading between the lines\u2026",
   "You deserve a thoughtful reply."
 ];
-const CHECKIN_EMOTIONS = ["calm", "content", "anxious", "low", "overwhelmed", "sad", "numb", "hopeful", "irritable", "tired"];
+const CHECKIN_EMOTIONS = ["calm", "tired", "anxious", "low", "sad", "hopeful", "content", "overwhelmed", "numb", "irritable"];
 function MoodCheckInPopup({ onLog, onSkip }) {
   const [rating, setRating] = React.useState(null);
   const [selected, setSelected] = React.useState([]);
@@ -263,6 +263,7 @@ function MoodCheckInPopup({ onLog, onSkip }) {
     "button",
     {
       key: n,
+      "data-r": n,
       className: "mood-checkin-num" + (rating === n ? " active" : ""),
       onClick: () => setRating(n),
       "aria-pressed": rating === n,
@@ -407,6 +408,21 @@ function Chat({ theme, onToggleTheme }) {
   useEffect(() => {
     setTimeout(scrollToBottom, 50);
   }, [messages.length, scrollToBottom]);
+  useEffect(() => {
+    setTimeout(scrollToBottom, 80);
+  }, [moodCheckIn, scrollToBottom]);
+  useEffect(() => {
+    setTimeout(scrollToBottom, 80);
+  }, [safetyVisible, scrollToBottom]);
+  useEffect(() => {
+    setTimeout(scrollToBottom, 80);
+  }, [memBanner, scrollToBottom]);
+  useEffect(() => {
+    setTimeout(scrollToBottom, 80);
+  }, [techniqueCheckIn, scrollToBottom]);
+  useEffect(() => {
+    setTimeout(scrollToBottom, 80);
+  }, [pendingEntries.length, scrollToBottom]);
   const onMemoryLoaded = useCallback((md, name, sessionKey = null, isNew = false) => {
     memContentRef.current = md || null;
     sessionKeyRef.current = sessionKey;
@@ -565,7 +581,7 @@ function Chat({ theme, onToggleTheme }) {
       }
       const historyRaw = messages.filter(
         (m) => m.id !== "open" && !String(m.id).startsWith("wb-") && !m.streaming && m.text && (m.role === "user" || m.role === "assistant")
-      ).slice(-10).map((m) => ({ role: m.role, text: m.text }));
+      ).slice(-20).map((m) => ({ role: m.role, text: m.text }));
       if (historyRaw.length > 0) {
         reqBody.conversationHistory = historyRaw;
       }
@@ -620,7 +636,12 @@ function Chat({ theme, onToggleTheme }) {
                 }
                 accText = target;
                 if (data.trace) {
-                  NikkoAgentLog.update(id, { ...data.trace, liveData: true, _processing: false });
+                  NikkoAgentLog.update(id, {
+                    ...data.trace,
+                    _mode: (data.trace.mode || "").toUpperCase() || void 0,
+                    liveData: true,
+                    _processing: false
+                  });
                 }
                 if (data.sources && data.sources.length > 0) {
                   setMessages((prev) => prev.map(
@@ -798,7 +819,7 @@ function Chat({ theme, onToggleTheme }) {
       if (m.role === "user") {
         return /* @__PURE__ */ React.createElement("div", { className: "msg user", key: m.id }, /* @__PURE__ */ React.createElement("div", { className: "body" }, /* @__PURE__ */ React.createElement("div", { className: "bubble" }, m.text)));
       }
-      return /* @__PURE__ */ React.createElement(React.Fragment, { key: m.id }, /* @__PURE__ */ React.createElement("div", { className: "msg assistant" }, /* @__PURE__ */ React.createElement("div", { className: "avatar-slot" }, /* @__PURE__ */ React.createElement(NikkoAvatar, { emotion: m.emotion || "calm", size: 42 })), /* @__PURE__ */ React.createElement("div", { className: "body" }, m.text === "" && m.streaming ? /* @__PURE__ */ React.createElement(ThinkingBubble, { coldStart: isColdStart }) : /* @__PURE__ */ React.createElement("div", { className: "bubble" }, /* @__PURE__ */ React.createElement(
+      return /* @__PURE__ */ React.createElement(React.Fragment, { key: m.id }, /* @__PURE__ */ React.createElement("div", { className: "msg assistant" }, /* @__PURE__ */ React.createElement("div", { className: "avatar-slot" }, /* @__PURE__ */ React.createElement(NikkoAvatar, { emotion: m.emotion || "calm", size: 42 })), /* @__PURE__ */ React.createElement("div", { className: "body" }, m.traceId && m.id === lastAssistantId && /* @__PURE__ */ React.createElement(AgentRibbon, { traceId: m.traceId }), m.text === "" && m.streaming ? /* @__PURE__ */ React.createElement(ThinkingBubble, { coldStart: isColdStart }) : /* @__PURE__ */ React.createElement("div", { className: "bubble" }, /* @__PURE__ */ React.createElement(
         MessageBody,
         {
           text: m.text,
@@ -818,7 +839,7 @@ function Chat({ theme, onToggleTheme }) {
         " source",
         m.sources.length !== 1 ? "s" : "",
         " used"
-      ), idx === 0 && showSuggestions && /* @__PURE__ */ React.createElement("div", { className: "suggest-row" }, NIKKO_SUGGESTIONS.map((s) => /* @__PURE__ */ React.createElement("button", { key: s, className: "suggest", onClick: () => onSend(s) }, s))), m.traceId && m.id === lastAssistantId && /* @__PURE__ */ React.createElement(AgentRibbon, { traceId: m.traceId }))), moodCheckIn && m.id === moodCheckIn.wbId && /* @__PURE__ */ React.createElement(
+      ), idx === 0 && showSuggestions && /* @__PURE__ */ React.createElement("div", { className: "suggest-row" }, NIKKO_SUGGESTIONS.map((s) => /* @__PURE__ */ React.createElement("button", { key: s, className: "suggest", onClick: () => onSend(s) }, s))))), moodCheckIn && m.id === moodCheckIn.wbId && /* @__PURE__ */ React.createElement(
         MoodCheckInPopup,
         {
           onLog: onMoodCheckInLog,
