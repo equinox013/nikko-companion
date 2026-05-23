@@ -320,103 +320,96 @@ _STRATEGY_SYSTEM = (
 #   Backward-compatible: ADP-B ignores the note field if it cannot parse it.
 #
 # Output format: compact JSON with a single "annotations" string.
-# Example: {"annotations": "[PARA: tone_softener] [STRUCT: fragmented_syntax]"}
-# Empty annotations: {"annotations": ""}
+# NARROWED to semantic PARA signals only (Director-approved 2026-05-23).
+# Previously covered 14 signals including all STRUCT signals and non-semantic PARA
+# signals (expressive_lengthening, punctuation_urgency, keysmash, emoji_distress,
+# asterisk_action). Those are now handled deterministically by
+# backend/paralinguistic_detector.py on Render and passed in as struct_annotations.
+#
+# This prompt covers ONLY signals that require Qwen3-4B's language understanding:
+#   [PARA: tone_softener]        — laughter token in the context of distress
+#   [PARA: minimisation]         — distress walked back with dismissive language
+#   [PARA: mixed_affect]         — contradictory emotions within one message
+#   [PARA: typographic_register] — formal→informal register shift (NOT asterisk actions;
+#                                  those are now [PARA: asterisk_action] via regex)
+#   [STRUCT: fragmented_syntax]  — broken grammar / incomplete clauses
+#   [STRUCT: register_collapse]  — structural degradation from sentences to fragments
+#
+# Example merged output: "[STRUCT: all_lowercase] [STRUCT: ellipsis_trail] [PARA: tone_softener]"
+# (struct_annotations from Render + LLM PARA tags merged in _run_structural_pre_analysis)
 _PRE_ANALYSIS_SYSTEM = (
-    "You are a paralinguistic and structural signal detector for a mental health AI. "
-    "Analyse the user message for the following signals and output ONLY a JSON object "
-    "with key 'annotations' containing a space-separated list of detected tags, or an "
-    "empty string if none are detected.\n\n"
+    "You are a semantic paralinguistic signal detector for a mental health AI. "
+    "Your role is to identify signals that require understanding of what the words "
+    "MEAN in context — not surface patterns (those are handled separately). "
+    "Output ONLY a JSON object with key 'annotations' containing a space-separated "
+    "list of detected tags, or an empty string if none apply.\n\n"
 
     # ── Design principle ─────────────────────────────────────────────────────────
-    # Paralinguistic markers set AROUSAL / INTENSITY. Words set valence.
-    # A message scored as non-distressed lexically but flagged for high-arousal
-    # signals should have its distress reading adjusted upward. Never use these
-    # tags as standalone emotion labels — they are intensity modifiers for ADP-B.
+    # These signals require semantic judgment about what the words mean together.
+    # Surface patterns (all-lowercase, repeated letters, emoji, punctuation runs)
+    # are already detected by a separate regex engine and will be merged with your output.
+    # DO NOT re-detect: all_lowercase, ellipsis_trail, all_caps_segment,
+    # expressive_lengthening, punctuation_urgency, keysmash, emoji_distress, asterisk_action.
+    # Focus only on the 6 signals below.
     # Source basis: McCulloch (2019), Al Tawil (2019), Wylie (2020),
     # Apriliani & Muslim (2021). See docs/paralinguistic_emotion_cues.md.
 
-    "SIGNALS TO DETECT:\n\n"
+    "SIGNALS TO DETECT (semantic context required):\n\n"
 
-    "── PARALINGUISTIC (how something is said) ──\n"
-    "[PARA: tone_softener] — laughter token ('lol', 'haha', 'hehe', 'lmao', 'jk', 'kidding') "
-    "appearing IMMEDIATELY AFTER or within the same clause as a distress statement. "
-    "The laughter is doing face-saving work, not expressing genuine amusement. "
-    "Example: 'I hate my life lol' → YES. 'That movie was hilarious lol' → NO. "
-    "'I want to disappear haha' → YES.\n"
+    "[PARA: tone_softener] — A laughter token ('lol', 'haha', 'hehe', 'lmao', 'jk', "
+    "'kidding', 'xD') appears IMMEDIATELY AFTER or within the SAME CLAUSE as a distress "
+    "statement. The laughter is doing face-saving work — masking genuine distress, not "
+    "expressing genuine amusement. Context is everything: 'I hate my life lol' → YES "
+    "(laughter after distress). 'That movie was hilarious lol' → NO (genuine amusement). "
+    "'I want to disappear haha' → YES. 'I'm fine haha' after stating something sad → YES.\n"
 
-    "[PARA: minimisation] — distress statement immediately walked back with dismissive language: "
-    "'it's fine', 'nvm', 'never mind', 'doesn't matter', 'forget it', 'not a big deal', 'ignore me'. "
-    "The person opened the door then closed it. "
-    "Example: 'I've been really struggling, it's fine though' → YES.\n"
+    "[PARA: minimisation] — A distress statement is immediately walked back or dismissed "
+    "with language like: 'it's fine', 'nvm', 'never mind', 'doesn't matter', 'forget it', "
+    "'not a big deal', 'ignore me', 'whatever', 'I'll be ok'. The person opened a door "
+    "to distress and then closed it. The KEY is the PAIRING: distress expression followed "
+    "by dismissal within the same message. "
+    "Example: 'I've been really struggling lately, it's fine though' → YES. "
+    "'Everything is terrible nvm forget I said anything' → YES. "
+    "'I'm fine' alone → NO (no prior distress to minimise).\n"
 
-    "[PARA: mixed_affect] — contradictory emotional signals within the same message. "
-    "Example: 'I'm so happy but I keep crying and I don't know why'. "
-    "'Everything is fine I just feel empty' → YES.\n"
+    "[PARA: mixed_affect] — The message contains CONTRADICTORY emotional signals — "
+    "the words pull in opposite directions within the same message. Not just ambivalence, "
+    "but genuine contradiction. "
+    "Example: 'I'm so happy but I keep crying and I don't know why' → YES. "
+    "'Everything is fine I just feel completely empty' → YES. "
+    "'I had a bad day but I know it'll get better' → NO (acknowledgment + hope is not contradiction).\n"
 
-    "[PARA: typographic_register] — abrupt shift within the message from formal/complete "
-    "sentences to very casual abbreviations, slang, or single-word utterances. "
-    "Example: 'I have been experiencing significant distress ... idk man whatever' → YES. "
-    "Also fires for asterisk-wrapped actions (*sigh*, *cries*, *shakes*) — explicit stage-direction "
-    "tone annotation that bypasses verbal expression. Example: '*stares at wall*' → YES.\n"
+    "[PARA: typographic_register] — An ABRUPT SHIFT within the message from formal / "
+    "complete sentences to very casual abbreviations, slang, fragmented speech, or "
+    "single-word utterances. The shift signals the person running out of composed language "
+    "mid-message. "
+    "Example: 'I have been experiencing significant distress lately ... idk man whatever' → YES. "
+    "'Things have been really difficult. I don't know. just. yeah.' → YES. "
+    "A message that is casual throughout does NOT fire this tag — only an INTERNAL SHIFT does.\n"
 
-    "[PARA: expressive_lengthening] — letters repeated 3+ times to mimic a drawn-out spoken "
-    "sound, amplifying the emotional weight of the base word. The arousal level tracks the "
-    "repeat count. "
-    "Example: 'I can't doooo this', 'pleaseeee', 'nooo', 'I'm so tireddddd' → YES. "
-    "Legitimate doubles ('committee', 'letter') are excluded by the 3+ threshold.\n"
+    "[STRUCT: fragmented_syntax] — Sentences or thoughts stop mid-clause without "
+    "resolution — broken grammar that reveals the person cannot complete the thought. "
+    "DISTINCT from ellipsis trail (trailing dots): this is about broken sentence structure, "
+    "not stylistic pauses. "
+    "Example: 'I just feel like' (stops) → YES. 'I don't know I just' (stops) → YES. "
+    "'h-hi there' (stutter) → YES. "
+    "'I feel tired... and sad...' → NO (complete thought with ellipsis, not broken grammar).\n"
 
-    "[PARA: punctuation_urgency] — two or more consecutive question marks (??), "
-    "two or more exclamation marks (!!), or mixed ?! combinations. "
-    "Signals confusion, disbelief, urgency, or shock — elevated arousal regardless of valence. "
-    "Example: 'why is this happening??' → YES. 'what?!' → YES. "
-    "Single ? or single ! do NOT fire this tag.\n"
+    "[STRUCT: register_collapse] — The message OPENS with structured full sentences "
+    "and DEGRADES by the end to single words, fragments, or non-verbal sounds — "
+    "structural deterioration as the person runs out of words or emotional energy. "
+    "The collapse must be visible from start to end of the same message. "
+    "Example: 'I've been trying so hard to hold everything together. Nothing is working. "
+    "just. ugh. 😔' → YES. "
+    "'I'm tired and sad' → NO (consistently short throughout, no collapse).\n\n"
 
-    "[PARA: keysmash] — haphazard keyboard mashing expressing emotional overwhelm or being "
-    "lost for words: 'asdfjkl;', 'fjdkslafjdsk', 'jfkdlsajfklds'. "
-    "Characteristics: 5+ alpha characters, low vowel ratio (<35%), high home-row ratio (>50%). "
-    "Example: 'I just aksdjfhkajsdhf I can't even' → YES. "
-    "Real words and abbreviations do NOT fire this tag.\n"
-
-    "[PARA: emoji_distress] — one or more distress-coded emoji (😭 😔 💔 😶 😶‍🌫️ 🥺 😞 😣 😢 🖤 💀), "
-    "OR any emoji repeated 3+ times (repetition amplifies intensity regardless of which emoji). "
-    "Example: '😭😭😭' → YES. '💔' → YES. '😊😊😊' → YES (repetition). '👍' alone → NO.\n\n"
-
-    "── STRUCTURAL (the shape of the message) ──\n"
-    "[STRUCT: fragmented_syntax] — incomplete sentences or thoughts that stop mid-clause "
-    "without resolution. Distinct from ellipsis trail (below): this is about broken grammar, "
-    "not trailing off. Example: 'I just feel like', 'I don't know I just', 'h-hi there' → YES.\n"
-
-    "[STRUCT: ellipsis_trail] — message contains two or more ellipsis clusters (... or …), "
-    "especially at the end of clauses or sentences. Signals hesitation at the edge of saying "
-    "something difficult — the person is approaching a disclosure but not completing it. "
-    "Example: 'I just feel like... I don't know... it doesn't matter...' → YES. "
-    "A single ellipsis for stylistic pause does NOT fire this tag.\n"
-
-    "[STRUCT: all_caps_segment] — isolated ALL CAPS burst in an otherwise mixed-case message — "
-    "an intensity spike that amplifies whatever emotion surrounds it. "
-    "Exclude common acronyms (LOL, OK, OMG, WTF, FYI, ASAP, IDK). "
-    "Example: 'I can't do this anymore I JUST WANT IT TO STOP' → YES. 'I feel OK' → NO.\n"
-
-    "[STRUCT: all_lowercase] — entire message contains no uppercase letters despite being "
-    "multiple words long. McCulloch's 'minimalist typography': deliberate absence of capitals "
-    "signals a sincere, deadpan, or emotionally drained register — the person is not performing "
-    "normality. Only meaningful when the message is 4+ words. "
-    "Example: 'i don't know what to do anymore' → YES. 'ok' → NO (too short).\n"
-
-    "[STRUCT: register_collapse] — message opens with full sentences and degrades to single "
-    "words, fragments, or emoji-only by the end — structural deterioration as the person "
-    "runs out of words or emotional energy mid-message. "
-    "Example: 'I've been trying so hard. Nothing works. ugh. 😔' → YES.\n\n"
-
-    "IMPORTANT RULES:\n"
-    "1. Only tag signals that are CLEARLY present. When uncertain, omit the tag. "
-    "A false positive causes over-sensitivity; a false negative is preferable.\n"
-    "2. These tags signal AROUSAL and INTENSITY — not specific emotions. "
-    "Do not infer valence from the tags alone.\n"
-    "3. Multiple tags may fire on the same message.\n"
+    "RULES:\n"
+    "1. These signals require understanding what the words MEAN together. "
+    "If you cannot tell from the text alone, do NOT tag it.\n"
+    "2. These signals indicate AROUSAL and MASKING patterns — not emotion labels.\n"
+    "3. Multiple tags may fire. Output ALL that apply.\n"
     "4. Output ONLY the JSON object. No explanation. No preamble.\n"
-    'Example output: {"annotations": "[PARA: tone_softener] [STRUCT: ellipsis_trail] [PARA: expressive_lengthening]"}\n'
+    'Example: {"annotations": "[PARA: tone_softener] [PARA: minimisation]"}\n'
     'No signals: {"annotations": ""}'
 )
 
@@ -868,52 +861,72 @@ class NikkoInference:
             log.warning(f"[signal_llm] failed ({exc}), returning no-op enrichment")
             return {"tone_note": "", "distress_nudge": None, "confidence_adjustment": 0.0}
 
-    def _run_structural_pre_analysis(self, user_text: str) -> dict:
+    def _run_structural_pre_analysis(
+        self, user_text: str, struct_annotations: str = ""
+    ) -> dict:
         """
-        Step 1.5: Qwen3-4B structural pre-analysis pass (REQ-700-SA1 through SA7).
+        Step 1.5: Hybrid structural pre-analysis pass (REQ-700-SA1 through SA7).
 
-        Runs AFTER Pass 0 (moderation + scope) and BEFORE ADP-A.
+        SPLIT ARCHITECTURE (Director-approved 2026-05-23):
+        ──────────────────────────────────────────────────
+        Deterministic STRUCT + non-semantic PARA signals are now handled by
+        `backend/paralinguistic_detector.py` on Render (regex/heuristic), passed
+        in as `struct_annotations`. This function now handles ONLY the semantic
+        PARA signals that genuinely require Qwen3-4B:
 
-        enable_thinking is now FALSE (Director-approved 2026-05-23, changed from True):
-        Pre-analysis is a direct pattern-matching task — the signals are either
-        present in the text or they are not. CoT thinking mode was actively hurting
-        performance: Qwen3-4B reasoned itself out of firing obvious signals
-        (all_lowercase, ellipsis_trail) by hedging — "this might just be casual style"
-        — and returned empty annotations consistently. Disabling thinking forces
-        direct pattern-to-tag mapping, which is the correct approach for a
-        deterministic signal-detection task. Token budget reduced back to 256 —
-        the <think> scratchpad no longer needs headroom, and JSON output for a
-        full annotation set is well under 100 tokens.
+          Semantic PARA signals (LLM):
+            [PARA: tone_softener]        — laughter AFTER distress (context-dependent)
+            [PARA: minimisation]         — distress walked back ("it's fine")
+            [PARA: mixed_affect]         — contradictory emotions
+            [PARA: typographic_register] — formal→informal register shift
+            [STRUCT: fragmented_syntax]  — broken grammar / incomplete clauses
+            [STRUCT: register_collapse]  — degradation from sentences to fragments
 
-        Returns a dict:
-            {"annotations": "[PARA: tone_softener] [STRUCT: fragmented_syntax]"}
-        or {"annotations": ""} if no signals detected.
+        Deterministic signals (already in struct_annotations from Render):
+            [STRUCT: all_lowercase]      [STRUCT: ellipsis_trail]
+            [STRUCT: all_caps_segment]   [PARA: expressive_lengthening]
+            [PARA: punctuation_urgency]  [PARA: keysmash]
+            [PARA: emoji_distress]       [PARA: asterisk_action]
 
-        On error, returns {"annotations": "", "error": "<reason>"} —
-        asymmetric error policy: a failed pre-analysis never blocks the pipeline.
-        The injection into ADP-B is skipped when annotations is empty or errored.
+        WHY THINKING MODE IS OFF:
+        enable_thinking=False (changed 2026-05-23): CoT was causing Qwen3-4B to
+        reason itself out of firing even obvious signals. For the remaining semantic
+        PARA signals, direct generation produces more reliable JSON output because
+        the task is still pattern-matching (is this specific phenomenon present?)
+        rather than nuanced multi-step reasoning.
 
-        [CONCEPT] Why thinking mode here but not for ADP-A?
-        The pre-analysis task is ANALYTICAL (detect subtle signals that may be
-        counterintuitive — e.g., "lol" after distress = minimisation, not humour).
-        Chain-of-thought helps the model reason through the nuance before committing
-        to a tag. ADP-A's task is GENERATIVE (empathetic response) where CoT adds
-        latency and tends to produce more analytical-sounding prose, not better empathy.
+        MERGE LOGIC:
+        struct_annotations (Render, guaranteed) + LLM PARA tags are combined
+        into a single annotation string. If the LLM pass fails, struct_annotations
+        alone is returned — the asymmetric error policy ensures deterministic
+        signals are never lost to an LLM failure.
+
+        Returns:
+            {"annotations": "<merged string>"} — may be empty if no signals found
+            {"annotations": "", "error": "..."} — on LLM failure (struct tags preserved)
         """
         try:
             raw = self._infer_qwen_analysis(
                 user_content=f'User message to analyse: "{user_text}"',
                 system=_PRE_ANALYSIS_SYSTEM,
                 gen_params=ANALYSIS_GEN_PARAMS["structural_pre_analysis"],
-                enable_thinking=False,  # Direct pattern-match task — CoT hurts. See docstring.
+                enable_thinking=False,
             )
-            result      = self._parse_json(raw)
-            annotations = str(result.get("annotations", "")).strip()
-            log.info("[pre_analysis] annotations=%r", annotations or "(none)")
-            return {"annotations": annotations}
+            result       = self._parse_json(raw)
+            llm_para_raw = str(result.get("annotations", "")).strip()
+            log.info("[pre_analysis/llm] para_annotations=%r", llm_para_raw or "(none)")
         except Exception as exc:
-            log.warning("[pre_analysis] failed (%s) — skipping injection (asymmetric error policy).", exc)
-            return {"annotations": "", "error": str(exc)}
+            log.warning(
+                "[pre_analysis/llm] failed (%s) — will use struct_annotations only.", exc
+            )
+            llm_para_raw = ""
+
+        # Merge: Render struct tags first, then LLM semantic PARA tags.
+        # Preserves order: STRUCT signals before PARA signals in the ADP-B context.
+        parts = [p for p in (struct_annotations.strip(), llm_para_raw) if p]
+        merged = " ".join(parts)
+        log.info("[pre_analysis/merged] annotations=%r", merged or "(none)")
+        return {"annotations": merged}
 
     @staticmethod
     def _sentence_capitalize(text: str) -> str:
@@ -1120,15 +1133,16 @@ class NikkoInference:
     @modal.method()
     def run_pipeline(
         self,
-        messages:           list,
-        system:             str,
-        safety_system:      str,
-        eval_system:        str,
-        user_text:          str        = "",
-        run_analysis:       bool       = True,
-        scope_ambiguous:    bool       = False,
-        rule_signal:        dict | None = None,
-        base_strategy_text: str        = "",
+        messages:            list,
+        system:              str,
+        safety_system:       str,
+        eval_system:         str,
+        user_text:           str        = "",
+        run_analysis:        bool       = True,
+        scope_ambiguous:     bool       = False,
+        rule_signal:         dict | None = None,
+        base_strategy_text:  str        = "",
+        struct_annotations:  str        = "",
     ) -> dict:
         """
         Full ADP-B → ADP-A → ADP-C pipeline in a single GPU session.
@@ -1228,9 +1242,19 @@ class NikkoInference:
             # [REQ-700-SA1] Detect paralinguistic and structural signals (SPEC-100 §16)
             # BEFORE running the adapter stages. Annotations are injected into ADP-B's
             # context so the safety classifier sees masked/minimised distress cues.
-            # Runs in thinking mode (chain-of-thought) for higher signal accuracy.
-            # Any failure is silently skipped — annotations default to "" (no injection).
-            pre_result      = self._run_structural_pre_analysis(_user_text)
+            #
+            # Split architecture (Director-approved 2026-05-23):
+            #   struct_annotations  — pre-computed by Render's paralinguistic_detector.py
+            #                         (regex/heuristic; guaranteed accuracy for STRUCT +
+            #                          non-semantic PARA signals)
+            #   LLM PARA pass       — Qwen3-4B detects semantic PARA signals only
+            #                          (tone_softener, minimisation, mixed_affect,
+            #                           typographic_register, fragmented_syntax,
+            #                           register_collapse)
+            # The two sets are merged here into the final pre_analysis_raw string.
+            # Any failure in the LLM pass is silently skipped — struct_annotations
+            # alone is still injected into ADP-B (asymmetric error policy).
+            pre_result       = self._run_structural_pre_analysis(_user_text, struct_annotations)
             pre_analysis_raw = pre_result.get("annotations", "")
 
             # ── Pass 1: Signal enrichment ─────────────────────────────────────
@@ -1380,11 +1404,16 @@ def pipeline(request: dict):
 
     Request shape:  { messages, system, safety_system, eval_system, token,
                       user_text?, run_analysis?, scope_ambiguous?, rule_signal?,
-                      base_strategy_text? }
+                      base_strategy_text?, struct_annotations? }
     Response shape: { text, is_crisis, flags, verdict, regen, elapsed,
                       adp_b_raw, adp_a_raw, adp_c_raw,
                       pre_analysis_raw, scope_verdict,
                       enhanced_signal, enhanced_strategy }
+
+    struct_annotations: Space-separated deterministic annotation string emitted by
+    backend/paralinguistic_detector.py on Render (8 STRUCT + non-semantic PARA signals).
+    Merged with Qwen3-4B semantic PARA tags in _run_structural_pre_analysis() and
+    injected into ADP-B's safety system prompt. Defaults to "" (no-op) if absent.
 
     Token auth: NIKKO_INTERNAL_TOKEN shared between this endpoint and Render.
     Set via: modal secret create nikko-config NIKKO_INTERNAL_TOKEN=<value>
@@ -1408,6 +1437,7 @@ def pipeline(request: dict):
         request.get("scope_ambiguous", False),
         request.get("rule_signal") or None,
         request.get("base_strategy_text", ""),
+        request.get("struct_annotations", ""),   # Render-side deterministic signals (split architecture)
     )
     # Stamp the Modal container's load timestamp onto every response so Render
     # can log which Modal deploy served this request. _MODAL_LOAD_TS is set once

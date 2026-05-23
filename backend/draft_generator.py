@@ -51,6 +51,7 @@ from backend.context_prompt_builder import (
     build_adp_b_system,
     build_adp_c_system,
 )
+from backend.paralinguistic_detector import detect as detect_struct_signals
 from docs.schemas.acp_schemas import ResponseContextPayload
 from orchestration.pipeline import (
     ADPB_CRISIS_SENTINEL,
@@ -190,12 +191,39 @@ class HFSpaceFullGenerator:
         # via the scope_ambiguous field added to ResponseContextPayload.
         scope_ambiguous = getattr(context, "scope_ambiguous", False)
 
+        # ── Render-side deterministic signal detection ───────────────────────────
+        # Run the regex/heuristic paralinguistic detector BEFORE the Modal call.
+        # This handles STRUCT signals (all_lowercase, ellipsis_trail, all_caps_segment)
+        # and non-semantic PARA signals (expressive_lengthening, punctuation_urgency,
+        # keysmash, emoji_distress, asterisk_action) with guaranteed accuracy —
+        # no LLM hedging, zero latency cost.
+        #
+        # The result (struct_annotations) is sent to Modal alongside the message.
+        # Modal's Qwen3-4B pre-analysis handles only the semantic PARA signals
+        # (tone_softener, minimisation, mixed_affect, typographic_register,
+        # fragmented_syntax, register_collapse) that genuinely require understanding
+        # of what the words mean in context.
+        #
+        # Modal merges struct_annotations + LLM PARA annotations into the final
+        # pre_analysis_raw string injected into ADP-B. (Director-approved 2026-05-23)
+        struct_annotations = detect_struct_signals(user_msg)
+        if struct_annotations:
+            logger.info(
+                "HFSpaceFullGenerator: struct signals detected — %s", struct_annotations
+            )
+        else:
+            logger.debug("HFSpaceFullGenerator: no struct signals detected.")
+
         payload = {
             "messages":           messages,
             "system":             adp_a_system,             # RAG evidence injected here
             "safety_system":      build_adp_b_system(),
             "eval_system":        build_adp_c_system(context),
             "token":              self._token,
+            # Render-side struct annotations pre-computed by paralinguistic_detector.
+            # Modal merges these with its own LLM PARA annotations before injecting
+            # into ADP-B. Empty string when no signals detected (never None).
+            "struct_annotations": struct_annotations,
             # Analysis preamble params — enriches ADP-A response with LLM nuance.
             # Modal defaults run_analysis=True; Qwen3-4B is always loaded there.
             "user_text":          user_msg,
