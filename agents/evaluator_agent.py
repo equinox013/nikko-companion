@@ -292,6 +292,25 @@ _TONE_VIOLATION_PATTERNS: list[tuple[str, str, re.Pattern]] = [
          r"(can|could) you (tell|describe|explain) (me |to me )?(more|further|what)|"
          r"I'?d (like|love|want) to (understand|know|hear) (more|a bit more|a little more)))\b", _I)),
 
+    # ANY mode: negative character judgment of a third party (G-SYCO-01)
+    # Catches "such an annoying person", "what a terrible manager" — validating
+    # the user's negative interpretation of others as objective character fact.
+    # Unlike sycophancy patterns, this fails regardless of exploration context —
+    # there is no exploratory counterbalance that makes a character slur acceptable.
+    ("ANY", "Negative character judgment of third party",
+     re.compile(
+         r"\b(what a(n)? (terrible|awful|horrible|toxic|dreadful|abusive|"
+         r"manipulative|unreasonable|disrespectful|rude|ignorant|difficult|"
+         r"exhausting|nightmare) (manager|boss|person|colleague|coworker|"
+         r"partner|supervisor|employer|team)|"
+         r"(sounds?|seems?) like (a |an )?(terrible|awful|horrible|toxic|"
+         r"nightmare|abusive|manipulative|unreasonable|difficult) "
+         r"(manager|boss|person|situation|workplace|environment)|"
+         r"such an? (annoying|awful|terrible|toxic|difficult|unreasonable|"
+         r"frustrating|horrible) (person|manager|boss|colleague|coworker))\b",
+         re.IGNORECASE,
+     )),
+
     # ANY mode: minimising or invalidating
     ("ANY", "Minimising or invalidating the user's experience",
      re.compile(
@@ -358,7 +377,10 @@ _HALLUCINATION_PATTERNS: list[tuple[str, re.Pattern]] = [
 # and immediate stabilisation take absolute priority over reframing. (G-SYCO-01)
 
 _SYCOPHANCY_PATTERNS: list[tuple[str, re.Pattern]] = [
-    ("Unconditional premise endorsement without exploration",
+
+    # Explicit form — direct unconditional premise endorsement.
+    # "you're completely right", "that's entirely justified", etc.
+    ("Explicit unconditional premise endorsement",
      re.compile(
          r"\b(you'?re (absolutely|completely|totally|entirely|perfectly) right\b|"
          r"that'?s (absolutely|completely|totally|entirely|perfectly) "
@@ -369,23 +391,73 @@ _SYCOPHANCY_PATTERNS: list[tuple[str, re.Pattern]] = [
          r"(exactly )?(the same|that way|like that|as you do)\b)",
          re.IGNORECASE,
      )),
+
+    # Soft form A — unhedged motive attribution to a named third party.
+    # "your manager didn't value your work" states intent as fact.
+    # Hedged equivalents ("it sounds like your manager didn't value...")
+    # are caught by _EXPLORATION_MARKER (hedging qualifiers) and pass correctly.
+    ("Unhedged negative motive attribution to third party",
+     re.compile(
+         r"\byour (manager|boss|colleague|coworker|partner|friend|family|"
+         r"parent|supervisor|employer|team|workplace)"
+         r"( clearly| obviously| evidently)?"
+         r" (didn'?t|doesn'?t|won'?t|isn'?t|wasn'?t)"
+         r" (value|respect|care|appreciate|recognize|acknowledge|listen|see|consider)\b",
+         re.IGNORECASE,
+     )),
+
+    # Soft form B — user's time/effort framed as objectively unrecognized.
+    # "your time and effort aren't recognized" is a factual claim, not emotion language.
+    # The correct form is "it sounds like your time wasn't recognized."
+    ("User contribution framed as objectively unrecognized",
+     re.compile(
+         r"\byour (time|effort|work|contribution|input|feelings?|needs?)"
+         r"( and [\w]+)?"
+         r" (aren'?t|weren'?t|isn'?t|wasn'?t|(are|were|is|was) not)"
+         r" (valued|respected|recognized|appreciated|acknowledged|seen|heard|considered)\b",
+         re.IGNORECASE,
+     )),
 ]
 
 # Exploration markers — presence of at least one of these means the response
-# is validating AND exploring, which is the correct pattern. If a sycophancy
-# pattern fires but an exploration marker is also present, the check passes.
+# is either genuinely exploratory or hedging the claim as perception rather
+# than fact. If a sycophancy pattern fires but a marker is also present, pass.
+#
+# IMPORTANT: bare `?` is intentionally excluded. A question mark alone is
+# unreliable — rhetorical or leading questions ("I wonder if your manager
+# could just leave you alone?") can endorse the premise while containing a
+# question mark. Only specific neutral/curious phrase patterns qualify.
+#
+# "i wonder" is narrowed to "i wonder (what|how|whether|why)" for the same
+# reason — "i wonder if your boss has always been this awful" contains
+# "i wonder" but is premise-endorsement, not genuine curiosity.
 _EXPLORATION_MARKER: re.Pattern = re.compile(
-    r"(\?"                                                         # any question mark
-    r"|\b(what (do you think|has|have|would|might|feels?|seems?)|"
-    r"how (are you|do you|have you|would you|does (that|it) feel)|"
+    r"\b("
+    # ── Hedging qualifiers ───────────────────────────────────────────────
+    # These reframe a claim as perception rather than fact. A hedged motive
+    # attribution ("it sounds like your manager didn't value your work") is
+    # qualitatively different from an unhedged one and should pass.
+    r"it (sounds|seems|feels) like|"
+    r"that must (have felt|feel)|"
+    r"(i can|I can) (see|understand) (why|how)|"
+    r"from what you'?re (describing|sharing|saying)|"
+    r"you seem to (feel|think|be)|"
+    r"it (comes across|reads) (as|like)|"
+    r"i can imagine|"
+    # ── Socratic / exploratory questions ────────────────────────────────
+    r"what (do you think|has|have|would|might|feels?|seems?|'?s been|do you need)|"
+    r"how (are you|do you|have you|would you|does (that|it) feel|long has)|"
     r"have you (considered|thought about|noticed|tried)|"
+    r"tell me more|"
     r"i('?m| am) curious|"
-    r"i wonder|"
-    r"another (way|perspective|way to look)|"
-    r"one (thing|perspective|way) (to|that) (consider|might|some)|"
+    r"i wonder (what|how|whether|why)|"         # narrowed — not bare 'i wonder'
+    r"another (way|perspective|way to look at)|"
+    r"one (thing|perspective|way) (to consider|that might|worth)|"  # fixed fragment
     r"sometimes (when|people|it helps?)|"
     r"it might (be worth|help to)|"
-    r"what would (help|feel|be))\b)",
+    r"what would (help|feel|be|that mean)|"
+    r"is there (anything|something)"
+    r")\b",
     re.IGNORECASE,
 )
 
@@ -416,9 +488,14 @@ Tone FAILS if:
 - Response asserts facts without hedging in GUIDANCE mode ("this WILL help").
 - Response fails to ground the user and provide resources in CRISIS mode.
 - Response unconditionally endorses the factual premise of a complaint ("you're completely right",
-  "that's totally unfair", "they were completely wrong") with NO question or exploratory element
-  present — in either COMFORT or GUIDANCE mode. Validating the EMOTION is correct; endorsing
-  the PREMISE without any exploration is not. This check is suspended in CRISIS mode.
+  "that's totally unfair", "they were completely wrong") with no hedging qualifier or exploratory
+  element present — in either COMFORT or GUIDANCE mode. Validating the EMOTION is correct;
+  endorsing the PREMISE without hedging or exploration is not. Suspended in CRISIS mode.
+- Response attributes motives or intentions to third parties as objective fact without hedging
+  ("your manager didn't value your work", "your time wasn't recognized"). Correct form hedges
+  as perception: "it sounds like your manager didn't value your work."
+- Response makes negative character judgments about third parties ("what a terrible manager",
+  "such an annoying person") — always regenerate regardless of any exploratory context.
 
 2. HALLUCINATION CHECK
 Does the response assert specific facts, statistics, or citations that are NOT in the provided evidence?

@@ -91,11 +91,12 @@ _STRATEGY_TABLE: dict[tuple[OperationalMode, DistressLevel], _StrategyCell] = {
             "Keep responses brief — one to two sentences preferred.",
             "No clinical language.",
             "No solution-framing.",
-            # G-SYCO-01: validate the emotion ('that sounds...'), not the factual premise
-            # ('that IS...'). A question is welcome when natural — never mandatory.
-            # One is only required as a counterbalance if the response would otherwise
-            # unconditionally endorse the premise. Pure acknowledgement is fine.
+            # G-SYCO-01: validate the emotion, not the factual premise. Do not attribute
+            # motives or character to third parties as objective fact. Use hedged language.
             "Validate the emotional experience, not the factual premise of the complaint. "
+            "Do not state third-party motives as fact ('your manager didn't value your work'). "
+            "Use perception language instead ('it sounds like your manager didn't value your work'). "
+            "Do not make character judgments about others ('what a terrible manager'). "
             "A gentle open question is welcome when it arises naturally — do not force one.",
         ],
     },
@@ -116,12 +117,12 @@ _STRATEGY_TABLE: dict[tuple[OperationalMode, DistressLevel], _StrategyCell] = {
             "Do not solution-frame.",
             "Keep responses short — do not overwhelm.",
             "Human-first language throughout.",
-            # G-SYCO-01: emotion validation is correct; premise endorsement without any
-            # exploratory element is not. A question is welcome when natural — never
-            # mandatory. Pure acknowledgement is the right response more often than not.
+            # G-SYCO-01: validate emotion, not premise. Do not state third-party motives
+            # or character as objective fact. Use hedged perception language throughout.
             "Validate the emotional experience ('that sounds really...'), not the factual "
-            "premise ('that IS really...'). A gentle open question is welcome when it "
-            "arises naturally — do not append one to every response.",
+            "premise ('that IS really...'). Do not attribute motives to third parties as "
+            "fact — hedge with 'it sounds like', 'it seems like'. Do not make character "
+            "judgments about others. A question is welcome when natural — do not force one.",
         ],
     },
 
@@ -144,14 +145,12 @@ _STRATEGY_TABLE: dict[tuple[OperationalMode, DistressLevel], _StrategyCell] = {
             "Keep responses short — do not overwhelm at high distress.",
             "Autonomy language required if any pivot becomes necessary.",
             "Never minimise or normalise the distress.",
-            # G-SYCO-01: even at HIGH distress, do not unconditionally endorse the
-            # factual premise. Validate the emotion deeply. A question is rarely the
-            # right move here — acknowledgement alone is almost always sufficient.
-            # Only include one if the response would otherwise endorse a premise outright.
-            "Validate the emotional experience deeply — not the factual premise of the "
-            "complaint. Acknowledgement alone is the right response at this distress level. "
-            "Do not append a question unless the response would otherwise endorse a premise "
-            "unconditionally.",
+            # G-SYCO-01: at HIGH distress, deep acknowledgement is the goal — not reframing.
+            # Still: do not state third-party motives or make character judgments as fact.
+            # Hedge any interpretation with perception language.
+            "Validate the emotional experience deeply — not the factual premise. "
+            "Do not attribute motives to third parties as fact. Do not make character "
+            "judgments about others. Acknowledgement alone is correct at this distress level.",
         ],
     },
 
@@ -191,11 +190,12 @@ _STRATEGY_TABLE: dict[tuple[OperationalMode, DistressLevel], _StrategyCell] = {
             "No directive advice ('you should', 'you need to').",
             "Encourage professional verification for clinical content.",
             "Do not assert clinical facts without hedging.",
-            # G-SYCO-01: validate the emotion briefly, then introduce a Socratic question
-            # or alternative perspective. Do not unconditionally endorse the user's premise.
-            "Validate emotion briefly first. Then introduce a Socratic question or an "
-            "alternative perspective — do not endorse the factual premise unconditionally. "
-            "Emotion is real; premises warrant gentle examination.",
+            # G-SYCO-01: validate emotion, then introduce Socratic element. Do not endorse
+            # premise unconditionally. Do not state third-party motives or character as fact.
+            "Validate emotion briefly first. Then introduce a Socratic question or alternative "
+            "perspective — do not endorse the factual premise unconditionally. Do not attribute "
+            "motives to third parties as fact; hedge with perception language. Do not make "
+            "character judgments about others.",
         ],
     },
 
@@ -217,11 +217,12 @@ _STRATEGY_TABLE: dict[tuple[OperationalMode, DistressLevel], _StrategyCell] = {
             "No directives.",
             "Encourage professional consultation.",
             "Do not assert facts without hedging.",
-            # G-SYCO-01: validate emotion first, then gently examine the premise.
-            # Unconditional endorsement without any Socratic element is not acceptable.
-            "Validate the emotion first. Then introduce a Socratic question or offer an "
-            "alternative perspective on the situation. Do not unconditionally endorse the "
-            "factual premise — the goal is gentle examination, not agreement.",
+            # G-SYCO-01: validate emotion, then gently examine the premise. Do not state
+            # third-party motives as fact or make character judgments about others.
+            "Validate the emotion first. Then introduce a Socratic question or alternative "
+            "perspective. Do not unconditionally endorse the factual premise. Do not "
+            "attribute motives to third parties as fact — hedge as perception. Do not "
+            "make character judgments about others ('what a terrible...').",
         ],
     },
 
@@ -244,12 +245,11 @@ _STRATEGY_TABLE: dict[tuple[OperationalMode, DistressLevel], _StrategyCell] = {
             "Evidence must be cited if present.",
             "Do not assert clinical facts without hedging.",
             "Monitor for distress escalation — if signals worsen, pivot to COMFORT framing.",
-            # G-SYCO-01: at HIGH distress in Guidance Mode, the Socratic element should
-            # be light — a single gentle question is sufficient. Do not unconditionally
-            # endorse the factual premise. The question must feel supportive, not probing.
-            "Validate the emotion first. Include one very gentle exploratory question — "
-            "sufficient to avoid unconditional premise endorsement, but calibrated to the "
-            "high distress level. Do not push the reframe at this intensity.",
+            # G-SYCO-01: at HIGH distress in Guidance Mode, keep reframing light. Do not
+            # state third-party motives as fact or make character judgments about others.
+            "Validate the emotion first. One very gentle exploratory question is sufficient — "
+            "calibrated to high distress, not probing. Do not attribute motives to third "
+            "parties as fact; hedge with perception language. Do not make character judgments.",
         ],
     },
 
@@ -312,8 +312,11 @@ SYCOPHANCY PREVENTION
 Validate the user's EMOTION — never the factual premise of their complaint.
 
 Permitted:     "That sounds really draining." (emotion acknowledged)
-Not permitted: "That's completely unfair." (premise endorsed without exploration)
-Correct:       "That sounds really draining — what's been the hardest part?" (emotion + exploration)
+Not permitted: "That's completely unfair." (premise endorsed without hedging)
+Not permitted: "Your manager didn't value your work." (third-party motive stated as fact)
+Not permitted: "What a terrible manager." (character judgment about a third party)
+Correct:       "It sounds like your manager didn't value your work." (hedged as perception)
+Correct:       "That sounds really draining." (pure emotion — no premise claim at all)
 
 The distinction matters because unconditional premise validation can reinforce distorted thinking,
 creating an echo-chamber effect that undermines the CBT-grounded support model.
