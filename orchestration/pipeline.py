@@ -2148,10 +2148,21 @@ class NikkoPipeline:
         # Falls back gracefully when the generator is a stub (no _last_metadata).
         _meta = getattr(self._draft_gen, "_last_metadata", {}) or {}
         if _meta:
-            _raw_annotations = _meta.get("pre_analysis_raw", "")
-            if _raw_annotations:
-                # Format: {"annotations": "[PARA: ...] [STRUCT: ...]"} or {"annotations": ""}
+            # Always set pre_analysis_output when the key is present in modal metadata,
+            # even when annotations is an empty string. This disambiguates two previously
+            # indistinguishable trace states:
+            #   null  → Modal was not called / old version / scope-blocked (key absent)
+            #   {"annotations": ""}       → Modal ran pre_analysis, no signals found
+            #   {"annotations": "[...]"}  → Modal ran pre_analysis, signals found
+            # Without this, both "no signals" and "not run" showed as null, making
+            # it impossible to confirm a new Modal deploy is live. (Director-flagged 2026-05-23)
+            if "pre_analysis_raw" in _meta:
+                _raw_annotations = _meta["pre_analysis_raw"]
                 trace.pre_analysis_output = {"annotations": _raw_annotations}
+                logger.debug(
+                    "_step10_draft: pre_analysis_output set — annotations=%r",
+                    _raw_annotations or "(none)",
+                )
             # Also log enhanced signal/strategy so they appear in Render logs.
             if _meta.get("enhanced_signal"):
                 logger.debug(
