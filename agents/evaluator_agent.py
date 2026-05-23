@@ -314,6 +314,7 @@ _TONE_VIOLATION_PATTERNS: list[tuple[str, str, re.Pattern]] = [
 # research claims that should only appear if backed by synthesised evidence.
 
 _HALLUCINATION_PATTERNS: list[tuple[str, re.Pattern]] = [
+
     ("Specific statistic without evidence source",
      re.compile(
          r"\b((\d+\s*(%|percent|in \d+|million|billion) (of|people)|"
@@ -337,6 +338,56 @@ _HALLUCINATION_PATTERNS: list[tuple[str, re.Pattern]] = [
          r"(has been (shown|proven|found)|is (effective|proven|supported|recommended)|"
          r"works? by|is (clinically|evidence.based)))\b", _I)),
 ]
+
+# ---------------------------------------------------------------------------
+# Sycophancy detection patterns (G-SYCO-01)
+# ---------------------------------------------------------------------------
+# [CONCEPT] Sycophancy vs empathy
+# Empathy validates the EMOTION: "that sounds really draining."
+# Sycophancy validates the PREMISE: "you're completely right, that IS unfair."
+# The distinction matters because unconditional premise validation can reinforce
+# distorted thinking, creating an echo-chamber effect contrary to the CBT-grounded
+# support model in SPEC-200 §5.3.
+#
+# Two-part check:
+#   1. _SYCOPHANCY_PATTERNS fires on clear unconditional premise-endorsement language.
+#   2. _EXPLORATION_MARKER checks for any question or perspective-offering element.
+#      If endorsement detected AND no exploration present → sycophancy flag → REGENERATE.
+#
+# Mode scope: COMFORT and GUIDANCE only. CRISIS mode is exempt — safety resources
+# and immediate stabilisation take absolute priority over reframing. (G-SYCO-01)
+
+_SYCOPHANCY_PATTERNS: list[tuple[str, re.Pattern]] = [
+    ("Unconditional premise endorsement without exploration",
+     re.compile(
+         r"\b(you'?re (absolutely|completely|totally|entirely|perfectly) right\b|"
+         r"that'?s (absolutely|completely|totally|entirely|perfectly) "
+         r"(fair|valid|justified|reasonable|understandable|accurate|correct)\b|"
+         r"they (were|are) (completely|totally|absolutely|entirely) wrong\b|"
+         r"you (were|are) (completely|totally|absolutely|entirely|perfectly) justified\b|"
+         r"(anyone|everybody|everyone) would (feel|think|react|agree) "
+         r"(exactly )?(the same|that way|like that|as you do)\b)",
+         re.IGNORECASE,
+     )),
+]
+
+# Exploration markers — presence of at least one of these means the response
+# is validating AND exploring, which is the correct pattern. If a sycophancy
+# pattern fires but an exploration marker is also present, the check passes.
+_EXPLORATION_MARKER: re.Pattern = re.compile(
+    r"(\?"                                                         # any question mark
+    r"|\b(what (do you think|has|have|would|might|feels?|seems?)|"
+    r"how (are you|do you|have you|would you|does (that|it) feel)|"
+    r"have you (considered|thought about|noticed|tried)|"
+    r"i('?m| am) curious|"
+    r"i wonder|"
+    r"another (way|perspective|way to look)|"
+    r"one (thing|perspective|way) (to|that) (consider|might|some)|"
+    r"sometimes (when|people|it helps?)|"
+    r"it might (be worth|help to)|"
+    r"what would (help|feel|be))\b)",
+    re.IGNORECASE,
+)
 
 # ---------------------------------------------------------------------------
 # Evaluator Adapter system prompt (ADP-C)
@@ -364,6 +415,10 @@ Tone FAILS if:
 - Response gives directives ("you should", "you need to") in COMFORT mode.
 - Response asserts facts without hedging in GUIDANCE mode ("this WILL help").
 - Response fails to ground the user and provide resources in CRISIS mode.
+- Response unconditionally endorses the factual premise of a complaint ("you're completely right",
+  "that's totally unfair", "they were completely wrong") with NO question or exploratory element
+  present — in either COMFORT or GUIDANCE mode. Validating the EMOTION is correct; endorsing
+  the PREMISE without any exploration is not. This check is suspended in CRISIS mode.
 
 2. HALLUCINATION CHECK
 Does the response assert specific facts, statistics, or citations that are NOT in the provided evidence?
@@ -504,6 +559,58 @@ class EvaluatorAgent:
         return len(violations) == 0, violations
 
     # ------------------------------------------------------------------
+    # Sycophancy check (G-SYCO-01)
+    # ------------------------------------------------------------------
+
+    def _sycophancy_check(
+        self,
+        draft: str,
+        mode: OperationalMode,
+    ) -> tuple[bool, str]:
+        """
+        Detect unconditional premise validation without any exploratory element.
+
+        Empathy validates the emotion: "that sounds really draining."
+        Sycophancy validates the premise: "you're completely right, that IS unfair."
+
+        Only fires in COMFORT and GUIDANCE modes. Suspended in CRISIS — safety
+        resources and immediate stabilisation take absolute priority. (G-SYCO-01)
+
+        Returns (passed: bool, notes: str).
+        A fail produces verdict=REGENERATE (quality issue, not safety violation).
+        """
+        # [CONCEPT] CRISIS exemption
+        # In Crisis Mode the evaluator's job is to ensure resources are present and
+        # the response is grounded — not to check for exploratory framing. Suspending
+        # the sycophancy check here prevents it from interfering with a correctly
+        # formatted crisis response that reads as highly validating by design.
+        if mode == OperationalMode.CRISIS:
+            return True, "Sycophancy check suspended in CRISIS mode."
+
+        for description, pattern in _SYCOPHANCY_PATTERNS:
+            match = pattern.search(draft)
+            if not match:
+                continue
+
+            # Premise endorsement detected — check for an exploratory element.
+            # If both are present the response is validating AND exploring, which is
+            # the correct pattern (G-SYCO-01: emotion + gentle question = pass).
+            if _EXPLORATION_MARKER.search(draft):
+                return True, "Premise endorsement present but balanced by exploration."
+
+            # Endorsement without exploration — flag for regeneration.
+            logger.warning(
+                "Sycophancy detected (%s): %r", description, match.group(0)[:60]
+            )
+            return False, (
+                f"[SYCO] {description}: matched '{match.group(0)[:60]}' "
+                f"with no exploratory element detected. "
+                f"Validate the emotion, not the factual premise. (G-SYCO-01)"
+            )
+
+        return True, "No sycophancy patterns detected."
+
+    # ------------------------------------------------------------------
     # Pass 2: LLM judge (tone + hallucination)
     # ------------------------------------------------------------------
 
@@ -546,6 +653,15 @@ class EvaluatorAgent:
                 )
                 logger.warning("Tone violation (%s): %r", description, match.group(0)[:60])
                 break
+
+        # -- Sycophancy check (G-SYCO-01) --
+        # Only runs if tone has not already failed — avoids double-reporting.
+        # Bundles into the tone dimension since sycophancy is fundamentally a tone failure.
+        if tone_pass:
+            syco_passed, syco_notes = self._sycophancy_check(draft, mode)
+            if not syco_passed:
+                tone_pass  = False
+                tone_notes = syco_notes
 
         # -- Hallucination check --
         # [CONCEPT] Evidence-gated hallucination detection
