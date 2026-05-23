@@ -115,9 +115,15 @@ ANALYSIS_GEN_PARAMS = {
     "moderation_scope": dict(max_new_tokens=128, temperature=0.1,  do_sample=False),
     # [REQ-700-SA1] Step 1.5 structural pre-analysis pass.
     # Qwen3-4B with thinking enabled (enable_thinking=True at template time).
-    # Slightly more tokens than moderation_scope to accommodate <think> block +
-    # annotation output. Near-deterministic temperature to keep annotations stable.
-    "structural_pre_analysis": dict(max_new_tokens=256, temperature=0.15, do_sample=False),
+    # Token budget raised 256 → 512 (Director-approved 2026-05-23): with thinking
+    # mode active, the <think> scratchpad alone can consume 200–250 tokens before
+    # the model starts the JSON output. At 256, the generation gets truncated
+    # mid-think, _parse_json receives an incomplete response, and annotations
+    # silently default to "" — making pre_analysis appear to fire with no signals
+    # even on messages with obvious cues (all-lowercase, multiple ellipsis clusters).
+    # 512 gives the scratchpad room without materially impacting latency (~1–2s
+    # extra on a warm A10G — well within the 5s structural pre_analysis budget).
+    "structural_pre_analysis": dict(max_new_tokens=512, temperature=0.15, do_sample=False),
     # Legacy scope-only pass (was Pass 0a for AMBIGUOUS cases). Retained for
     # reference; its logic is now absorbed into the moderation_scope pass above.
     "scope":    dict(max_new_tokens=64,  temperature=0.1,  do_sample=False),
@@ -905,6 +911,62 @@ class NikkoInference:
             return {"annotations": "", "error": str(exc)}
 
     @staticmethod
+    def _sentence_capitalize(text: str) -> str:
+        """
+        Post-process ADP-A draft to enforce standard English capitalisation.
+
+        WHY THIS EXISTS:
+        Qwen3-4B persistently mirrors the user's all-lowercase typing register,
+        producing all-lowercase responses regardless of the TYPOGRAPHY RULE in the
+        system prompt. Rather than fighting model priors with escalating instruction
+        engineering, we enforce capitalisation deterministically here — zero latency
+        cost, guaranteed compliance. (REQ-000-041, Director-approved 2026-05-23)
+
+        RULES APPLIED:
+        1. First character of the entire draft is capitalised.
+        2. Any lowercase letter immediately following '. ', '! ', or '? ' (a sentence
+           boundary) is capitalised.
+
+        ELLIPSIS GUARD:
+        '...' must not trigger capitalisation of the word that follows it, since
+        trailing ellipsis signals hesitation or an unfinished thought — not a sentence
+        end. Implemented via negative lookbehind (?<!\.) which excludes a '.' that is
+        immediately preceded by another '.', matching only the last dot of '...' and
+        preventing the capitalisation from firing.
+
+        EM-DASH NOTE:
+        '—' is not treated as a sentence boundary (it joins clauses, not sentences).
+        No special handling needed.
+
+        DOES NOT MODIFY:
+        - Internal capitalisation (proper nouns, acronyms) — we only touch the first
+          letter after a sentence boundary.
+        - Whitespace — the original spacing between sentences is preserved.
+        """
+        import re
+
+        if not text:
+            return text
+
+        # Rule 1: capitalise first character of the full draft.
+        if text[0].islower():
+            text = text[0].upper() + text[1:]
+
+        # Rule 2: capitalise the first letter of each subsequent sentence.
+        # Pattern breakdown:
+        #   (?<!\.)  — negative lookbehind: previous char must NOT be '.'
+        #              (guards against firing on the final dot of '...')
+        #   ([.!?])  — capture the sentence-ending punctuation
+        #   (\s+)    — capture the whitespace between sentences (preserve it)
+        #   ([a-z])  — capture the lowercase letter to capitalise
+        text = re.sub(
+            r'(?<!\.)([.!?])(\s+)([a-z])',
+            lambda m: m.group(1) + m.group(2) + m.group(3).upper(),
+            text,
+        )
+        return text
+
+    @staticmethod
     def _build_adp_b_system_with_context(base_system: str, annotations: str) -> str:
         """
         Inject pre-analysis annotations into the ADP-B safety system prompt.
@@ -1198,7 +1260,13 @@ class NikkoInference:
         # generated here but only returned to the caller if ADP-B approves it.
         # If ADP-B fires crisis=True, this draft is silently discarded.
         draft = self._infer_raw(messages, system, "adp_a")
-        log.info(f"[adp_a] {len(draft)} chars")
+        # [REQ-000-041] Enforce standard English capitalisation on the draft.
+        # Qwen3-4B mirrors the user's all-lowercase register despite the TYPOGRAPHY
+        # RULE in the system prompt. _sentence_capitalize() applies deterministic
+        # post-processing: capitalise sentence-initial characters without touching
+        # internal casing, proper nouns, or whitespace. (Director-approved 2026-05-23)
+        draft = self._sentence_capitalize(draft)
+        log.info(f"[adp_a] {len(draft)} chars (capitalised)")
 
         # Stage 2: ADP-B safety classification (Gemma-2 + adp_b adapter)
         # Inject pre-analysis annotations into the safety system prompt so ADP-B
