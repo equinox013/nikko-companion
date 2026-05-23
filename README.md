@@ -94,7 +94,7 @@ Total estimated                    ~ 14.6 GB   (fits A10G 24 GB with 9.4 GB head
 
 `bitsandbytes` / NF4 quantization is not used — both models load cleanly in native bf16 within the A10G budget and quantization adds complexity without meaningful latency benefit at this parameter scale.
 
-> **HF Space fallback:** The fallback ZeroGPU endpoint runs on H200 (70 GB VRAM per slice), not A10G. The same bf16 weights fit with significantly more headroom. `bitsandbytes` remains excluded from `hf_space/requirements.txt` because ZeroGPU defers CUDA allocation until inside a `@spaces.GPU` context — bitsandbytes checks for CUDA at import time and crashes. This restriction does not apply to Modal (CUDA available from container startup). `hf_space/app.py` is kept at full parity with `nikko_modal/app.py`: same 13-tag pre-analysis system prompt, signal-strength gate, analysis enrichment functions (`_analyze_scope`, `_analyze_signal`, `_enrich_strategy`), and extended pipeline schema — so the fallback path produces identical routing logic to the primary.
+> **HF Space fallback:** The fallback ZeroGPU endpoint runs on H200 (70 GB VRAM per slice), not A10G. The same bf16 weights fit with significantly more headroom. `bitsandbytes` remains excluded from `hf_space/requirements.txt` because ZeroGPU defers CUDA allocation until inside a `@spaces.GPU` context — bitsandbytes checks for CUDA at import time and crashes. This restriction does not apply to Modal (CUDA available from container startup). `hf_space/app.py` mirrors `nikko_modal/app.py` for signal-strength gate, analysis enrichment functions (`_analyze_scope`, `_analyze_signal`, `_enrich_strategy`), and extended pipeline schema. **Note:** The split paralinguistic detection architecture (Render-side `paralinguistic_detector.py` + narrowed 6-signal LLM pre-analysis prompt) is implemented in `nikko_modal/app.py` only. The HF Space fallback receives the same `struct_annotations` payload field from Render but its `_run_structural_pre_analysis` still uses the full 13-signal prompt — a parity sync is pending.
 
 ---
 
@@ -209,6 +209,7 @@ The `/pipeline` response payload is:
 | `regen` | bool | Whether a regen pass was triggered |
 | `elapsed` | float | Total GPU time in seconds |
 | `scope_verdict` | string \| null | Qwen3-4B scope analysis verdict (`"in_scope"`, `"ambiguous"`, `"out_of_scope"`) |
+| `pre_analysis_raw` | string | Merged paralinguistic annotation string — Render struct tags + Qwen3 semantic PARA tags (e.g. `"[STRUCT: all_lowercase] [PARA: tone_softener]"`). Empty if no signals. |
 | `enhanced_signal` | dict \| null | Enriched signal output from the signal analysis pass |
 | `enhanced_strategy` | dict \| null | Enriched strategy output from the strategy analysis pass |
 | `harm_category` | string | Content moderation category on a `BLOCKED` early exit (empty otherwise) |
@@ -367,8 +368,9 @@ nikko-companion/
 │   └── mistral-7b/     # Archived Mistral-7B HF Space implementation
 ├── backend/            # Render orchestration API
 │   ├── main.py         # FastAPI — /health + /api/message SSE endpoint; conversationHistory cap
-│   ├── draft_generator.py      # Multi-turn messages builder for ADP-A
-│   └── context_prompt_builder.py  # USM truncation + ADP-A preference injection
+│   ├── draft_generator.py          # Multi-turn messages builder for ADP-A; calls paralinguistic_detector
+│   ├── paralinguistic_detector.py  # Render-side regex engine — 8 deterministic STRUCT+PARA signals
+│   └── context_prompt_builder.py   # USM truncation + ADP-A preference injection
 └── web/                # React SPA
     ├── Nikko.html      # Entry point
     ├── nikko.jsx       # Root app + theme

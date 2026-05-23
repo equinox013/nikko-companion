@@ -914,6 +914,19 @@ class NikkoInference:
             )
             result       = self._parse_json(raw)
             llm_para_raw = str(result.get("annotations", "")).strip()
+
+            # Bracket normalization: Qwen3-4B occasionally drops the opening '['
+            # (e.g. "PARA: mixed_affect" instead of "[PARA: mixed_affect]").
+            # Normalize all tag-like patterns so downstream regex consumers
+            # (ADP-B strength gate, frontend trace parser, Phase 6 harness) can
+            # parse the merged annotation string reliably.
+            if llm_para_raw:
+                import re as _re2
+                llm_para_raw = _re2.sub(
+                    r'\[?((?:PARA|STRUCT):\s*[\w_]+)\]?',
+                    r'[\1]',
+                    llm_para_raw,
+                )
             log.info("[pre_analysis/llm] para_annotations=%r", llm_para_raw or "(none)")
         except Exception as exc:
             log.warning(

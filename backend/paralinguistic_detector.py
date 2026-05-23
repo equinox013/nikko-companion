@@ -167,18 +167,25 @@ def _is_keysmash(token: str) -> bool:
 
     Heuristic from McCulloch (2019) Ch. 4, implemented as per the reference doc:
     - Minimum 5 alpha characters (shorter tokens are too ambiguous).
-    - Vowel ratio < 35%  — keysmash is consonant-heavy (home row is mostly consonants).
-    - Home-row ratio > 50% — fingers rest on asdfghjkl; mashing favours these keys.
+    - Vowel ratio < 20%  — keysmash is consonant-heavy (home row is mostly consonants).
+    - Home-row ratio > 65% — fingers rest on asdfghjkl; mashing favours these keys.
 
     Why not pure regex? A pattern like r"[a-z]{5,}" over-captures real words and
     abbreviations. The vowel + home-row combination is what makes it usable.
+
+    THRESHOLD CALIBRATION (2026-05-23):
+    Original thresholds (vowel < 35%, home-row > 50%) caused false positives on
+    common English words. "shift" (s,h,i,f,t): vowel=20%, home-row=60% — fired
+    despite being a real word. Tightening to < 20% / > 65% fixes this class:
+      - "shift" at 20% vowel is NOT strictly < 20% → no longer fires ✓
+      - True keysmashes ("asdfjkl", "fkdjsla") at 0–14% vowel still fire ✓
     """
     t = token.lower()
     if len(t) < 5 or not t.isalpha():
         return False
     vowel_ratio   = sum(c in "aeiou"     for c in t) / len(t)
     homerow_ratio = sum(c in "asdfghjkl" for c in t) / len(t)
-    return vowel_ratio < 0.35 and homerow_ratio > 0.50
+    return vowel_ratio < 0.20 and homerow_ratio > 0.65
 
 
 def _has_keysmash(text: str) -> bool:

@@ -522,6 +522,58 @@ These frameworks should be cited if Nikko is ever written up for academic or pro
 
 ---
 
+## 2026-05-23 — Phase 6 Routing Fixes + Split Paralinguistic Detection Architecture
+
+### What we did
+
+**Routing fixes (Issues 1, 2, 4, 5)**
+
+- **Issue 5 — CRISIS confidence cap** (`signal_agent.py`): If the LLM returns CRISIS but no active/acute risk keyword is present and confidence < 0.75, distress is downgraded to HIGH. Prevents under-confident CRISIS verdicts from triggering the full crisis path.
+- **Issues 1 & 2 — Guidance routing + `\guide` command** (`router.py`): Replaced binary `_guidance_intent_present()` with `_guidance_intent_strength()` returning strong/weak/none. Rule 2.5 added: `\guide` command forces GUIDANCE mode (CRISIS still overrides). Weak intent gated by distress < HIGH AND confidence ≥ 0.60 to prevent LOW-distress venting messages from routing to GUIDANCE.
+- **Issue 4 — Passive risk sustained tracking** (`pipeline.py`, `acp_schemas.py`, `context_prompt_builder.py`): 5-turn sliding window; ≥2 hits of passive risk language with distress not LOW → `passive_risk_sustained=True`. COMFORT nudge injected into ADP-A system prompt when sustained.
+- **VS C3 fix** (`verification_supervisor.py`): C3 previously blocked HIGH+COMFORT, treating it as a mode–distress mismatch. HIGH distress in COMFORT mode is a valid venting routing outcome — C3 now only blocks CRISIS distress in non-CRISIS mode.
+- **`docs/GAPS.md`**: G-VS-C3-01 and G-GUIDE-01 resolved and documented.
+
+**Typography enforcement (REQ-000-041)**
+
+- `_sentence_capitalize()` added to `nikko_modal/app.py` as a deterministic post-processing step on every ADP-A draft. Qwen3-4B mirrors the user's all-lowercase register despite the TYPOGRAPHY RULE in the system prompt. Post-processing is guaranteed — no model instruction-following required. Capitalises first character and sentence-initial letters after `.!?`, with ellipsis guard (negative lookbehind `(?<!\.)` prevents `...` from triggering).
+
+**Split paralinguistic detection architecture (Director-approved 2026-05-23)**
+
+Root cause identified: Qwen3-4B is an unreliable detector for deterministic text properties. Tasks like "does this message contain only lowercase letters" require pattern-matching, not probabilistic inference — the model consistently hedged, producing `{"annotations": ""}` regardless of message content.
+
+Solution: split the 14-signal taxonomy at the semantic boundary.
+
+- **`backend/paralinguistic_detector.py`** (new): Pure Python regex/heuristic engine detecting 8 deterministic signals on Render — zero latency, zero LLM cost, guaranteed accuracy. Signals: `[STRUCT: all_lowercase]`, `[STRUCT: ellipsis_trail]`, `[STRUCT: all_caps_segment]`, `[PARA: expressive_lengthening]`, `[PARA: punctuation_urgency]`, `[PARA: keysmash]`, `[PARA: emoji_distress]`, `[PARA: asterisk_action]`. Sources: McCulloch (2019), Apriliani & Muslim (2021).
+- **`backend/draft_generator.py`**: Calls `detect_struct_signals(user_msg)` before the Modal call; result sent as `struct_annotations` in the payload.
+- **`nikko_modal/app.py`**: `_PRE_ANALYSIS_SYSTEM` narrowed to 6 semantic PARA signals only (`tone_softener`, `minimisation`, `mixed_affect`, `typographic_register`, `fragmented_syntax`, `register_collapse`). `_run_structural_pre_analysis()` accepts `struct_annotations` from Render and merges it with LLM output. `pipeline()` endpoint passes `struct_annotations` to `run_pipeline.remote()`. `enable_thinking=False` for the pre-analysis pass — CoT caused hedging on pattern-matching sub-tasks.
+
+**Keysmash threshold calibration**
+
+- `_is_keysmash()` thresholds tightened: vowel ratio `< 0.35` → `< 0.20`, home-row ratio `> 0.50` → `> 0.65`. "shift" (5 chars, 20% vowel, 60% home-row) was a false positive under the original thresholds. Tightening eliminates this class of common English word false positives while preserving genuine keysmash detection.
+
+**Bracket normalization**
+
+- LLM occasionally emits malformed tags (e.g. `PARA: mixed_affect` without brackets). Added `re.sub(r'\[?((?:PARA|STRUCT):\s*[\w_]+)\]?', r'[\1]', ...)` normalization step after LLM output parsing in `_run_structural_pre_analysis`. All downstream consumers (ADP-B strength gate, trace parser, Phase 6 harness) now receive well-formed `[PARA: x]` / `[STRUCT: x]` strings.
+
+### Decisions & justifications
+
+| Decision | Justification |
+|----------|--------------|
+| Deterministic post-processing for typography (REQ-000-041) | Model instruction-following for typography is unreliable — Qwen3-4B consistently mirrors the user's register despite explicit rules. Deterministic post-processing is guaranteed, zero-latency, and zero-cost. |
+| Render-side regex for 8 deterministic signals | LLM inference for pattern-matching tasks (all_lowercase detection, ellipsis counting) produces probabilistic hedging on tasks that are definitionally deterministic. Regex is the correct tool. |
+| Semantic split at PARA/LLM boundary | Signals requiring contextual understanding of word meaning (tone_softener — is this "lol" face-saving or genuine?) cannot be answered deterministically. Signals requiring only surface pattern inspection (repeated letters, emoji presence) can and should be. |
+| enable_thinking=False for semantic PARA signals | After the deterministic signals moved to Render, the remaining LLM task (6 semantic PARA signals) is still pattern-matching — just with context. CoT was causing more hedging, not less. Direct generation is more reliable for classification tasks of this kind. |
+| Bracket normalization over prompt engineering | Prompt engineering to guarantee bracket formatting is fragile — one model update can break it. A regex normalization step is a two-line fix with guaranteed output regardless of model output formatting. |
+
+### Learnings
+
+- The probability-vs-determinism boundary in a hybrid pipeline is not where you first draw it. Every time an LLM is asked to perform a task that has a closed-form answer (does this string match a pattern?), it will hedge — and hedging is wrong. The evaluation pipeline is the right place to detect this: when LLM output is consistently empty for signal detection tasks but non-empty for semantic reasoning tasks, the architecture needs to be re-examined, not the prompt.
+- Threshold calibration on heuristics requires production data. The keysmash heuristic was set at literature-inspired thresholds that looked correct in theory but produced false positives on ordinary English words in production. One live turn ("shift") identified the problem immediately. Short latency between deploy and observation is the leverage here.
+- HF Space parity requires an explicit two-file check after every `nikko_modal/app.py` change. The fallback path diverges silently — there are no compiler errors, only behavioural differences at runtime.
+
+---
+
 ## Template for future entries
 
 ```
