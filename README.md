@@ -94,7 +94,7 @@ Total estimated                    ~ 14.6 GB   (fits A10G 24 GB with 9.4 GB head
 
 `bitsandbytes` / NF4 quantization is not used — both models load cleanly in native bf16 within the A10G budget and quantization adds complexity without meaningful latency benefit at this parameter scale.
 
-> **HF Space fallback:** The fallback ZeroGPU endpoint runs on H200 (70 GB VRAM per slice), not A10G. The same bf16 weights fit with significantly more headroom. `bitsandbytes` remains excluded from `hf_space/requirements.txt` because ZeroGPU defers CUDA allocation until inside a `@spaces.GPU` context — bitsandbytes checks for CUDA at import time and crashes. This restriction does not apply to Modal (CUDA available from container startup).
+> **HF Space fallback:** The fallback ZeroGPU endpoint runs on H200 (70 GB VRAM per slice), not A10G. The same bf16 weights fit with significantly more headroom. `bitsandbytes` remains excluded from `hf_space/requirements.txt` because ZeroGPU defers CUDA allocation until inside a `@spaces.GPU` context — bitsandbytes checks for CUDA at import time and crashes. This restriction does not apply to Modal (CUDA available from container startup). `hf_space/app.py` is kept at full parity with `nikko_modal/app.py`: same 13-tag pre-analysis system prompt, signal-strength gate, analysis enrichment functions (`_analyze_scope`, `_analyze_signal`, `_enrich_strategy`), and extended pipeline schema — so the fallback path produces identical routing logic to the primary.
 
 ---
 
@@ -208,6 +208,11 @@ The `/pipeline` response payload is:
 | `verdict` | string | ADP-C verdict: `APPROVE` or `REGENERATE` |
 | `regen` | bool | Whether a regen pass was triggered |
 | `elapsed` | float | Total GPU time in seconds |
+| `scope_verdict` | string \| null | Qwen3-4B scope analysis verdict (`"in_scope"`, `"ambiguous"`, `"out_of_scope"`) |
+| `enhanced_signal` | dict \| null | Enriched signal output from the signal analysis pass |
+| `enhanced_strategy` | dict \| null | Enriched strategy output from the strategy analysis pass |
+| `harm_category` | string | Content moderation category on a `BLOCKED` early exit (empty otherwise) |
+| `oos_reason` | string | Out-of-scope reason string on an `OUT_OF_SCOPE` early exit (empty otherwise) |
 
 ---
 

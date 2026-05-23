@@ -26,7 +26,7 @@ Claude accelerated the build in ways I couldn't have matched alone. Spec extract
 
 But acceleration isn't authorship. Every architectural call, every requirement I ratified, every phase gate, every *"this doesn't feel right, let's go back"* moment was mine. Claude generated; I directed, questioned, approved, and — when I didn't question hard enough — paid for it in hours lost to mistakes I could have caught.
 
-This was also my first serious experience building with AI assistance, what some people call "vibe coding." I came in thinking the main skill was writing good prompts. I'm leaving with a different view: the actual skill is knowing *when not to trust the output*, and that requires enough domain knowledge to recognise a confident-sounding answer that's quietly wrong. The "Where I went wrong" sections in this log are a record of that learning curve.
+This was also my first serious experience building with AI assistance, what some people call "vibe coding." I came in thinking the main skill was writing good prompts. I'm leaving with a different view: the actual skill is knowing *when not to trust the output*, and that requires enough domain knowledge to recognise a confident-sounding answer that's quietly wrong. The Learnings sections in this log are a record of that — the assumptions I had to unlearn, the calls I'll make differently next time, and the times moving fast in the wrong direction cost more than moving slowly in the right one.
 
 The honest version of AI-assisted development, at least for me, is that AI removed the friction of going from idea to implementation, which freed me up to spend more time on the decisions that mattered — and also let me move fast in the wrong direction when I wasn't watching closely.
 
@@ -473,6 +473,52 @@ These frameworks should be cited if Nikko is ever written up for academic or pro
 - The "Stochastic Parrot" framing is useful precisely because it names something the system's language can subtly deny. Every "I can see you're feeling..." from an LLM is technically a stochastic parrot constructing a plausible empathy claim. Epistemic language calibration is not pedantry — it's accuracy.
 - Retraining a model to get a capability that the base model already provides (Qwen3-4B thinking mode) is almost always the wrong call. Check whether the capability exists in an already-loaded model before committing to a training run.
 - Documentation conflicts compound silently. 17 conflicts across 31 files don't announce themselves — they accumulate until someone runs an audit. Every platform migration and model switch needs a doc-update pass in the same session, not the next one.
+
+---
+
+## 2026-05-23 — Debug Overlay Audit, Routing Fix + HF Space → Modal Parity Sync
+
+### What we did
+
+**Debug overlay audit and fixes**
+
+- Removed the SVG ribbon glyph from `agent-debug.jsx` — decorative, added visual noise to a diagnostic tool.
+- Signal card updated to display full signal arrays (emotions, cognitive patterns, risk indicators) rather than a truncated summary.
+- Router card updated to show real confidence score and rationale from `trace.router_output`.
+- Evidence card added to the debug overlay.
+- `router_output` and `pre_analysis_output` fields added to `PipelineTrace` in `orchestration/pipeline.py`. `_step3_route` populates `router_output`; `_step10_draft` reads `_last_metadata` from `HFSpaceFullGenerator` after `generate()` to populate `pre_analysis_output`.
+- `_last_metadata` side-channel added to `HFSpaceFullGenerator.__init__` — stores the full pipeline response dict after `generate()` so `_step10_draft` can read pre-analysis data without breaking the `DraftGeneratorProtocol` interface.
+- `_mode` bridge fixed in `chat.jsx` SSE handler: `data.trace.mode` was not being forwarded to `_mode` on the `NikkoAgentLog` entry. Fixed by adding `_mode: (data.trace.mode || '').toUpperCase()` in the update call.
+
+**Routing fix — acknowledgment/gratitude turns**
+
+- Added `_ACKNOWLEDGMENT_RE` regex to `orchestration/pipeline.py`. Prevents acknowledgment and gratitude turns ("it helped a bit, thanks", "the breathing really worked") from triggering GUIDANCE routing even when technique keywords (e.g. "breathing") are present. Registered as REQ-000-043. Guard placed before the GUIDANCE keyword check so order of evaluation is unambiguous.
+
+**HF Space → Modal parity sync**
+
+- `hf_space/app.py` brought to full feature parity with `nikko_modal/app.py` — the fallback path now runs identical logic to the primary path.
+- `_PRE_ANALYSIS_SYSTEM`: expanded from 7 basic tags to the 13-tag Modal version, adding `expressive_lengthening`, `punctuation_urgency`, `keysmash`, `emoji_distress`, `ellipsis_trail`, `all_lowercase`, and full arousal/intensity framing with source citations.
+- Signal-strength gate (`_WEAK_SIGNALS`) backported: singleton weak signals now trigger a low-confidence caveat in the ADP-B system prompt rather than carrying full weight.
+- `_SCOPE_SYSTEM`, `_SIGNAL_SYSTEM`, `_STRATEGY_SYSTEM` prompts added.
+- `_analyze_scope`, `_analyze_signal`, `_enrich_strategy`, `_inject_enhanced_strategy` functions ported as module-level functions.
+- `_run_full_pipeline` updated with `rule_signal` and `base_strategy_text` params for Pass 1 signal enrichment and Pass 2 strategy enrichment.
+- `PipelineRequest` and `PipelineResponse` schemas updated: `scope_verdict`, `enhanced_signal`, `enhanced_strategy`, `harm_category`, `oos_reason` added as new fields.
+- `ANALYSIS_GEN_PARAMS` generation parameters added for scope, signal, and strategy analysis passes.
+
+### Decisions & justifications
+
+| Decision | Justification |
+|----------|--------------|
+| `_last_metadata` side-channel on `HFSpaceFullGenerator` | `DraftGeneratorProtocol` has a fixed interface — `generate()` returns a string. Pre-analysis metadata is needed by `_step10_draft` without breaking the protocol. A side-channel attribute on the concrete class is the narrowest change that doesn't require a protocol update or return-type change cascading through every caller. |
+| `_mode` bridge fixed in the SSE handler, not the overlay component | `NikkoAgentLog.add()` is the single insertion point for trace data. Fixing the bridge there ensures every downstream consumer gets the correct mode. Fixing it in the overlay component would only address the display symptom. |
+| `_ACKNOWLEDGMENT_RE` placed before GUIDANCE keyword check | The acknowledgment gate must fire before the keyword gate — a thank-you message containing "breathing" must not reach the GUIDANCE keyword list. Order of evaluation is semantically significant here. |
+| Full function parity, not just prompt parity, in HF Space | A fallback that diverges on analysis enrichment produces different routing decisions under identical inputs. Fallback correctness requires identical logic, not just identical prompts. |
+
+### Learnings
+
+- A side-channel attribute is sometimes the correct design when adding out-of-band data to a class with a fixed protocol interface. Changing the protocol return type would cascade through every caller; the side-channel is surgically contained.
+- Data bridges in the SSE handler are invisible when missing — the system appears to work but silently drops information. Any new trace field added to the backend needs an explicit bridge in the frontend handler verified before the change is closed.
+- Fallback paths need the same update discipline as primary paths. The HF Space had diverged over multiple sessions because each parity-relevant change was applied to Modal only. After any `nikko_modal/app.py` change, a two-file diff check against `hf_space/app.py` should be standard practice.
 
 ---
 

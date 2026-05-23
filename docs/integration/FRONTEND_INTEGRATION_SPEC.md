@@ -484,6 +484,20 @@ The debug overlay exposes the full pipeline execution trace for transparency and
     "rationale": "distress_level=moderate, no risk indicators, guidance_keywords absent"
   },
 
+  "scope_verdict": "in_scope",
+
+  "enhanced_signal": {
+    "dominant_theme": "social_isolation",
+    "intensity_shift": "stable",
+    "ambiguity_flags": []
+  },
+
+  "enhanced_strategy": {
+    "recommended_tone": "warm_validating",
+    "avoid": ["direct_advice", "minimisation"],
+    "technique_hint": null
+  },
+
   "evidence": null,
 
   "adp_b": { "label": "Safety / crisis check", "verdict": "CLEAR", "flags": [] },
@@ -499,6 +513,8 @@ The debug overlay exposes the full pipeline execution trace for transparency and
 [REQ-FIS-DB4] `router` MUST surface the routing decision, the router's confidence, and a brief rationale string. This is the primary epistemic transparency field — it allows a user who sees the debug panel to understand *why* Nikko responded the way it did.
 
 [REQ-FIS-DB5] `evidence` MUST be non-null on Guidance Mode responses and MUST contain: `{ sources_queried: ["pubmed", "healthdirect"], results_count: 3, confidence: 0.81 }`. On Comfort Mode it MUST be `null`.
+
+[REQ-FIS-DB9] **Phase 6 addition.** `scope_verdict` carries the Qwen3-4B scope analysis result (`"in_scope"` / `"ambiguous"` / `"out_of_scope"`). `null` indicates the analysis pass did not run or was skipped (e.g. crisis early exit). `enhanced_signal` and `enhanced_strategy` carry enrichment outputs from the signal and strategy analysis passes respectively; both are `null` when the enrichment passes were skipped.
 
 ### 14.3 Debug overlay UI expansion
 
