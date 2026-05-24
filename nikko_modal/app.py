@@ -45,12 +45,15 @@ Pipeline flow (Director-approved reorder 2026-05-22):
 Volume layout (nikko-models):
   /models/qwen/            ← Qwen3-4B weights (ADP-A base)
   /models/gemma/           ← Gemma-2-2b-it weights (ADP-B/C base)
-  /models/adapters/        ← Full adapter repo snapshot (contains adp-b/ and adp-c/ subfolders)
+  /models/adapters/adp-b/  ← ADP-B LoRA adapter weights (equinox013/nikko-adp-b, Phase 4.1)
+  /models/adapters/adp-c/  ← ADP-C LoRA adapter weights (equinox013/nikko-adp-c, Phase 4.1)
   /models/adapters/adp-a/  ← ADP-A LoRA adapter weights (equinox013/nikko-adp-a, Phase 4.1)
 
 Required Modal secrets:
   modal secret create huggingface HF_TOKEN=<your-hf-read-token>
-  modal secret create nikko-config HF_ADAPTER_REPO=<your-adapter-repo-id> NIKKO_INTERNAL_TOKEN=<shared-secret>
+  modal secret create nikko-config NIKKO_INTERNAL_TOKEN=<shared-secret>
+  # HF_ADAPTER_REPO is no longer required — adapter repos are hardcoded as
+  # ADP_B_REPO and ADP_C_REPO constants (equinox013/nikko-adp-b, equinox013/nikko-adp-c).
 
 Deploy:
   modal deploy nikko_modal/app.py
@@ -96,6 +99,10 @@ GEMMA_MODEL_ID = "google/gemma-2-2b-it"
 # ADP-A LoRA adapter — trained Phase 4.1 on Lightning.ai A10G (Step 21, rank-16 QLoRA).
 # Standalone HF Hub public repo. Downloaded to /models/adapters/adp-a/ at image build.
 ADP_A_REPO = "equinox013/nikko-adp-a"
+# ADP-B and ADP-C Gemma-2 adapters — standalone HF Hub public repos.
+# Downloaded to /models/adapters/adp-b/ and /models/adapters/adp-c/ at image build.
+ADP_B_REPO = "equinox013/nikko-adp-b"
+ADP_C_REPO = "equinox013/nikko-adp-c"
 
 # Generation params — copied verbatim from hf_space/app.py.
 # Changing these would alter model behaviour relative to the HF Space fallback.
@@ -172,20 +179,22 @@ def _download_models():
         ignore_patterns=["*.msgpack", "flax_model*", "tf_model*"],
     )
 
-    adapter_repo = os.getenv("HF_ADAPTER_REPO", "")
-    if not adapter_repo:
-        raise RuntimeError(
-            "HF_ADAPTER_REPO not set. "
-            "Add it via: modal secret create nikko-config HF_ADAPTER_REPO=<repo>"
-        )
+    # [CONCEPT] ADP-B and ADP-C are now individual HF Hub repos (not subfolders
+    # of a combined repo). Each is downloaded directly into its Volume path so
+    # PeftModel.from_pretrained and load_adapter() can reference them by local path.
+    _log.info("Downloading ADP-B adapter (equinox013/nikko-adp-b)...")
+    snapshot_download(
+        "equinox013/nikko-adp-b",
+        local_dir="/models/adapters/adp-b",
+        ignore_patterns=["*.msgpack", "flax_model*", "tf_model*"],
+    )
 
-    # [CONCEPT] We download the entire Gemma adapter repo into /models/adapters/.
-    # The repo contains subfolders adp-b/ and adp-c/, each with
-    # adapter_config.json and adapter_model.safetensors.
-    # PeftModel.from_pretrained and load_adapter() then receive the subfolder
-    # paths directly: /models/adapters/adp-b/ and /models/adapters/adp-c/.
-    _log.info(f"Downloading Gemma adapter repo: {adapter_repo}...")
-    snapshot_download(adapter_repo, local_dir="/models/adapters")
+    _log.info("Downloading ADP-C adapter (equinox013/nikko-adp-c)...")
+    snapshot_download(
+        "equinox013/nikko-adp-c",
+        local_dir="/models/adapters/adp-c",
+        ignore_patterns=["*.msgpack", "flax_model*", "tf_model*"],
+    )
 
     # ADP-A LoRA adapter — standalone public repo (separate from Gemma adapter repo).
     # Trained Phase 4.1 on Lightning.ai A10G (Step 21, Qwen3-4B QLoRA rank-16).
@@ -224,8 +233,8 @@ image = (
         _download_models,
         volumes={"/models": volume},
         secrets=[
-            modal.Secret.from_name("huggingface"),   # HF_TOKEN
-            modal.Secret.from_name("nikko-config"),  # HF_ADAPTER_REPO
+            modal.Secret.from_name("huggingface"),   # HF_TOKEN (for private HF Hub access)
+            # nikko-config removed — adapter repos are hardcoded, HF_ADAPTER_REPO no longer needed
         ],
     )
 )
@@ -447,7 +456,7 @@ _PRE_ANALYSIS_SYSTEM = (
     scaledown_window=600,
     secrets=[
         modal.Secret.from_name("huggingface"),   # HF_TOKEN
-        modal.Secret.from_name("nikko-config"),  # HF_ADAPTER_REPO, NIKKO_INTERNAL_TOKEN
+        modal.Secret.from_name("nikko-config"),  # NIKKO_INTERNAL_TOKEN (shared secret with Render)
     ],
 )
 class NikkoInference:

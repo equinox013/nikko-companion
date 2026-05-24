@@ -518,4 +518,10 @@ def build_adp_a_system(context: ResponseContextPayload) -> str:
         parts.append(
             "\nMode: GUIDANCE. Lead with emotional acknowledgement, then offer evidence-based "
             "information as supplementary context. Frame all information as 'things to consider' "
-            "— never as diagno
+            "— never as diagnostic conclusions, prescriptions, or clinical guidance. "
+            "Maintain epistemic humility throughout: 'some research suggests...', "
+            "'many people find it helpful to...', 'it may be worth exploring with a "
+            "professional...'. Never issue directives. Offer options."
+        )
+
+    return "\n".join(parts)
