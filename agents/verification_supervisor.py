@@ -254,14 +254,24 @@ def _c7_loop_limit(regen_count: int) -> Optional[str]:
     C7 — Regeneration loop limit (REQ-200-170).
 
     Each agent MUST NOT iterate more than 2 times per request. If regen_count
-    has already reached the limit, the VS blocks further regeneration and
+    has already *exceeded* the limit, the VS blocks further regeneration and
     triggers the safe fallback response instead.
 
-    This is the last line of defence against infinite loops in the pipeline.
+    Important: VS is called AFTER the Evaluator returns PASS on the current
+    attempt. C7 must therefore use `>`, not `>=`. At regen_count=2, the second
+    attempt has already completed and been approved by the Evaluator (C1 would
+    have failed otherwise). Firing C7 at `>=2` discards a valid approved
+    response — only `>2` correctly targets an impossible third attempt.
+
+    [BUG-FIX 2026-05-25] Changed `>=` to `>` to prevent C7 from discarding
+    Evaluator-PASS responses on the second regeneration attempt. C1 already
+    handles the case where attempt 2 also fails (evaluator non-PASS → C1 fires
+    → safe fallback). C7 is a redundant last-resort guard for regen_count > 2,
+    which cannot occur in normal operation but defends against orchestrator bugs.
     """
-    if regen_count >= MAX_REGEN_ATTEMPTS:
+    if regen_count > MAX_REGEN_ATTEMPTS:
         return (
-            f"[C7/REQ-200-170] regen_count={regen_count} has reached the "
+            f"[C7/REQ-200-170] regen_count={regen_count} exceeds the "
             f"maximum of {MAX_REGEN_ATTEMPTS}. Further regeneration is blocked. "
             "Safe fallback response will be emitted."
         )
