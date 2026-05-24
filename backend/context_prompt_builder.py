@@ -518,10 +518,166 @@ def build_adp_a_system(context: ResponseContextPayload) -> str:
         parts.append(
             "\nMode: GUIDANCE. Lead with emotional acknowledgement, then offer evidence-based "
             "information as supplementary context. Frame all information as 'things to consider' "
-            "— never as diagnostic conclusions, prescriptions, or clinical guidance. "
-            "Maintain epistemic humility throughout: 'some research suggests...', "
-            "'many people find it helpful to...', 'it may be worth exploring with a "
-            "professional...'. Never issue directives. Offer options."
+            "— never as diagnosis, prescription, or directive. End by reinforcing the user's autonomy."
+        )
+    elif context.mode == OperationalMode.COMFORT:
+        parts.append(
+            "\nMode: COMFORT. Your ONLY job right now is to make the user feel genuinely heard. "
+            "HARD RULES — all binding, no exceptions: "
+            "(1) DO NOT give advice. No suggestions, no recommendations, no 'you could try', "
+            "no 'it might help to', no 'consider reaching out'. The user did not ask. "
+            "(2) DO NOT introduce resources, helplines, or professional referrals unless the "
+            "user has explicitly requested them in this message. "
+            "(3) DO NOT use stock phrases: 'resilience', 'sign of strength', 'prioritize "
+            "self-care', 'it takes courage', 'you are not alone', 'you matter'. These are "
+            "generic fillers that signal you are not actually listening. "
+            "(4) DO NOT reframe their struggle as a positive ('this shows how strong you are'). "
+            "That invalidates what they just said. "
+            "WHAT TO DO INSTEAD: Reflect the SPECIFIC things they said back to them in your "
+            "own words. Name the exact feeling or situation they described. Make one or two "
+            "observations that show you actually read their message. Ask a single open question "
+            "if it feels natural — but only one, and only if it invites them to say more, not "
+            "to fix anything. A response of 2–4 sentences that makes them feel truly seen is "
+            "better than a paragraph of generic encouragement. "
+            "Do NOT open with 'I'm sorry you're feeling this way', 'I'm sorry to hear that', "
+            "or any generic apology opener. Start with what they actually shared."
         )
 
+    # ── Passive risk sustained nudge (COMFORT mode only) ─────────────────────
+    # [REQ-100-PR2] When passive risk signals have been detected in ≥2 of the
+    # last 5 user turns AND current distress is not LOW, the pipeline sets
+    # passive_risk_sustained=True. ADP-A must include a single, warm, non-
+    # clinical sentence at the end of its response gently encouraging the user
+    # to consider speaking to someone — a trusted person or a professional.
+    #
+    # WHY ONLY COMFORT MODE: in GUIDANCE mode, the evidence pipeline may already
+    # surface professional resource links (e.g. BeyondBlue). In CRISIS mode, the
+    # crisis resources block handles this. Only COMFORT responses need the nudge.
+    #
+    # HOW TO PITCH IT: the user is not in crisis — this is background pattern
+    # detection, not an alarm. The tone must stay warm and non-prescriptive.
+    # "It might be worth talking to someone you trust about this" is the target
+    # register — not "I strongly recommend you seek professional help immediately."
+    if context.passive_risk_sustained and context.mode == OperationalMode.COMFORT:
+        parts.append(
+            "\nPASSIVE RISK NOTE: Over recent turns, this user has shown signs of "
+            "passive distress (e.g. hopelessness, burden ideation, or wishing to "
+            "disappear). You MUST include a single warm, gentle sentence at the end "
+            "of your response — after your main supportive content — suggesting they "
+            "consider talking to someone they trust or a professional. Keep it "
+            "non-prescriptive and warm, not clinical or alarming. Example register: "
+            "'It might be worth talking to someone you trust about what you're "
+            "carrying.' Do NOT open with it or make it the centrepiece of your reply."
+        )
+
+    # ── Register-matching instruction (all modes) ─────────────────────────────
+    # [REQ-700-SA7] The upstream pipeline (Qwen3 pre-analysis, ADP-B safety pass)
+    # may inject signals indicating elevated arousal or distress. This is correct
+    # context, but it must NOT cause ADP-A to respond with clinical weight or
+    # heightened concern when the user's live message register is light, casual,
+    # tentative, or humorous.
+    #
+    # WHY THIS MATTERS: if the user opens with "*shakes* h-hi there" in a
+    # deliberately tentative/shy register, a response that mirrors back heavy
+    # clinical concern would feel jarring and isolating. The user presented
+    # lightly — Nikko must match that presentation, trusting the live conversation
+    # tone as the primary signal. Arousal markers from upstream set the internal
+    # sensitivity level; they should not dictate the surface register of the reply.
+    #
+    # HOW TO APPLY: scan the user's current message for register cues — word
+    # choice (casual vs formal), sentence length, hedging, emoji, humour — and
+    # pitch the response at that register. If the words are warm but tentative,
+    # respond warmly but gently, not with urgency. If the user is self-deprecating
+    # or ironic, meet them there before going deeper. The rule: words > signals
+    # when determining HOW to say it; signals inform HOW MUCH weight to apply.
+    parts.append(
+        "\nREGISTER RULE: Match the register and energy level of the user's actual "
+        "message. If the user is light, casual, tentative, shy, or gently ironic, "
+        "respond in that register — do not respond with clinical weight, urgency, or "
+        "heightened concern unless the verbal content of the message clearly warrants it. "
+        "The pipeline may have flagged elevated arousal signals upstream; use those to "
+        "inform your sensitivity level internally, but let the user's live conversation "
+        "tone determine how you pitch your response on the surface. "
+        "Words in the message determine HOW MUCH weight to apply; the user's register "
+        "determines HOW to say it."
+    )
+
     return "\n".join(parts)
+
+
+def build_adp_b_system() -> str:
+    """
+    Return the static ADP-B safety classifier system prompt.
+    No context enrichment — safety classification must be deterministic.
+    """
+    return _ADP_B_SYSTEM
+
+
+def build_adp_c_system(context: ResponseContextPayload) -> str:
+    """
+    Build the ADP-C evaluator system prompt.
+
+    In Guidance Mode with evidence present, the check is two-part:
+      1. Absence: response MUST reference at least one retrieved source.
+         A response that ignores the evidence entirely must be REGENERATE.
+      2. Fabrication: response must NOT invent citations beyond the provided base.
+
+    Previously only fabrication was checked — absence was not caught, so ADP-C
+    approved responses that silently ignored injected evidence. Fixed 2026-05-21.
+    """
+    # Base verdict instruction — shared across all modes.
+    # [REQ-000-232] Epistemic language red-lines added to evaluator:
+    # ADP-C now catches BOTH over-claiming AND over-hedging failures.
+    # Over-claiming example: "This will definitely help you."
+    # Over-hedging example: every sentence prefixed with "perhaps" or "maybe",
+    # or repeated "I'm just an AI" disclaimers throughout the response.
+    base = (
+        "You are a response quality evaluator for a mental health support app. "
+        "Given a user message and a proposed assistant response, output a JSON object: "
+        "verdict: APPROVE if the response is empathetic, safe, appropriate, and "
+        "uses calibrated epistemic language. "
+        "verdict: REGENERATE if the response: "
+        "(1) is harmful, dismissive, or clinically inappropriate; "
+        "(2) is in Comfort Mode AND contains unsolicited advice, resource referrals, "
+        "professional help suggestions, or generic stock encouragement phrases "
+        "('resilience', 'sign of strength', 'prioritize self-care', 'you are not alone') "
+        "— Comfort Mode must be pure validation only; "
+        "(3) fails to ground its response in evidence in Guidance Mode; "
+        "(4) OVER-CLAIMS certainty — uses phrases like 'this will definitely help', "
+        "'you clearly need', 'this is definitely [diagnosis]', 'you definitely feel' "
+        "— asserting clinical certainty the system cannot have; "
+        "(5) OVER-HEDGES excessively — prefixes every sentence with 'perhaps' or "
+        "'maybe', or repeats 'I'm just an AI' type disclaimers more than once, "
+        "rendering the response unhelpfully vague; OR "
+        "(6) FABRICATES personal context — references specific life events, "
+        "relationships, or circumstances (e.g. a partner, job loss, financial "
+        "situation, bereavement) that the user did NOT mention in their message. "
+        "If the assistant introduced personal details the user never shared, "
+        "verdict MUST be REGENERATE regardless of tone quality. "
+        "reason: one sentence explanation. "
+        "Output ONLY the JSON object."
+    )
+
+    # Guidance Mode: check both evidence ABSENCE and FABRICATION.
+    # Previous version only caught fabrication — a response citing nothing
+    # passed through undetected. Now ADP-C explicitly requires at least one
+    # source to be referenced and rejects if none are. (Fixed 2026-05-21)
+    if (
+        context.mode == OperationalMode.GUIDANCE
+        and context.synthesized_evidence
+        and context.synthesized_evidence.citations
+    ):
+        source_names = ", ".join(
+            c.source_name for c in context.synthesized_evidence.citations[:5]
+        )
+        base += (
+            " Additionally, evidence was retrieved from: " + source_names + ". "
+            "Check TWO things: "
+            "(1) Does the response reference at least one of these sources naturally? "
+            "If the response makes NO reference to the retrieved evidence, "
+            "verdict MUST be REGENERATE. "
+            "(2) Does the response fabricate citations not in the provided list? "
+            "If so, verdict MUST be REGENERATE."
+        )
+
+    return base
