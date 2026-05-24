@@ -429,6 +429,16 @@ class ResponseContextPayload(BaseModel):
             "(G-REGEN-01)"
         ),
     )
+    regen_attempt: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Which regeneration attempt this is (0 = first/original pass). "
+            "Forwarded to Modal so ADP-A temperature can be reduced on each regen, "
+            "steering the model toward conservative outputs instead of creative re-rolls. "
+            "(G-REGEN-01)"
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------

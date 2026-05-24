@@ -607,18 +607,28 @@ class NikkoInference:
 
     # ── Core inference helper ─────────────────────────────────────────────────
 
-    def _infer_raw(self, messages: list[dict], system: str, adapter: str) -> str:
+    def _infer_raw(
+        self,
+        messages:        list[dict],
+        system:          str,
+        adapter:         str,
+        params_override: dict | None = None,
+    ) -> str:
         """
         Runs one generation pass. Routes to the correct model based on adapter:
           adp_a → Qwen3-4B base (_qwen_model / _qwen_tokenizer)
           adp_b → Gemma-2-2b-it with adp_b LoRA active
           adp_c → Gemma-2-2b-it with adp_c LoRA active (hot-swapped via set_adapter)
 
+        params_override: optional dict merged on top of ADAPTER_GEN_PARAMS[adapter].
+        Used by run_pipeline() to reduce ADP-A temperature on regen attempts
+        without touching the baseline ADAPTER_GEN_PARAMS constant. (G-REGEN-01)
+
         Ported verbatim from hf_space/app.py _infer_raw(). Must stay in sync.
         """
         import torch
 
-        params = ADAPTER_GEN_PARAMS[adapter]
+        params = {**ADAPTER_GEN_PARAMS[adapter], **(params_override or {})}
 
         if adapter == "adp_a":
             prompt = self._build_qwen_prompt(messages, system=system)
@@ -1179,6 +1189,12 @@ class NikkoInference:
 
     # ── Full pipeline ─────────────────────────────────────────────────────────
 
+    # Temperature schedule for ADP-A regen attempts. (G-REGEN-01)
+    # Each failed attempt reduces temperature to steer Qwen3-4B toward
+    # conservative, validation-focused outputs rather than creative re-rolls.
+    # Index = regen_attempt (0 = first/original pass; clamped at max index).
+    _REGEN_TEMPERATURES: list[float] = [0.75, 0.55, 0.40, 0.30]
+
     @modal.method()
     def run_pipeline(
         self,
@@ -1192,6 +1208,7 @@ class NikkoInference:
         rule_signal:         dict | None = None,
         base_strategy_text:  str        = "",
         struct_annotations:  str        = "",
+        regen_attempt:       int        = 0,
     ) -> dict:
         """
         Full ADP-B → ADP-A → ADP-C pipeline in a single GPU session.
@@ -1337,7 +1354,19 @@ class NikkoInference:
         # [CONCEPT] ADP-A now runs BEFORE ADP-B safety classification. The draft is
         # generated here but only returned to the caller if ADP-B approves it.
         # If ADP-B fires crisis=True, this draft is silently discarded.
-        draft = self._infer_raw(messages, system, "adp_a")
+        #
+        # [G-REGEN-01] Temperature reduction on regen attempts. The first pass uses
+        # the baseline 0.75 for natural variation. Each failed regen lowers the
+        # temperature (0.55, 0.40, 0.30) so the model converges toward a simple,
+        # conservative acknowledgement rather than generating creative variants that
+        # keep triggering the same violation pattern.
+        _adp_a_temp = self._REGEN_TEMPERATURES[
+            min(regen_attempt, len(self._REGEN_TEMPERATURES) - 1)
+        ]
+        _adp_a_params = {"temperature": _adp_a_temp} if regen_attempt > 0 else None
+        if regen_attempt > 0:
+            log.info(f"[adp_a] regen_attempt={regen_attempt} → temperature={_adp_a_temp}")
+        draft = self._infer_raw(messages, system, "adp_a", params_override=_adp_a_params)
         # [REQ-000-041] Enforce standard English capitalisation on the draft.
         # Qwen3-4B mirrors the user's all-lowercase register despite the TYPOGRAPHY
         # RULE in the system prompt. _sentence_capitalize() applies deterministic
@@ -1487,6 +1516,7 @@ def pipeline(request: dict):
         request.get("rule_signal") or None,
         request.get("base_strategy_text", ""),
         request.get("struct_annotations", ""),   # Render-side deterministic signals (split architecture)
+        int(request.get("regen_attempt", 0)),    # G-REGEN-01: reduces ADP-A temperature per regen attempt
     )
     # Stamp the Modal container's load timestamp onto every response so Render
     # can log which Modal deploy served this request. _MODAL_LOAD_TS is set once

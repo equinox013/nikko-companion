@@ -1554,8 +1554,12 @@ class NikkoPipeline:
             # [G-REGEN-01] Rejection feedback from the previous attempt. None on
             # the first pass. On regen turns, contains the specific failure reason
             # + incriminating sentence so build_adp_a_system() can inject a
-            # [REGENERATE INSTRUCTION] block telling ADP-A what to avoid.
+            # [ACTIVE OUTPUT CONSTRAINT] block telling ADP-A what to avoid.
             regen_feedback=regen_feedback,
+            # [G-REGEN-01] Attempt index forwarded to Modal so ADP-A temperature
+            # is reduced on each regen (0.75 → 0.55 → 0.40 → 0.30), steering
+            # the model toward conservative outputs rather than creative re-rolls.
+            regen_attempt=regen_count,
         )
 
         # ── STEP 10: Draft generation (Interaction Model) ─────────────────

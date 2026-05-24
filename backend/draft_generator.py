@@ -232,6 +232,9 @@ class HFSpaceFullGenerator:
             "scope_ambiguous":    scope_ambiguous,
             "rule_signal":        rule_signal,
             "base_strategy_text": base_strategy_text,
+            # [G-REGEN-01] Regen attempt index — Modal uses this to reduce ADP-A
+            # temperature on each retry (0.75 → 0.55 → 0.40 → 0.30).
+            "regen_attempt":      getattr(context, "regen_attempt", 0),
         }
 
         logger.info(

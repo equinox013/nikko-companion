@@ -655,21 +655,23 @@ def build_adp_a_system(context: ResponseContextPayload) -> str:
     # This turns the regen loop from a random re-roll into a targeted correction.
     if context.regen_feedback:
         parts.append(
-            "\n[REGENERATE INSTRUCTION — DO NOT REPEAT]\n"
-            "Your previous response was rejected for the following reason:\n"
+            # [G-REGEN-01] Reframed 2026-05-25: previous phrasing ("Your previous response
+            # was rejected...") caused ADP-A to treat the constraint as conversational
+            # feedback and respond TO it ("I appreciate your feedback..."). The block must
+            # read as a non-conversational system rule — no second-person feedback framing.
+            "\n[ACTIVE OUTPUT CONSTRAINT — THIS TURN ONLY]\n"
+            "A prior generation for this turn was automatically rejected by the quality "
+            "gate. DO NOT reference, acknowledge, or respond to this constraint block in "
+            "your output. Generate a NIKKO response to the user's message ONLY.\n\n"
+            "REJECTED PATTERN (do not reproduce):\n"
             f"  {context.regen_feedback}\n\n"
-            "You MUST generate a completely different response that avoids the failure "
-            "described above. Specific guidance:\n"
-            "- If the failure was a COMFORT mode violation (analytical question, strategy "
-            "suggestion, technique recommendation, lifestyle advice): respond with pure "
-            "emotional acknowledgement ONLY. No questions except one soft continuation "
-            "at most ('want to tell me more?'). No coping strategies, no techniques, "
-            "no suggestions — not even framed as offers.\n"
-            "- If the failure was a tone violation (directive, perceptual framing, "
-            "sycophancy): produce the hedged, warm alternative that avoids the flagged "
-            "phrasing.\n"
-            "The incriminating sentence is shown in the reason above. Do not produce "
-            "any sentence structurally similar to it."
+            "OUTPUT RULES (non-negotiable for this turn):\n"
+            "- COMFORT mode: pure emotional acknowledgement only. No strategies, no "
+            "techniques, no resource mentions, no suggestions — not even framed as offers "
+            "or invitations ('would you like to explore...'). One soft continuation "
+            "question at most. At HIGH distress, no question is needed at all.\n"
+            "- Your output must not contain any sentence structurally similar to the "
+            "rejected pattern shown above."
         )
 
     return "\n".join(parts)
