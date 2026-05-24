@@ -1193,7 +1193,10 @@ class NikkoInference:
     # Each failed attempt reduces temperature to steer Qwen3-4B toward
     # conservative, validation-focused outputs rather than creative re-rolls.
     # Index = regen_attempt (0 = first/original pass; clamped at max index).
-    _REGEN_TEMPERATURES: list[float] = [0.75, 0.55, 0.40, 0.30]
+    # Schedule is intentionally aggressive: 0.30 is the empirical convergence
+    # point (ADP-C approved at attempt=3 temp=0.30 in Phase 6 testing), so
+    # reaching it at attempt=1 rather than attempt=3 saves two full regen cycles.
+    _REGEN_TEMPERATURES: list[float] = [0.70, 0.35, 0.25, 0.20]
 
     @modal.method()
     def run_pipeline(
@@ -1462,7 +1465,9 @@ class NikkoInference:
             regen_system = system + _regen_constraint
             # Lower temperature for the internal regen pass — model has already
             # failed once at current temp; converge toward conservative output.
-            _regen_temp  = max(0.30, _adp_a_temp - 0.20)
+            # Floor is 0.15 (not 0.30) so that even the lowest schedule entry
+            # (0.20) still gets a meaningful reduction on the internal retry.
+            _regen_temp  = max(0.15, _adp_a_temp - 0.15)
             draft2    = self._infer_raw(
                 messages, regen_system, "adp_a",
                 params_override={"temperature": _regen_temp},
