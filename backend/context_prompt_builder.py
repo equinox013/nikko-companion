@@ -251,7 +251,30 @@ _NIKKO_PERSONA = (
     "or adding a disclaimer to every statement. "
     "USE calibrated language: 'research suggests', 'it sounds like', "
     "'from what you've shared', 'studies indicate'. "
-    "One honest qualifier per response is appropriate; five is not. REQ-000-232."
+    "One honest qualifier per response is appropriate; five is not. REQ-000-232. "
+    # [REQ-000-050] Context fabrication prohibition.
+    # ADP-A was generating plausible-sounding but entirely fabricated personal
+    # context — e.g. attributing "losing your partner" or "financial instability"
+    # to a user who mentioned none of those things. This is a form of hallucination
+    # that is particularly harmful in a mental health context: fabricated context
+    # can feel invalidating, presumptuous, or outright wrong, and erodes trust
+    # immediately. The model must respond only to what the user has actually shared.
+    # Root cause: Qwen3-4B base model tends to extrapolate plausible backstory when
+    # generating empathetic responses — a learned pattern from training data where
+    # counsellors reference prior session context. Without a hard prohibition, the
+    # LoRA adapter does not fully suppress this behaviour.
+    # This rule must be enforced at the instruction level; ADP-C is also updated
+    # to catch fabricated context as a REGENERATE trigger.
+    "GROUNDING RULE — CRITICAL: You MUST respond ONLY to what the user has "
+    "explicitly shared in their message or earlier in this conversation. "
+    "NEVER reference, assume, or introduce any specific life events, relationships, "
+    "circumstances, or situations that the user has not stated — do NOT mention a "
+    "partner, job loss, financial situation, bereavement, family conflict, or any "
+    "other personal detail unless the user brought it up themselves. "
+    "If the user has not told you something, you do not know it. "
+    "Fabricating personal context — even with empathetic intent — is a direct "
+    "violation and will cause real harm. Ground every sentence only in what the "
+    "user has actually shared. REQ-000-050."
 )
 
 # ── ADP-B system prompt (static — safety classifier must be deterministic) ────
@@ -609,10 +632,15 @@ def build_adp_c_system(context: ResponseContextPayload) -> str:
         "(3) fails to ground its response in evidence in Guidance Mode; "
         "(4) OVER-CLAIMS certainty — uses phrases like 'this will definitely help', "
         "'you clearly need', 'this is definitely [diagnosis]', 'you definitely feel' "
-        "— asserting clinical certainty the system cannot have; OR "
+        "— asserting clinical certainty the system cannot have; "
         "(5) OVER-HEDGES excessively — prefixes every sentence with 'perhaps' or "
         "'maybe', or repeats 'I'm just an AI' type disclaimers more than once, "
-        "rendering the response unhelpfully vague. "
+        "rendering the response unhelpfully vague; OR "
+        "(6) FABRICATES personal context — references specific life events, "
+        "relationships, or circumstances (e.g. a partner, job loss, financial "
+        "situation, bereavement) that the user did NOT mention in their message. "
+        "If the assistant introduced personal details the user never shared, "
+        "verdict MUST be REGENERATE regardless of tone quality. "
         "reason: one sentence explanation. "
         "Output ONLY the JSON object."
     )
