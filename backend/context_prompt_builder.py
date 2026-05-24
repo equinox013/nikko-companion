@@ -704,34 +704,44 @@ def build_adp_c_system(context: ResponseContextPayload) -> str:
         "Output ONLY the JSON object."
     )
 
-    # [REQ-000-065] COMFORT mode questioning prohibition.
-    # Analytical and solution-seeking questions in COMFORT mode shift the user
-    # from being heard into problem-solving mode — the opposite of the COMFORT
-    # contract. Prohibited patterns: cause-attribution ("what do you think caused
-    # this?"), option-generation ("have you considered..."), next-step framing
-    # ("what would help?", "what could you try?"). These are GUIDANCE-mode tools,
-    # not COMFORT-mode tools.
-    # Permitted in COMFORT mode: one soft continuation question at most
-    # ("want to tell me more?", "what's been going on?") — these invite the user
-    # to say more without demanding analysis or solutions.
-    # At MODERATE or HIGH distress, no question of any kind is required.
+    # [REQ-000-065] COMFORT mode questioning prohibition — extended 2026-05-25.
+    # Analytical and solution-seeking questions AND implicit strategy suggestions in
+    # COMFORT mode shift the user from being heard into problem-solving mode.
+    # Extended beyond direct Wh-questions to cover: invitational strategy offers
+    # ("would you like to discuss ways to cope?"), soft directives ("maybe try...",
+    # "perhaps consider..."), you-directed suggestions ("you could try...", "you might
+    # want to consider..."), and implicit technique framing ("one thing that might help
+    # is...", "it might be worth reflecting...").
+    # Permitted: one soft continuation question at most ("want to tell me more?",
+    # "what's been going on?"). At MODERATE or HIGH distress no question is required.
     base = base.replace(
         "verdict MUST be REGENERATE regardless of tone quality. "
         "reason: one sentence explanation. "
         "Output ONLY the JSON object.",
         "verdict MUST be REGENERATE regardless of tone quality; OR "
         "(7) is in COMFORT Mode AND contains an analytical or solution-seeking "
-        "question — asking the user to explain causes ('why do you think...', "
-        "'what do you think caused/led to...'), consider options or strategies "
-        "('have you considered...', 'what might help...', 'what could you try...', "
-        "'is there something you could do...'), or identify next steps "
-        "('what would you like to do...', 'what are your options...', "
-        "'what feels like a next step...'). "
-        "These questions move a distressed user into problem-solving mode and "
-        "are prohibited in COMFORT Mode. A single soft continuation question "
-        "('want to tell me more?', 'what\\'s been going on?', 'how long has this "
-        "been weighing on you?') is the maximum permitted. At MODERATE or HIGH "
-        "distress no question is required at all. "
+        "question or implicit strategy suggestion. Prohibited forms: "
+        "(a) cause-attribution questions ('why do you think...', 'what do you think "
+        "caused/led to...', 'what\\'s behind this?'); "
+        "(b) option/strategy questions ('have you considered...', 'what might help...', "
+        "'what could you try...', 'is there something you could do...'); "
+        "(c) next-step framing ('what would you like to do...', 'what are your options...', "
+        "'what feels like a next step...'); "
+        "(d) invitational strategy offers — the offering frame does not reduce the "
+        "problem-solving intent ('would you like to discuss ways to cope?', "
+        "'would you like to explore some strategies?', 'shall we look at some options?'); "
+        "(e) soft directives ('maybe try some breathing exercises', 'perhaps you could "
+        "think about what\\'s triggering this', 'perhaps consider reaching out'); "
+        "(f) you-directed suggestions ('you could try reaching out', 'you might want to "
+        "consider talking to someone', 'you might find it helpful to journal'); "
+        "(g) implicit technique framing ('one thing that might help is journaling', "
+        "'it might be worth reflecting on what triggered this', "
+        "'something that often helps is...'). "
+        "All of (a)-(g) move a distressed user into problem-solving mode and are "
+        "prohibited in COMFORT Mode. A single soft continuation question is the maximum "
+        "permitted ('want to tell me more?', 'what\\'s been going on?', 'how long has "
+        "this been weighing on you?'). At MODERATE or HIGH distress no question or "
+        "strategy suggestion is required at all. "
         "REQ-000-065. "
         "reason: one sentence explanation. "
         "Output ONLY the JSON object."
