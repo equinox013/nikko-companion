@@ -1889,4 +1889,397 @@ class NikkoPipeline:
             )
         trace.step("signal_agent")
         # Persist the full SignalPayload to the trace so the debug overlay can
-        # render all SPEC-100 §9 fields (emotional_st
+        # render all SPEC-100 §9 fields (emotional_states, cognitive_patterns,
+        # behavioral_indicators, risk_indicators, support_needs, uncertainty_notes).
+        # Previously only distress_level + confidence were stored here, which left
+        # every array field empty in the frontend debug panel. REQ-FIS-DB2/DB3.
+        trace.signal_output = {
+            "distress_level":        signal.distress_level.value,
+            "confidence":            signal.confidence,
+            "emotional_states":      signal.emotional_states or [],
+            "cognitive_patterns":    signal.cognitive_patterns or [],
+            "behavioral_indicators": signal.behavioral_indicators or [],
+            "risk_indicators":       signal.risk_indicators or [],
+            "support_needs":         signal.support_needs or [],
+            "uncertainty_notes":     signal.uncertainty_notes or "",
+        }
+        logger.info("Signal: distress=%s confidence=%.2f",
+                    signal.distress_level.value, signal.confidence)
+        return signal
+
+    def _step3_route(
+        self,
+        signal:         SignalPayload,
+        attempt_count:  int,
+        trace:          PipelineTrace,
+        force_guidance: bool = False,
+    ) -> RouterDecision:
+        """
+        STEP 3 — Routing (REQ-700-040 through REQ-700-042).
+
+        REQ-700-123: on Router failure, default to Comfort Mode and suppress
+        all evidence chains.
+
+        force_guidance: set True when the user prefixed their message with
+        \\guide or /guide. Passed through to Router Rule 2.5 (REQ-200-163).
+        CRISIS rules 1 and 2 still take priority — force_guidance is never
+        respected when crisis signals are present.
+        """
+        try:
+            decision = self._router.route(
+                signal,
+                attempt_count=attempt_count + 1,
+                force_guidance=force_guidance,
+            )
+        except Exception as exc:
+            logger.error("Router raised %s — defaulting to COMFORT Mode (REQ-700-123).", exc)
+            from agents.router import RouterDecision
+            decision = RouterDecision(
+                mode=OperationalMode.COMFORT,
+                routing_rationale="[ROUTER FAILURE — forced COMFORT]",
+                confidence=0.0,
+                crisis_override=False,  # COMFORT fallback is never a crisis override
+            )
+        trace.step("router")
+        trace.router_decision = decision.mode.value
+        # Persist full router output so the debug overlay can show real confidence.
+        # Previously only the mode string was stored, forcing _result_to_trace to
+        # default confidence to 0.0. REQ-FIS-DB4.
+        trace.router_output = {
+            "mode":           decision.mode.value,
+            "confidence":     decision.confidence,
+            "crisis_override": getattr(decision, "crisis_override", False),
+            "rationale":      getattr(decision, "routing_rationale", ""),
+        }
+        logger.info("Router: mode=%s confidence=%.2f crisis_override=%s",
+                    decision.mode.value, decision.confidence,
+                    getattr(decision, "crisis_override", False))
+        return decision
+
+    def _steps4_7_guidance_evidence(
+        self,
+        signal: SignalPayload,
+        user_text: str,
+        trace: PipelineTrace,
+        query_context: str = "",
+    ) -> Optional[SynthesizedEvidence]:
+        """
+        STEPS 4–8 (Guidance Mode) — Evidence retrieval + synthesis.
+
+        REQ-700-121: on retrieval failure, proceed without evidence and
+        explicitly avoid fabrication (handled downstream by Evaluator).
+
+        Runs ADAPTER_PRIORITY_ORDER sequentially: PubMed first, WebSearch
+        fallback. Both results (if any) are passed to the Synthesizer.
+
+        Query construction: _build_evidence_query() does two-pass extraction:
+        1. Signal keys (support_needs, emotional_states, cognitive_patterns)
+        2. Keyword scan of query_context (defaults to user_text) via _TOPIC_KEYWORD_PATTERNS
+
+        query_context: optional enriched window containing recent prior user
+        turns prepended to the current message. When provided, the keyword
+        scanner operates over a richer text window so context stated earlier
+        in the conversation (e.g. "I have no family or friends") contributes
+        to query term selection even if it's absent from the current message.
+        Falls back to user_text when not provided.
+        """
+        # Two-pass query: signal keys + keyword scan of context window.
+        # If the caller supplied query_context (multi-turn window), use that;
+        # otherwise fall back to the current message alone.
+        effective_text = query_context if query_context else user_text
+        query = _build_evidence_query(signal, effective_text)
+        logger.info(
+            "Evidence query: %r  (support_needs=%s emotional_states=%s user_text=%r)",
+            query, signal.support_needs, signal.emotional_states, user_text[:60],
+        )
+
+        # ── Signal → Topic bridge (G-RETRIEVAL-02) ────────────────────────
+        # Translate Signal Agent output into TopicTag hints before retrieval.
+        # Both adapters receive the same hint set so they select consistent
+        # domain/MeSH coverage.  An empty frozenset means the adapters fall
+        # back to their own keyword classifiers — identical to pre-G-RETRIEVAL-02
+        # behaviour (safe on Render where stub signal agent fires empty arrays).
+        topic_hints     = _signal_to_topic_hints(signal)
+        preferred_sources = _get_preferred_source_labels(topic_hints)
+        logger.info(
+            "Topic hints: %s → preferred sources: %s",
+            sorted(topic_hints), sorted(preferred_sources),
+        )
+
+        # ── PubMed eligibility gate (G-RETRIEVAL-03) ──────────────────────────
+        # General emotional queries → WebSearch only (grey-lit guidance sites).
+        # Explicitly clinical/research queries → PubMed first, WebSearch second.
+        # See _is_pubmed_eligible() for the two-signal eligibility rule.
+        pubmed_eligible = _is_pubmed_eligible(topic_hints, query, raw_text=user_text)
+        adapters_to_run = ADAPTER_PRIORITY_ORDER if pubmed_eligible else [WebSearchAdapter]
+        # When PubMed is skipped, request more grey-lit results to compensate
+        # for the absent peer-reviewed set.
+        web_max_results = 3 if pubmed_eligible else 6
+        logger.info(
+            "PubMed eligible: %s (topic_hints=%s) → adapters: %s",
+            pubmed_eligible,
+            sorted(topic_hints),
+            [cls.__name__ for cls in adapters_to_run],
+        )
+
+        retrieval_results: list[EvidencePayload] = []
+        adapters_run = []
+
+        for AdapterClass in adapters_to_run:
+            adapter_name = AdapterClass.__name__
+            try:
+                adapter = AdapterClass()
+                if AdapterClass is PubMedAdapter:
+                    params = PubMedQueryParams(
+                        query=query,
+                        max_results=5,
+                        topic_hints=topic_hints,
+                    )
+                else:
+                    params = StaticCacheQueryParams(
+                        query=query,
+                        max_results=web_max_results,
+                        topic_hints=topic_hints,
+                    )
+                result: RetrievalResult = adapter.search(params)
+                if result.items:
+                    retrieval_results.append(_retrieval_result_to_evidence_payload(result))
+                    adapters_run.append(adapter_name)
+                    logger.info("Retrieval %s: %d items", adapter_name, len(result.items))
+                else:
+                    logger.info("Retrieval %s: 0 items returned.", adapter_name)
+            except Exception as exc:
+                # REQ-700-121: failure does not abort — continue with other adapters.
+                logger.warning("Retrieval adapter %s failed: %s", adapter_name, exc)
+
+        trace.step("evidence_retrieval")
+        trace.adapter_configuration = adapters_run
+        trace.evidence_used = [ep.source_name for ep in retrieval_results]
+
+        if not retrieval_results:
+            # [PROPOSED-RECONCILIATION: C5 checks that the evidence step RAN, not
+            # that it produced results. Returning an empty SynthesizedEvidence object
+            # (rather than None) correctly signals "step ran, found nothing" vs
+            # "step was skipped entirely". Returning None was causing C5 to fire and
+            # emit SAFE_FALLBACK_RESPONSE on Fly.io where PubMed/WebSearch are
+            # unreachable (network restrictions / free-tier timeouts). The ADP-A
+            # context_prompt_builder handles empty citations gracefully — it simply
+            # omits the evidence injection block. Director: review as G-RETRIEVAL-01.]
+            logger.warning(
+                "All retrievals returned 0 items — returning empty SynthesizedEvidence "
+                "so GUIDANCE mode can proceed without RAG injection. C5 preserved."
+            )
+            return SynthesizedEvidence(
+                summary=(
+                    "No peer-reviewed evidence was retrieved for this query. "
+                    "Retrieval adapters returned zero results — respond from "
+                    "general clinical knowledge with appropriate epistemic humility."
+                ),
+                citations=[],
+                confidence=0.0,
+                grey_literature_used=False,
+            )
+
+        # Pass preferred_sources so the Synthesizer can give a sub-bucket boost
+        # to topically relevant grey-literature items (e.g. GriefLine results
+        # rank ahead of generic Healthdirect results on a grief query).
+        evidence = self._synthesizer.synthesize(
+            retrieval_results,
+            query=query,
+            preferred_sources=preferred_sources,
+        )
+        trace.step("evidence_synthesizer")
+        logger.info("Synthesizer: confidence=%.4f grey_lit=%s",
+                    evidence.confidence, evidence.grey_literature_used)
+        return evidence
+
+    def _step_strategy(
+        self, router_decision: RouterDecision, signal: SignalPayload, trace: PipelineTrace
+    ) -> StrategyPayload:
+        """Support Strategy Agent step (REQ-200-060/061).
+
+        Receives the full RouterDecision so the real SupportStrategyAgent
+        (which expects a RouterDecision, not a bare OperationalMode) gets the
+        correct type. Previously this method received only `mode: OperationalMode`,
+        causing an AttributeError on every request when the real agent tried to
+        call `router_decision.mode` on an OperationalMode enum value.
+        """
+        mode = router_decision.mode
+        try:
+            if mode == OperationalMode.CRISIS:
+                # CRISIS: strategy agent is bypassed; use static crisis strategy.
+                # crisis_bypass() takes NO arguments in the real SupportStrategyAgent
+                # (it returns a hardcoded StrategyPayload constant). Passing signal
+                # previously caused a TypeError on the real agent — fixed here.
+                strategy = self._strategy.crisis_bypass()
+            else:
+                strategy = self._strategy.strategize(router_decision, signal)
+        except Exception as exc:
+            logger.error("StrategyAgent raised %s — using minimal fallback strategy.", exc)
+            strategy = StrategyPayload(
+                mode=mode,
+                distress_level=signal.distress_level,
+                tone_guidance="empathetic, non-directive",
+                framing_strategy="validate and support",
+            )
+        trace.step("support_strategy_agent")
+        return strategy
+
+    def _step10_draft(
+        self, context: ResponseContextPayload, trace: PipelineTrace
+    ) -> str:
+        """
+        STEP 10 — Draft generation (Interaction Model).
+
+        REQ-700-133: LLM receives ONLY the curated ResponseContextPayload —
+        never raw retrieval outputs or signal payloads directly.
+        """
+        try:
+            draft = self._draft_gen.generate(context)
+        except Exception as exc:
+            logger.error("DraftGenerator raised %s — using safe fallback draft.", exc)
+            draft = SAFE_FALLBACK_RESPONSE
+        trace.step("interaction_model")
+        logger.debug("Draft generated (%d chars).", len(draft))
+
+        # [REQ-FIS-DB1] Side-channel: pull pre_analysis_raw and other metadata
+        # from HFSpaceFullGenerator._last_metadata (set after every generate() call).
+        # This avoids changing the DraftGeneratorProtocol return-type interface.
+        # Falls back gracefully when the generator is a stub (no _last_metadata).
+        _meta = getattr(self._draft_gen, "_last_metadata", {}) or {}
+        if _meta:
+            # Always set pre_analysis_output when the key is present in modal metadata,
+            # even when annotations is an empty string. This disambiguates two previously
+            # indistinguishable trace states:
+            #   null  → Modal was not called / old version / scope-blocked (key absent)
+            #   {"annotations": ""}       → Modal ran pre_analysis, no signals found
+            #   {"annotations": "[...]"}  → Modal ran pre_analysis, signals found
+            # Without this, both "no signals" and "not run" showed as null, making
+            # it impossible to confirm a new Modal deploy is live. (Director-flagged 2026-05-23)
+            if "pre_analysis_raw" in _meta:
+                _raw_annotations = _meta["pre_analysis_raw"]
+                trace.pre_analysis_output = {"annotations": _raw_annotations}
+                logger.debug(
+                    "_step10_draft: pre_analysis_output set — annotations=%r",
+                    _raw_annotations or "(none)",
+                )
+            # Also log enhanced signal/strategy so they appear in Render logs.
+            if _meta.get("enhanced_signal"):
+                logger.debug(
+                    "_step10_draft: enhanced_signal from Modal — tone=%r",
+                    (_meta["enhanced_signal"].get("tone_note") or "")[:60],
+                )
+
+        return draft
+
+    def _step11_evaluate(
+        self,
+        draft: str,
+        context: ResponseContextPayload,
+        trace: PipelineTrace,
+    ) -> EvaluationPayload:
+        """
+        STEP 11 — Evaluator audit pass (REQ-700-080 through REQ-700-082).
+
+        REQ-700-122: on Evaluator failure, default to SAFE MODE response
+        with no evidence injection. Modelled here as returning a synthetic
+        FAIL payload so the failure handling path is triggered normally.
+        """
+        try:
+            evaluation = self._evaluator.evaluate(draft, context)
+        except Exception as exc:
+            logger.error("EvaluatorAgent raised %s — synthetic FAIL payload.", exc)
+            evaluation = EvaluationPayload(
+                verdict=EvaluationVerdict.FAIL,
+                safety_check=False,
+                tone_check=False,
+                hallucination_check=False,
+                rejection_reasons=[f"[EVALUATOR FAILURE: {exc}]"],
+            )
+        trace.step("evaluator_agent")
+        trace.evaluation_result = evaluation.verdict.value
+        logger.info("Evaluator: verdict=%s", evaluation.verdict.value)
+        return evaluation
+
+    def _step12_verify(
+        self,
+        context: ResponseContextPayload,
+        evaluation: EvaluationPayload,
+        scope: ScopeClassifierDecision,
+        regen_count: int,
+        trace: PipelineTrace,
+    ) -> VerificationResult:
+        """STEP 12 — Verification Supervisor (REQ-700-090 through REQ-700-092)."""
+        verification = self._vs.verify(context, evaluation, scope, regen_count)
+        trace.step("verification_supervisor")
+        trace.verification_result = "passed" if verification.passed else "failed"
+        return verification
+
+    def _step13_assemble(
+        self,
+        draft: str,
+        context: ResponseContextPayload,
+        trace: PipelineTrace,
+    ) -> str:
+        """
+        STEP 13 — Final response assembly (REQ-700-100/101).
+
+        Non-clinical framing is ensured by the Evaluator in STEP 11.
+        Autonomy reinforcement (REQ-700-101) is now satisfied at the UI
+        layer by the persistent AiDisclaimer component in chat.jsx
+        (G-UI-01 / REQ-300-164), which renders below the composer on every
+        turn. Appending a per-message suffix was redundant, produced formulaic
+        responses, and has been removed.
+
+        [PROPOSED-RECONCILIATION: Director-approved 2026-05-15. REQ-700-101
+        is fulfilled by AiDisclaimer in frontend rather than server-side string
+        appending. Logged as G-AUTONOMY-SUFFIX-01.]
+        """
+        trace.step("response_assembly")
+        return draft
+
+    # ------------------------------------------------------------------
+    # Failure handlers
+    # ------------------------------------------------------------------
+
+    def _handle_evaluator_failure(
+        self,
+        evaluation: EvaluationPayload,
+        user_input: str,
+        session_id: Optional[str],
+        regen_count: int,
+        trace: PipelineTrace,
+        t0: float,
+    ) -> PipelineResult:
+        """
+        REQ-700-082: on Evaluator failure, regenerate if within loop limit;
+        otherwise emit safe fallback.
+
+        REQ-200-170: maximum 2 regeneration attempts per request.
+        REQ-200-171: no more than 1 evaluation cycle per response — so we
+        regenerate by re-running the full pipeline from STEP 2, not by
+        re-calling just the Evaluator.
+        """
+        if (
+            evaluation.verdict == EvaluationVerdict.REGENERATE
+            and regen_count < MAX_REGEN_ATTEMPTS
+        ):
+            logger.info(
+                "Evaluator REGENERATE — attempt %d/%d. Re-running pipeline.",
+                regen_count + 1, MAX_REGEN_ATTEMPTS,
+            )
+            return self.run(user_input, session_id=session_id, regen_count=regen_count + 1)
+
+        # FAIL verdict or regen limit exhausted — safe fallback.
+        trace.final_action = "evaluator_safe_fallback"
+        trace.latency_ms = (time.perf_counter() - t0) * 1000
+        logger.warning(
+            "Evaluator %s (regen=%d) — emitting safe fallback.",
+            evaluation.verdict.value, regen_count,
+        )
+        return PipelineResult(
+            response_text=SAFE_FALLBACK_RESPONSE,
+            safe_fallback_used=True,
+            evaluation=evaluation,
+            trace=trace,
+        )

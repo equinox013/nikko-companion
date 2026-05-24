@@ -362,4 +362,35 @@ class VerificationSupervisorAgent:
         if (reason := _c7_loop_limit(regen_count)):
             failures.append(reason)
 
-  
+        # --- Suspended in Crisis Mode (REQ-700-VS1) -------------------------
+
+        if not crisis_mode_active:
+            # C5: Evidence pipeline — GUIDANCE mode must have synthesized evidence
+            if (reason := _c5_evidence_pipeline(context)):
+                failures.append(reason)
+
+            # C6: Agent contamination — no cross-mode data leakage
+            if (reason := _c6_agent_contamination(context)):
+                failures.append(reason)
+
+        # --- Verdict --------------------------------------------------------
+
+        passed = len(failures) == 0
+        safe_fallback_triggered = not passed
+
+        if passed:
+            logger.info("VS: all checks passed — pipeline may deliver response.")
+        else:
+            logger.warning(
+                "VS: %d check(s) failed — safe fallback triggered. Reasons: %s",
+                len(failures),
+                failures,
+            )
+
+        return VerificationResult(
+            passed=passed,
+            failure_reasons=failures,
+            safe_fallback_triggered=safe_fallback_triggered,
+            crisis_mode_active=crisis_mode_active,
+            regen_count=regen_count,
+        )

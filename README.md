@@ -66,7 +66,7 @@ Nikko exists to support — not to replace. The full ethical charter is in `docs
 
 ## Model Stack
 
-Nikko uses a **dual-model architecture** built around two base models and three specialised LoRA adapters (ADP = Adapter). The previous candidate — Mistral-7B-Instruct-v0.3 — was retired after proving infeasible on an RTX 3070 8 GB (14 GB fp16 requirement, 14+ hours training with no convergence). All Mistral artefacts are preserved under `*/mistral-7b/`.
+Nikko uses a **dual-model architecture** built around two base models and three specialised LoRA adapters (ADP = Adapter). The previous candidate — Mistral-7B-Instruct-v0.3 — was retired after proving infeasible on an RTX 3070 8 GB (14 GB fp16 requirement, 14+ hours training with no convergence). Mistral artefacts are archived locally under `*/mistral-7b/` and are not tracked in VCS.
 
 All three adapters were trained in **Phase 4.1 on Lightning.ai A10G** (cloud retraining, steps 20–25) using QLoRA rank-16. Adapter weights are hosted on HF Hub.
 
@@ -354,21 +354,16 @@ nikko-companion/
 ├── docs/
 │   ├── specs/          # 8 core specs (SPEC-000 through SPEC-700) + 3 supplementary (SPEC-800, SPEC-810, SPEC-850)
 │   ├── derived/        # Architecture, agent definitions, safety guardrails, evaluation criteria
-│   ├── schemas/        # Pydantic v2 inter-agent data schemas (acp_schemas.py, retrieval_schemas.py)
 │   └── integration/    # FRONTEND_INTEGRATION_SPEC.md — frontend ↔ backend API contract
-├── agents/             # Seven specialist agents — see agents/README.md
-│   └── mistral-7b/     # Archived Mistral-7B agent implementations (retired 2026-05-14)
+├── schemas/            # Pydantic v2 inter-agent data schemas (acp_schemas.py, retrieval_schemas.py, validate.py)
+├── agents/             # Seven specialist agents
 ├── orchestration/      # Pipeline orchestrator
-│   └── mistral-7b/     # Archived Mistral-7B pipeline (retired 2026-05-14)
 ├── retrieval/          # PubMed + WebSearch evidence adapters
-├── finetuning/         # QLoRA training notebooks and configs for ADP-A/B/C
-│   └── mistral-7b/     # Archived Mistral-7B finetuning artefacts (retired 2026-05-14)
-├── notebooks/          # Step-by-step implementation notebooks (Steps 11–19 active)
-│   └── mistral-7b/     # Archived Mistral-7B notebooks (retired 2026-05-14)
+├── finetuning/         # QLoRA training data and configs for ADP-A/B/C
+├── notebooks/          # Canonical training notebooks: Steps 1–10 (pipeline dev) + Steps 20–25 (cloud training)
 ├── nikko_modal/        # Modal Serverless inference endpoint (Qwen3-4B + Gemma-2-2b-it) — primary
 ├── hf_space/           # HF Spaces ZeroGPU inference endpoint — fallback
-│   ├── app.py          # FastAPI + Gradio app — /pipeline endpoint
-│   └── mistral-7b/     # Archived Mistral-7B HF Space implementation
+│   └── app.py          # FastAPI + Gradio app — /pipeline endpoint
 ├── backend/            # Render orchestration API
 │   ├── main.py         # FastAPI — /health + /api/message SSE endpoint; conversationHistory cap
 │   ├── draft_generator.py          # Multi-turn messages builder for ADP-A; calls paralinguistic_detector
@@ -411,7 +406,7 @@ Every design decision in Nikko traces to a named requirement in the spec. The ke
 | Backend orchestration | Render — `nikko-companion.onrender.com` | FastAPI + pipeline logic; Docker-native |
 | LLM inference (primary) | Modal Serverless — `modal.run` | `/pipeline` endpoint; A10G 24 GB; Qwen3-4B + Gemma-2-2b-it; ~$0.015/call on $30/month free credit |
 | LLM inference (fallback) | HF Spaces ZeroGPU | Auto-failover from Render backend; H200 slice; slower cold start |
-| Adapter weights | HF Hub private repo + Modal Volume | Cached in Modal Volume at build time; pulled at Space startup for fallback |
+| Adapter weights | HF Hub public repos + Modal Volume | [`nikko-adp-a`](https://huggingface.co/equinox013/nikko-adp-a), [`nikko-adp-b`](https://huggingface.co/equinox013/nikko-adp-b), [`nikko-adp-c`](https://huggingface.co/equinox013/nikko-adp-c); cached in Modal Volume at build time |
 
 Cold start (Modal, Volume read): ~30–60s. Cold start (HF Space fallback): ~90–120s. Warm turns: ~20–40s either path. The ThinkingBubble and loading screen manage user expectation during both cases.
 
@@ -426,7 +421,7 @@ Cold start (Modal, Volume read): ~30–60s. Cold start (HF Space fallback): ~90�
 | [`docs/DEVLOG.md`](docs/DEVLOG.md) | Daily development log — decisions, justifications, learnings. |
 | [`docs/specs/SPEC-000-charter.md`](docs/specs/SPEC-000-charter.md) | System charter. Supersedes all other specs on conflict. |
 | [`docs/integration/FRONTEND_INTEGRATION_SPEC.md`](docs/integration/FRONTEND_INTEGRATION_SPEC.md) | Frontend ↔ backend API contract. |
-| [`notebooks/`](notebooks/) | Step-by-step training notebooks (Steps 20–25 canonical cloud runs; Steps 11–16 archived in `local-run/`). |
+| [`notebooks/`](notebooks/) | Canonical notebooks: Steps 1–10 (Phase 3 pipeline dev) and Steps 20–25 (Phase 4.1 cloud training, Lightning.ai A10G). |
 
 ---
 

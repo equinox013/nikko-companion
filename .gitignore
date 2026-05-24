@@ -92,6 +92,13 @@ run_adp_a_v2_pipeline.bat
 notebooks/local-run/
 notebooks/mistral-7b/
 notebooks/phi-3.5/
+# Decommissioned local RTX 3070 notebooks (superseded by steps 20-25 cloud runs)
+notebooks/step11_adp_c_data_generation.ipynb
+notebooks/step12_adp_c_training.ipynb
+notebooks/step15_adp_b_data_generation.ipynb
+notebooks/step16_adp_b_training.ipynb
+# Jupyter artefacts
+notebooks/.ipynb_checkpoints/
 finetuning/mistral-7b/
 finetuning/phi-3.5/
 

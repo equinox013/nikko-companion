@@ -1018,4 +1018,66 @@ class SignalAgent:
         # [Issue 5, Director-approved 2026-05-23] LLM path CRISIS confidence cap.
         #
         # The rule-engine path is safe: has_active_or_acute always forces
-        # ra
+        # raw_distress="crisis" AND sets confidence=0.92 — no cap needed there.
+        #
+        # The LLM path can produce distress_level=CRISIS without a matching
+        # active/acute risk key (the LLM inferred crisis severity from phrasing
+        # alone). If that happens AND the Signal Agent's own confidence is low
+        # (< 0.75), the verdict is under-confident — a false CRISIS routes to
+        # mandatory crisis flow and may harm the user experience. Downgrade to
+        # HIGH so the Router still treats this as elevated distress but does not
+        # trigger the crisis override chain.
+        #
+        # The 0.75 threshold is deliberately conservative: genuine LLM-detected
+        # crisis (without a keyword trigger) should be allowed to stand when the
+        # model is confident, but penalised when it is uncertain.
+        if (
+            distress_level == DistressLevel.CRISIS
+            and not has_active_or_acute
+            and confidence < 0.75
+        ):
+            scrub_notes.append(
+                f"[SignalAgent] distress_level capped to HIGH: LLM emitted CRISIS but "
+                f"no active/acute risk key present and confidence={confidence:.2f} < 0.75. "
+                "Under-confident CRISIS verdict downgraded to prevent false crisis routing. "
+                "(Issue 5, Director-approved 2026-05-23)"
+            )
+            distress_level = DistressLevel.HIGH
+
+        if scrub_notes:
+            uncertainty = (uncertainty + "\n" + "\n".join(scrub_notes)).strip()
+
+        return SignalPayload(
+            distress_level=distress_level,
+            emotional_states=emotional,
+            cognitive_patterns=cognitive,
+            behavioral_indicators=behavioral,
+            risk_indicators=risk,
+            support_needs=support,
+            confidence=confidence,
+            uncertainty_notes=uncertainty,
+        )
+
+    # ------------------------------------------------------------------
+    # Safe fallback
+    # ------------------------------------------------------------------
+
+    def _safe_fallback(self, reason: str) -> SignalPayload:
+        """
+        Return a minimal safe payload when the model call or parse fails.
+
+        Fallback confidence is set to 0.20 (deep within the low band), which
+        guarantees the Router falls back to Comfort Mode and suppresses all
+        evidence chains. (Router spec: confidence < 0.40 -> COMFORT MODE)
+        """
+        print(f"[SignalAgent] FALLBACK triggered: {reason}")
+        return SignalPayload(
+            distress_level=DistressLevel.LOW,
+            emotional_states=[],
+            cognitive_patterns=[],
+            behavioral_indicators=[],
+            risk_indicators=[],
+            support_needs=["emotional_validation"],
+            confidence=0.20,
+            uncertainty_notes=f"[FALLBACK] {reason}",
+        )

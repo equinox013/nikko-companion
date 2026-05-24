@@ -687,4 +687,267 @@ class EvaluatorAgent:
 
         return True, "No sycophancy patterns detected."
 
-    # ------------------
+    # ------------------------------------------------------------------
+    # Pass 2: LLM judge (tone + hallucination)
+    # ------------------------------------------------------------------
+
+    def _rule_judge(
+        self,
+        draft: str,
+        mode: OperationalMode,
+        evidence_summary: Optional[str],
+    ) -> dict:
+        """
+        Deterministic rule-based replacement for the LLM judge (Pass 2).
+
+        Checks tone compliance and hallucination using the pattern tables above.
+        Returns the same dict shape as the LLM judge:
+          {tone_pass, tone_notes, hallucination_pass, hallucination_notes}
+
+        Tone check:
+          Runs _TONE_VIOLATION_PATTERNS whose scope matches the current mode
+          or "ANY". First match -> tone_pass=False.
+
+        Hallucination check:
+          Fires _HALLUCINATION_PATTERNS when no evidence context is provided,
+          or when a claim cannot be traced to the evidence summary.
+        """
+        mode_str = mode.value.upper()
+
+        # -- Tone check --
+        tone_pass  = True
+        tone_notes = "Tone compliant (rule engine)."
+
+        for scope, description, pattern in _TONE_VIOLATION_PATTERNS:
+            if scope not in (mode_str, "ANY"):
+                continue
+            match = pattern.search(draft)
+            if match:
+                tone_pass  = False
+                tone_notes = (
+                    f"[RULE-TONE] {description}: matched '{match.group(0)[:60]}' "
+                    f"in {mode_str} mode."
+                )
+                logger.warning("Tone violation (%s): %r", description, match.group(0)[:60])
+                break
+
+        # -- Sycophancy check (G-SYCO-01) --
+        # Only runs if tone has not already failed — avoids double-reporting.
+        # Bundles into the tone dimension since sycophancy is fundamentally a tone failure.
+        if tone_pass:
+            syco_passed, syco_notes = self._sycophancy_check(draft, mode)
+            if not syco_passed:
+                tone_pass  = False
+                tone_notes = syco_notes
+
+        # -- Hallucination check --
+        # [CONCEPT] Evidence-gated hallucination detection
+        # COMFORT/CRISIS: no evidence provided -> any statistic or research claim is unsupported.
+        # GUIDANCE: evidence provided -> only novel claims not traceable to the summary are flagged.
+        hallucination_pass  = True
+        hallucination_notes = "No hallucination indicators detected (rule engine)."
+
+        for description, pattern in _HALLUCINATION_PATTERNS:
+            match = pattern.search(draft)
+            if not match:
+                continue
+            matched_text = match.group(0)
+
+            if evidence_summary and matched_text.lower() in evidence_summary.lower():
+                continue   # grounded in provided evidence
+
+            if not evidence_summary:
+                hallucination_pass  = False
+                hallucination_notes = (
+                    f"[RULE-HALL] {description}: matched '{matched_text[:60]}' "
+                    f"-- no evidence context in {mode_str} mode."
+                )
+            else:
+                hallucination_pass  = False
+                hallucination_notes = (
+                    f"[RULE-HALL] {description}: matched '{matched_text[:60]}' "
+                    f"-- claim not traceable to provided evidence summary."
+                )
+
+            logger.warning("Hallucination indicator (%s): %r", description, matched_text[:60])
+            break
+
+        return {
+            "tone_pass":           tone_pass,
+            "tone_notes":          tone_notes,
+            "hallucination_pass":  hallucination_pass,
+            "hallucination_notes": hallucination_notes,
+        }
+
+    def _llm_judge(
+        self,
+        draft: str,
+        mode: OperationalMode,
+        evidence_summary: Optional[str],
+    ) -> dict:
+        """
+        Structured LLM evaluation of tone compliance and hallucination.
+
+        Returns {tone_pass, tone_notes, hallucination_pass, hallucination_notes}.
+        On any parse/generation failure, delegates to _rule_judge() instead of
+        silently returning tone_pass=True. REQ-200-171: single evaluation pass.
+
+        Rule-based path:
+            When NIKKO_LOCAL_LLM=false, delegates immediately to _rule_judge().
+        """
+        if not _LOCAL_LLM:
+            return self._rule_judge(draft, mode, evidence_summary)
+
+        evidence_context = (
+            f"Evidence summary provided:\n{evidence_summary}"
+            if evidence_summary
+            else "No evidence was provided to the Interaction Model (Comfort or Crisis Mode)."
+        )
+
+        user_content = (
+            f"Operational mode: {mode.value.upper()}\n\n"
+            f"{evidence_context}\n\n"
+            f"DRAFT RESPONSE TO AUDIT:\n{draft}"
+        )
+
+        messages = [
+            {"role": "system", "content": _EVALUATOR_SYSTEM_PROMPT},
+            {"role": "user",   "content": user_content},
+        ]
+
+        try:
+            # _ensure_model() inside try so ModuleNotFoundError falls to fallback.
+            self._ensure_model()
+
+            text = self._tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True,
+            )
+            inputs = self._tokenizer(text, return_tensors="pt").to(self._model.device)
+
+            t0 = time.perf_counter()
+            outputs = self._model.generate(
+                **inputs,
+                max_new_tokens=200,
+                temperature=0.05,
+                do_sample=True,
+                pad_token_id=self._tokenizer.eos_token_id,
+            )
+            latency_ms = (time.perf_counter() - t0) * 1000
+            logger.debug("LLM judge latency: %.0f ms", latency_ms)
+
+            generated = self._tokenizer.decode(
+                outputs[0][inputs["input_ids"].shape[-1]:],
+                skip_special_tokens=True,
+            ).strip()
+
+            json_match = re.search(r"\{.*\}", generated, re.DOTALL)
+            if not json_match:
+                raise ValueError(f"No JSON found in judge output: {generated[:200]!r}")
+
+            result = json.loads(json_match.group(0))
+            for key in ("tone_pass", "tone_notes", "hallucination_pass", "hallucination_notes"):
+                if key not in result:
+                    raise ValueError(f"Missing key {key!r} in judge output")
+            return result
+
+        except Exception as exc:
+            # [CONCEPT] Fail-safe: LLM judge malfunction -> fall back to rule engine.
+            # Rule judge is strictly better than unconditional tone_pass=True.
+            logger.error("LLM judge failed -- falling back to rule engine. Error: %s", exc)
+            return self._rule_judge(draft, mode, evidence_summary)
+
+    # ------------------------------------------------------------------
+    # Public interface
+    # ------------------------------------------------------------------
+
+    def evaluate(
+        self,
+        draft_response: str,
+        context: ResponseContextPayload,
+    ) -> EvaluationPayload:
+        """
+        Full two-pass evaluation of a draft response.
+
+        Pass 1: deterministic R1-R15 hard-fail + USM audit.
+        Pass 2: tone + hallucination (rule engine or LLM judge).
+
+        Returns EvaluationPayload with verdict PASS / FAIL / REGENERATE.
+
+        Spec trace:
+            REQ-200-100  safety audit, tone check, epistemic-humility enforcement
+            REQ-200-101  final content gate before Verification Supervisor
+            REQ-200-EV1  single pass, no recursion
+            REQ-850-083  USM audit when usm_active=True
+        """
+        rejection_reasons: list[str] = []
+
+        # -- Pass 1: Hard-fail (deterministic) --
+        safety_passed, safety_violations = self._hard_fail_check(draft_response)
+        if not safety_passed:
+            rejection_reasons.extend(safety_violations)
+
+        # -- USM audit --
+        usm_audit_passed: Optional[bool] = None
+        if context.usm_active:
+            usm_ok, usm_violations = self._usm_audit(draft_response)
+            usm_audit_passed = usm_ok
+            if not usm_ok:
+                rejection_reasons.extend(usm_violations)
+
+        # -- Early exit on FAIL --
+        if not safety_passed or (usm_audit_passed is False):
+            logger.info("Evaluator: FAIL (hard-fail). Reasons: %d", len(rejection_reasons))
+            return EvaluationPayload(
+                verdict=EvaluationVerdict.FAIL,
+                safety_check=False,
+                tone_check=True,
+                hallucination_check=True,
+                rejection_reasons=rejection_reasons,
+                usm_audit_passed=usm_audit_passed,
+            )
+
+        # -- Pass 2: judge (tone + hallucination) --
+        evidence_summary = (
+            context.synthesized_evidence.summary
+            if context.synthesized_evidence
+            else None
+        )
+        judge_result = self._llm_judge(
+            draft=draft_response,
+            mode=context.mode,
+            evidence_summary=evidence_summary,
+        )
+
+        tone_passed          = bool(judge_result.get("tone_pass", True))
+        hallucination_passed = bool(judge_result.get("hallucination_pass", True))
+
+        if not tone_passed:
+            rejection_reasons.append(
+                f"[TONE] {judge_result.get('tone_notes', 'Tone check failed.')}"
+            )
+        if not hallucination_passed:
+            rejection_reasons.append(
+                f"[HALLUCINATION] {judge_result.get('hallucination_notes', 'Hallucination check failed.')}"
+            )
+
+        # -- Final verdict --
+        if not tone_passed or not hallucination_passed:
+            verdict = EvaluationVerdict.REGENERATE
+        else:
+            verdict = EvaluationVerdict.PASS
+
+        logger.info(
+            "Evaluator: %s | safety=%s tone=%s hallucination=%s usm=%s",
+            verdict.value, safety_passed, tone_passed, hallucination_passed, usm_audit_passed,
+        )
+
+        return EvaluationPayload(
+            verdict=verdict,
+            safety_check=safety_passed,
+            tone_check=tone_passed,
+            hallucination_check=hallucination_passed,
+            rejection_reasons=rejection_reasons,
+            usm_audit_passed=usm_audit_passed,
+        )

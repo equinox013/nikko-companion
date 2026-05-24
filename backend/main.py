@@ -824,4 +824,54 @@ async def health():
     user to send messages — field name kept as space_ok for frontend compatibility.
     """
     space_ok = False
-    # Probe the dedicated Modal health URL i
+    # Probe the dedicated Modal health URL if provided; otherwise fall back to
+    # the HF Space /health endpoint.  We do NOT append /health to MODAL_URL
+    # because the Modal pipeline endpoint is POST-only — GET /health on it
+    # returns 404.  The Modal health function lives at a separate URL.
+    probe_url = MODAL_HEALTH_URL or (HF_SPACE_URL + "/health" if HF_SPACE_URL else "")
+    if probe_url:
+        try:
+            async with httpx.AsyncClient(timeout=5) as client:
+                r = await client.get(probe_url)
+                space_ok = r.status_code == 200
+        except Exception:
+            pass
+    return {
+        "status":    "ok",
+        "version":   "0.2.0",
+        "space_ok":  space_ok,
+        "inference": "modal" if MODAL_URL else "hf_space",
+        "ts":        int(time.time()),
+    }
+
+
+@app.post("/api/message")
+async def message(body: MessageRequest):
+    """REQ-FIS-001: Primary chat endpoint — streams SSE to the frontend."""
+    if not body.text.strip():
+        raise HTTPException(status_code=422, detail="text must not be empty")
+
+    msg_id = f"msg-{int(time.time()*1000)}-{uuid.uuid4().hex[:6]}"
+    return StreamingResponse(
+        _sse_stream(msg_id, _pipeline(body)),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/api/message/mock")
+async def message_mock(body: MessageRequest):
+    """REQ-FIS-TS1: Hardcoded fixture — frontend testing without live agents."""
+    msg_id = f"mock-{int(time.time()*1000)}"
+
+    async def _mock():
+        await asyncio.sleep(0.3)
+        yield SSEChunk(text="This is a mock response. ", emotion="listen")
+        await asyncio.sleep(0.2)
+        yield SSEChunk(text="Pipeline is not active.", emotion="speak")
+
+    return StreamingResponse(
+        _sse_stream(msg_id, _mock()),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )

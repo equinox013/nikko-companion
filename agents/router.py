@@ -312,4 +312,107 @@ class Router:
             if not distress_permits:
                 _blocked_reason.append(f"distress={signal.distress_level.value} (HIGH suppresses weak intent)")
             if not confidence_permits:
-                _blocked_reason.append(f"confidence={signal.confidence:.2f} (< 
+                _blocked_reason.append(f"confidence={signal.confidence:.2f} (< 0.60 threshold)")
+            logger.info(
+                "Router: weak guidance intent blocked → COMFORT. Reasons: %s",
+                "; ".join(_blocked_reason),
+            )
+
+        # --- Rule 5: COMFORT — safe default ---
+        # Reached when: no crisis signals, confidence sufficient, no guidance intent.
+        # Covers: low/moderate distress with validation needs, ambiguous signals,
+        # high distress where the user needs presence over information.
+        distress_note = (
+            " High distress with passive risk — validation priority, no evidence."
+            if (signal.distress_level == DistressLevel.HIGH and has_passive)
+            else ""
+        )
+        return self._make_decision(
+            mode=OperationalMode.COMFORT,
+            rationale=(
+                f"COMFORT: no crisis signals, no guidance intent detected. "
+                f"Distress={signal.distress_level.value}, "
+                f"confidence={signal.confidence:.2f}.{distress_note}"
+            ),
+            signal=signal,
+            passive_risk_flag=has_passive,
+            attempt_count=attempt_count,
+        )
+
+    # ------------------------------------------------------------------
+    # Private helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _has_active_or_acute_risk(risk_indicators: list[str]) -> bool:
+        """
+        Return True if any risk key belongs to the active or acute tier.
+        (REQ-200-124/125, REQ-100-060)
+
+        The tier is encoded in the key prefix — "risk.active.*" or
+        "risk.acute.*". We check prefixes rather than exact values so
+        that new keys added under these tiers in a SPEC-100 revision are
+        automatically caught without changing this function.
+        """
+        return any(k.startswith(_CRISIS_PREFIXES) for k in risk_indicators)
+
+    @staticmethod
+    def _has_passive_risk(risk_indicators: list[str]) -> bool:
+        """Return True if any passive risk key is present. (REQ-100-PR1)"""
+        return any(k.startswith(_PASSIVE_PREFIX) for k in risk_indicators)
+
+    @staticmethod
+    def _guidance_intent_strength(signal: SignalPayload) -> str:
+        """
+        Return the strength of guidance intent in the signal: "strong", "weak", or "none".
+
+        STRONG — BOTH a guidance support need AND a guidance behavioral indicator
+                 are present. Two independent signal types converging is high-fidelity
+                 evidence the user wants information. Routes to GUIDANCE at any
+                 confidence or distress level.
+
+        WEAK   — EITHER a guidance support need OR a guidance behavioral indicator
+                 is present, but not both. Ambiguous — "I don't know how to cope"
+                 looks like help_seeking but is often pure venting. Routes to GUIDANCE
+                 only when distress < HIGH AND confidence ≥ 0.60 (checked in Rule 4).
+
+        NONE   — Neither fires. Route falls through to COMFORT (Rule 5).
+
+        Replaces _guidance_intent_present() — which returned a bool and treated
+        strong and weak intent identically. The split is the core of the
+        confidence-aware guidance gate (Issues 1 + 2, Director-approved 2026-05-23).
+        """
+        support_match = bool(
+            _GUIDANCE_SUPPORT_NEEDS & set(signal.support_needs)
+        )
+        behavioral_match = bool(
+            _GUIDANCE_BEHAVIORAL_INDICATORS & set(signal.behavioral_indicators)
+        )
+        if support_match and behavioral_match:
+            return "strong"
+        if support_match or behavioral_match:
+            return "weak"
+        return "none"
+
+    @staticmethod
+    def _make_decision(
+        mode:              OperationalMode,
+        rationale:         str,
+        signal:            SignalPayload,
+        passive_risk_flag: bool,
+        attempt_count:     int,
+    ) -> RouterDecision:
+        """
+        Construct and validate a RouterDecision.
+
+        Pydantic will raise ValidationError if crisis_override is inconsistent
+        with mode — this is the last-resort safety net for the model_validator.
+        """
+        return RouterDecision(
+            mode=mode,
+            routing_rationale=rationale,
+            confidence=signal.confidence,
+            crisis_override=(mode == OperationalMode.CRISIS),
+            passive_risk_flag=passive_risk_flag,
+            attempt_count=attempt_count,
+        )
