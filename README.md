@@ -24,7 +24,8 @@ Nikko is a safety-aligned, evidence-grounded LLM ecosystem designed to function 
 | Phase 3 — Agent pipeline (7 specialist agents) | ✅ Complete |
 | Phase 4 — ADP-C fine-tuning (Gemma-2-2b-it) | ✅ Complete |
 | Phase 4 — ADP-B fine-tuning (Gemma-2-2b-it) | ✅ Complete |
-| Phase 4 — ADP-A (Qwen3-4B base, no LoRA) | ⛔ Fine-tuning discontinued — Qwen3-4B base used directly in production |
+| Phase 4 — ADP-A (Qwen3-4B base, no LoRA) | ⛔ Local fine-tuning discontinued (RTX 3070 VRAM limit) |
+| Phase 4.1 — Cloud retraining (Lightning.ai A10G) | ✅ Complete 2026-05-24 — all 3 ADPs retrained; adapters on HF Hub |
 | Phase 7 — Deployment infra (Modal + Render + GH Pages) | ✅ Live (pulled forward of Phase 6) |
 | Frontend SPA | ✅ Complete |
 | Phase 5 — Backend API integration | ✅ Complete |
@@ -67,11 +68,13 @@ Nikko exists to support — not to replace. The full ethical charter is in `docs
 
 Nikko uses a **dual-model architecture** built around two base models and three specialised LoRA adapters (ADP = Adapter). The previous candidate — Mistral-7B-Instruct-v0.3 — was retired after proving infeasible on an RTX 3070 8 GB (14 GB fp16 requirement, 14+ hours training with no convergence). All Mistral artefacts are preserved under `*/mistral-7b/`.
 
-| Adapter | Base model | Role | Temperature |
-|---------|-----------|------|-------------|
-| **ADP-A** | Qwen3-4B (4B, Alibaba Qwen Team, Apache-2.0) | Empathy — generates the user-facing response | 0.75 (warm, varied) |
-| **ADP-B** | Gemma-2-2b-it (2.0B, Google Gemma licence) | Safety / crisis classifier | 0.2 (near-deterministic JSON) |
-| **ADP-C** | Gemma-2-2b-it (same base as ADP-B) | Response quality evaluator | 0.2 (near-deterministic JSON) |
+All three adapters were trained in **Phase 4.1 on Lightning.ai A10G** (cloud retraining, steps 20–25) using QLoRA rank-16. Adapter weights are hosted on HF Hub.
+
+| Adapter | Base model | HF Hub | Role | Temperature |
+|---------|-----------|--------|------|-------------|
+| **ADP-A** | Qwen3-4B (4B, Alibaba Qwen Team, Apache-2.0) | [equinox013/nikko-adp-a](https://huggingface.co/equinox013/nikko-adp-a) | Empathy — generates the user-facing response | 0.75 (warm, varied) |
+| **ADP-B** | Gemma-2-2b-it (2.0B, Google Gemma licence) | [equinox013/nikko-adp-b](https://huggingface.co/equinox013/nikko-adp-b) | Safety / crisis classifier | 0.2 (near-deterministic JSON) |
+| **ADP-C** | Gemma-2-2b-it (same base as ADP-B) | [equinox013/nikko-adp-c](https://huggingface.co/equinox013/nikko-adp-c) | Response quality evaluator | 0.2 (near-deterministic JSON) |
 
 ### Why two base models?
 
@@ -84,12 +87,12 @@ A LoRA (Low-Rank Adaptation) adapter is a small set of weight deltas — typical
 ### VRAM budget (Modal A10G 24 GB — production)
 
 ```
-Qwen3-4B              (4.0B bf16)  ~  8.0 GB  (ADP-A)
+Qwen3-4B              (4.0B bf16)  ~  8.0 GB  (ADP-A base + LoRA delta tensors)
 Gemma-2-2b-it         (2.0B bf16)  ~  4.5 GB  (ADP-B + ADP-C shared)
-Adapter weights (2 × ~50 MB)       ~  0.1 GB
+Adapter weights (3 × ~50 MB)       ~  0.2 GB  (adp-a, adp-b, adp-c)
 Activations + overhead             ~  2.0 GB
 ────────────────────────────────────────────
-Total estimated                    ~ 14.6 GB   (fits A10G 24 GB with 9.4 GB headroom)
+Total estimated                    ~ 14.7 GB   (fits A10G 24 GB with 9.3 GB headroom)
 ```
 
 `bitsandbytes` / NF4 quantization is not used — both models load cleanly in native bf16 within the A10G budget and quantization adds complexity without meaningful latency benefit at this parameter scale.
@@ -116,7 +119,7 @@ The message is stripped of PII patterns, control characters, and anything exceed
 
 The **Signal Agent** makes the first LLM call. It receives the sanitised text and returns a structured `SignalPayload` — a validated, immutable data object describing detected distress level (LOW / MODERATE / HIGH / CRISIS), emotional states, cognitive patterns, risk indicators, and what kind of support the user appears to need.
 
-In production (Phase 4+) this is Qwen3-4B (base model, no LoRA) accessed via the Modal `/pipeline` endpoint. During Phase 3 development it ran on Qwen2.5-3B-Instruct zero-shot locally.
+In production (Phase 4+) this is Qwen3-4B + ADP-A LoRA accessed via the Modal `/pipeline` endpoint. During Phase 3 development it ran on Qwen2.5-3B-Instruct zero-shot locally.
 
 ### STEP 3 — Routing
 
@@ -140,7 +143,7 @@ The **Support Strategy Agent** makes the second LLM call. It runs in parallel wi
 
 The **Interaction Model** runs. It receives a `ResponseContextPayload` — strategy guidance, synthesised evidence if any, and the mode — and generates the empathetic user-facing response.
 
-In production this is **ADP-A: Qwen3-4B** (base model, no LoRA for MVP) used for empathetic, non-diagnostic wellbeing responses. The model has no access to raw retrieval results, intermediate agent outputs, or conversation history beyond what the payload explicitly contains.
+In production this is **ADP-A: Qwen3-4B + LoRA** (`equinox013/nikko-adp-a`, trained Phase 4.1) used for empathetic, non-diagnostic wellbeing responses. The model has no access to raw retrieval results, intermediate agent outputs, or conversation history beyond what the payload explicitly contains.
 
 ### STEP 11 — Evaluation (ADP-C)
 
@@ -184,7 +187,7 @@ Modal Serverless A10G (primary)  ──or──  HF Spaces ZeroGPU H200 (fallbac
     ├─ ADP-B  (Gemma-2 + adp_b adapter)  → crisis check
     │         ↓ CRISIS → return immediately; ADP-A/C skipped
     │
-    ├─ ADP-A  (Qwen3-4B base)            → empathetic response draft
+    ├─ ADP-A  (Qwen3-4B + ADP-A LoRA)    → empathetic response draft
     │
     └─ ADP-C  (Gemma-2 + adp_c adapter)  → evaluate draft; APPROVE or REGENERATE
                                             (max 2 regen passes before safe fallback)
@@ -423,7 +426,7 @@ Cold start (Modal, Volume read): ~30–60s. Cold start (HF Space fallback): ~90�
 | [`docs/DEVLOG.md`](docs/DEVLOG.md) | Daily development log — decisions, justifications, learnings. |
 | [`docs/specs/SPEC-000-charter.md`](docs/specs/SPEC-000-charter.md) | System charter. Supersedes all other specs on conflict. |
 | [`docs/integration/FRONTEND_INTEGRATION_SPEC.md`](docs/integration/FRONTEND_INTEGRATION_SPEC.md) | Frontend ↔ backend API contract. |
-| [`notebooks/`](notebooks/) | Step-by-step training notebooks (Steps 11–19 active). |
+| [`notebooks/`](notebooks/) | Step-by-step training notebooks (Steps 20–25 canonical cloud runs; Steps 11–16 archived in `local-run/`). |
 
 ---
 

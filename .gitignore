@@ -87,6 +87,14 @@ backend/fly.toml
 # --- Training pipeline (private — kept local only) ---
 run_adp_a_v2_pipeline.bat
 
+# --- Archived local training runs (kept on disk, not in VCS) ---
+# Phase 4 local RTX 3070 runs archived here; cloud notebooks (steps 20-25) are canonical.
+notebooks/local-run/
+notebooks/mistral-7b/
+notebooks/phi-3.5/
+finetuning/mistral-7b/
+finetuning/phi-3.5/
+
 # --- HF Space (separate git repo, pushed directly to HF Spaces) ---
 # hf_space/ -- tracked in main repo (Space deployed via HF git)
 

@@ -6,8 +6,8 @@ production target. hf_space/app.py is retained as a fallback (see Change 5
 in the infrastructure spec and backend/draft_generator.py).
 
 Model stack (identical to hf_space/app.py):
-  Qwen3-4B       (base, no LoRA for MVP)  = ADP-A (empathy response)
-  Gemma-2-2b-it  (base)                   = ADP-B + ADP-C (adapter hot-swap)
+  Qwen3-4B       (base + ADP-A LoRA, equinox013/nikko-adp-a) = ADP-A (empathy response)
+  Gemma-2-2b-it  (base)                                      = ADP-B + ADP-C (adapter hot-swap)
 
 Key differences from hf_space/app.py:
   - No @spaces.GPU decorator; Modal allocates GPU per @app.cls(gpu="A10G").
@@ -43,9 +43,10 @@ Pipeline flow (Director-approved reorder 2026-05-22):
   Render backend receives result; streams SSE to frontend
 
 Volume layout (nikko-models):
-  /models/qwen/       ← Qwen3-4B weights (ADP-A base)
-  /models/gemma/      ← Gemma-2-2b-it weights (ADP-B/C base)
-  /models/adapters/   ← Full adapter repo snapshot (contains adp-b/ and adp-c/ subfolders)
+  /models/qwen/            ← Qwen3-4B weights (ADP-A base)
+  /models/gemma/           ← Gemma-2-2b-it weights (ADP-B/C base)
+  /models/adapters/        ← Full adapter repo snapshot (contains adp-b/ and adp-c/ subfolders)
+  /models/adapters/adp-a/  ← ADP-A LoRA adapter weights (equinox013/nikko-adp-a, Phase 4.1)
 
 Required Modal secrets:
   modal secret create huggingface HF_TOKEN=<your-hf-read-token>
@@ -91,6 +92,10 @@ volume = modal.Volume.from_name("nikko-models", create_if_missing=True)
 # Must match hf_space/app.py exactly — adapters were trained against these bases.
 QWEN_MODEL_ID  = "Qwen/Qwen3-4B"
 GEMMA_MODEL_ID = "google/gemma-2-2b-it"
+
+# ADP-A LoRA adapter — trained Phase 4.1 on Lightning.ai A10G (Step 21, rank-16 QLoRA).
+# Standalone HF Hub public repo. Downloaded to /models/adapters/adp-a/ at image build.
+ADP_A_REPO = "equinox013/nikko-adp-a"
 
 # Generation params — copied verbatim from hf_space/app.py.
 # Changing these would alter model behaviour relative to the HF Space fallback.
@@ -174,13 +179,24 @@ def _download_models():
             "Add it via: modal secret create nikko-config HF_ADAPTER_REPO=<repo>"
         )
 
-    # [CONCEPT] We download the entire adapter repo into /models/adapters/.
+    # [CONCEPT] We download the entire Gemma adapter repo into /models/adapters/.
     # The repo contains subfolders adp-b/ and adp-c/, each with
     # adapter_config.json and adapter_model.safetensors.
     # PeftModel.from_pretrained and load_adapter() then receive the subfolder
     # paths directly: /models/adapters/adp-b/ and /models/adapters/adp-c/.
-    _log.info(f"Downloading adapter repo: {adapter_repo}...")
+    _log.info(f"Downloading Gemma adapter repo: {adapter_repo}...")
     snapshot_download(adapter_repo, local_dir="/models/adapters")
+
+    # ADP-A LoRA adapter — standalone public repo (separate from Gemma adapter repo).
+    # Trained Phase 4.1 on Lightning.ai A10G (Step 21, Qwen3-4B QLoRA rank-16).
+    # Downloaded into /models/adapters/adp-a/ so load_models() can reference it
+    # by Volume path: PeftModel.from_pretrained(qwen_base, "/models/adapters/adp-a").
+    _log.info("Downloading ADP-A LoRA adapter (equinox013/nikko-adp-a)...")
+    snapshot_download(
+        "equinox013/nikko-adp-a",
+        local_dir="/models/adapters/adp-a",
+        ignore_patterns=["*.msgpack", "flax_model*", "tf_model*"],
+    )
 
     # Commit so weights are visible to subsequent containers reading the Volume.
     import modal as _modal
@@ -457,18 +473,18 @@ class NikkoInference:
         from peft import PeftModel
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
-        # ── Qwen3-4B (ADP-A — base, no LoRA for MVP) ─────────────────────────
-        # [CONCEPT] Qwen3-4B is the production ADP-A model. It runs as a plain
-        # AutoModelForCausalLM (no PeftModel wrapper) because ADP-A fine-tuning
-        # was discontinued (RTX 3070 VRAM constraint). The base model already
-        # produces empathetic, contextually warm responses at this parameter count.
+        # ── Qwen3-4B + ADP-A LoRA (equinox013/nikko-adp-a) ──────────────────
+        # [CONCEPT] ADP-A LoRA adapter was trained in Phase 4.1 on Lightning.ai A10G
+        # (Step 21, Qwen3-4B QLoRA, rank-16). PeftModel.from_pretrained wraps the
+        # frozen base with LoRA delta tensors. generate() and tokenizer calls are
+        # identical to a plain AutoModelForCausalLM — the wrapper is transparent.
         log.info("Loading Qwen3-4B tokenizer from Volume...")
         self._qwen_tokenizer = AutoTokenizer.from_pretrained("/models/qwen")
         if self._qwen_tokenizer.pad_token is None:
             self._qwen_tokenizer.pad_token = self._qwen_tokenizer.eos_token
 
         log.info("Loading Qwen3-4B base model (bf16)...")
-        self._qwen_model = AutoModelForCausalLM.from_pretrained(
+        _qwen_base = AutoModelForCausalLM.from_pretrained(
             "/models/qwen",
             dtype=torch.bfloat16,
             # device_map="cuda": Modal CUDA is available from startup.
@@ -476,8 +492,19 @@ class NikkoInference:
             # the GPU context before the container's Python process starts.
             device_map="cuda",
         )
+
+        log.info("Attaching ADP-A LoRA adapter from Volume...")
+        # [CONCEPT] is_trainable=False freezes all parameters — inference only.
+        # set_adapter() is not needed here because Qwen carries only one adapter;
+        # it is always active by default after from_pretrained.
+        self._qwen_model = PeftModel.from_pretrained(
+            _qwen_base,
+            "/models/adapters/adp-a",
+            adapter_name="adp_a",
+            is_trainable=False,
+        )
         self._qwen_model.eval()
-        log.info("Qwen3-4B (ADP-A) loaded.")
+        log.info("Qwen3-4B + ADP-A LoRA loaded.")
 
         # ── Gemma-2-2b-it (ADP-B + ADP-C shared base) ────────────────────────
         # [CONCEPT] Both ADP-B and ADP-C share a single PeftModel wrapping
