@@ -1637,7 +1637,7 @@ class NikkoPipeline:
             # last_adpc_reason parses adp_c_raw from the generator's metadata:
             # e.g. "Comfort Mode: 'explore some self-care practices' — pure validation only."
             # Falls back to generic string if reason is unavailable (parse error, etc.).
-            _adp_c_reason = getattr(self._draft_generator, "last_adpc_reason", "")
+            _adp_c_reason = getattr(self._draft_gen, "last_adpc_reason", "")
             _rejection_msg = (
                 f"ADP-C remote regen exhausted. Specific failure: {_adp_c_reason}"
                 if _adp_c_reason
