@@ -292,6 +292,39 @@ _TONE_VIOLATION_PATTERNS: list[tuple[str, str, re.Pattern]] = [
          r"(can|could) you (tell|describe|explain) (me |to me )?(more|further|what)|"
          r"I'?d (like|love|want) to (understand|know|hear) (more|a bit more|a little more)))\b", _I)),
 
+    # COMFORT mode: analytical or solution-seeking questioning (REQ-000-065)
+    # Catches questions that push a distressed user into problem-solving mode.
+    # The goal in COMFORT mode is to make the user feel heard — not to prompt
+    # reflection on causes, options, or next steps. Those are GUIDANCE-mode tools.
+    #
+    # SAFE phrases that do NOT fire this pattern (soft continuation):
+    #   "want to tell me more?", "what's been going on?",
+    #   "how long has this been weighing on you?" — these invite continuation only.
+    #
+    # NOTE: does not conflict with _EXPLORATION_MARKER — that pattern is a PASS
+    # condition inside _sycophancy_check, which only runs when a sycophancy pattern
+    # fires first. This pattern fires independently as a tone violation.
+    # If both fire on the same draft, the tone violation takes priority (checked first).
+    ("COMFORT", "Analytical or solution-seeking question in COMFORT mode",
+     re.compile(
+         r"\b("
+         # Cause-attribution questions
+         r"why do you think|"
+         r"what do you think (caused|led to|is causing|made( you| this)|triggered)|"
+         r"what('?s| is) (behind|driving|at the root of)|"
+         # Option / strategy questions
+         r"have you (considered|thought about|tried|looked into|explored)|"
+         r"what (might|could|would) (help|make (it|things)|work|be (useful|helpful))|"
+         r"is there (anything|something) (you could|you might (try|do)|that might help)|"
+         r"what (strategies?|approaches?|options?|steps?) (might|could|do you think)|"
+         # Next-step / solution framing
+         r"what (would you like|do you want|feels like a (good |next )?(step|move))|"
+         r"what are (your|some) (options?|next steps?|possibilities)|"
+         r"how (might|could|would) you (handle|deal with|approach|move forward|address)"
+         r")\b",
+         _I,
+     )),
+
     # ANY mode: negative character judgment of a third party (G-SYCO-01)
     # Catches "such an annoying person", "what a terrible manager" — validating
     # the user's negative interpretation of others as objective character fact.
@@ -496,6 +529,17 @@ Tone FAILS if:
   as perception: "it sounds like your manager didn't value your work."
 - Response makes negative character judgments about third parties ("what a terrible manager",
   "such an annoying person") — always regenerate regardless of any exploratory context.
+- Response is in COMFORT mode AND contains an analytical or solution-seeking question:
+  asking the user to attribute causes ("why do you think this happened?", "what do you think
+  caused/led to this?"), consider options or strategies ("have you considered...?",
+  "what might help?", "what could you try?", "is there something you could do?"), or
+  identify next steps ("what would you like to do?", "what feels like a next step?",
+  "what are your options?"). These questions shift a distressed user into problem-solving
+  mode and are prohibited in COMFORT mode. REQ-000-065.
+  DISTINCTION: a soft continuation question is permitted at most once
+  ("want to tell me more?", "what's been going on?", "how long has this been weighing on
+  you?") — these invite the user to continue, not to analyse. At MODERATE or HIGH distress
+  no question of any kind is required; pure acknowledgement is the correct close.
 
 2. HALLUCINATION CHECK
 Does the response assert specific facts, statistics, or citations that are NOT in the provided evidence?

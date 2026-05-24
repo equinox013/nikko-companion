@@ -704,6 +704,39 @@ def build_adp_c_system(context: ResponseContextPayload) -> str:
         "Output ONLY the JSON object."
     )
 
+    # [REQ-000-065] COMFORT mode questioning prohibition.
+    # Analytical and solution-seeking questions in COMFORT mode shift the user
+    # from being heard into problem-solving mode — the opposite of the COMFORT
+    # contract. Prohibited patterns: cause-attribution ("what do you think caused
+    # this?"), option-generation ("have you considered..."), next-step framing
+    # ("what would help?", "what could you try?"). These are GUIDANCE-mode tools,
+    # not COMFORT-mode tools.
+    # Permitted in COMFORT mode: one soft continuation question at most
+    # ("want to tell me more?", "what's been going on?") — these invite the user
+    # to say more without demanding analysis or solutions.
+    # At MODERATE or HIGH distress, no question of any kind is required.
+    base = base.replace(
+        "verdict MUST be REGENERATE regardless of tone quality. "
+        "reason: one sentence explanation. "
+        "Output ONLY the JSON object.",
+        "verdict MUST be REGENERATE regardless of tone quality; OR "
+        "(7) is in COMFORT Mode AND contains an analytical or solution-seeking "
+        "question — asking the user to explain causes ('why do you think...', "
+        "'what do you think caused/led to...'), consider options or strategies "
+        "('have you considered...', 'what might help...', 'what could you try...', "
+        "'is there something you could do...'), or identify next steps "
+        "('what would you like to do...', 'what are your options...', "
+        "'what feels like a next step...'). "
+        "These questions move a distressed user into problem-solving mode and "
+        "are prohibited in COMFORT Mode. A single soft continuation question "
+        "('want to tell me more?', 'what\\'s been going on?', 'how long has this "
+        "been weighing on you?') is the maximum permitted. At MODERATE or HIGH "
+        "distress no question is required at all. "
+        "REQ-000-065. "
+        "reason: one sentence explanation. "
+        "Output ONLY the JSON object."
+    )
+
     # Guidance Mode: check both evidence ABSENCE and FABRICATION.
     # Previous version only caught fabrication — a response citing nothing
     # passed through undetected. Now ADP-C explicitly requires at least one
