@@ -230,11 +230,14 @@ class HFSpaceFullGenerator:
             "user_text":          user_msg,
             "run_analysis":       True,
             "scope_ambiguous":    scope_ambiguous,
-            "rule_signal":        rule_signal,
+            # [G-REGEN-01] Piggyback regen_attempt inside rule_signal so Modal can
+            # reduce ADP-A temperature per regen without a new positional parameter
+            # (which would break warm containers during rolling deploys).
+            "rule_signal":        {
+                **(rule_signal or {}),
+                "_regen_attempt": getattr(context, "regen_attempt", 0),
+            } if (rule_signal or getattr(context, "regen_attempt", 0) > 0) else rule_signal,
             "base_strategy_text": base_strategy_text,
-            # [G-REGEN-01] Regen attempt index — Modal uses this to reduce ADP-A
-            # temperature on each retry (0.75 → 0.55 → 0.40 → 0.30).
-            "regen_attempt":      getattr(context, "regen_attempt", 0),
         }
 
         logger.info(

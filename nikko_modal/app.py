@@ -1208,7 +1208,6 @@ class NikkoInference:
         rule_signal:         dict | None = None,
         base_strategy_text:  str        = "",
         struct_annotations:  str        = "",
-        regen_attempt:       int        = 0,
     ) -> dict:
         """
         Full ADP-B → ADP-A → ADP-C pipeline in a single GPU session.
@@ -1241,6 +1240,15 @@ class NikkoInference:
         """
         start    = time.time()
         user_msg = messages[-1]["content"] if messages else ""
+
+        # [G-REGEN-01] Extract regen_attempt piggybacked on rule_signal.
+        # Using the rule_signal dict avoids adding a new positional parameter to
+        # run_pipeline() — which would break warm containers still running the old
+        # signature during rolling deploys. Old containers ignore the unknown key;
+        # new containers extract it here and restore rule_signal without it.
+        regen_attempt = 0
+        if rule_signal and "_regen_attempt" in rule_signal:
+            regen_attempt = int(rule_signal.pop("_regen_attempt", 0))
 
         # Use explicit user_text if provided; fall back to the last message.
         _user_text = user_text.strip() or user_msg
@@ -1516,7 +1524,8 @@ def pipeline(request: dict):
         request.get("rule_signal") or None,
         request.get("base_strategy_text", ""),
         request.get("struct_annotations", ""),   # Render-side deterministic signals (split architecture)
-        int(request.get("regen_attempt", 0)),    # G-REGEN-01: reduces ADP-A temperature per regen attempt
+        # regen_attempt is piggybacked inside rule_signal._regen_attempt (G-REGEN-01)
+        # — NOT a separate positional arg, to preserve backward-compat with warm containers.
     )
     # Stamp the Modal container's load timestamp onto every response so Render
     # can log which Modal deploy served this request. _MODAL_LOAD_TS is set once
