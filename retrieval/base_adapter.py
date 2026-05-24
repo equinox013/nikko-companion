@@ -5,7 +5,7 @@ CachedBaseAdapter — concrete intermediate base for all four retrieval adapters
 
 Spec source  : SPEC-200 §5.4, REQ-200-ER5, REQ-200-160
 Phase        : 3 — Agent Definitions (Implementation)
-Inherits from: docs.schemas.retrieval_schemas.BaseRetrievalAdapter (abstract)
+Inherits from: schemas.retrieval_schemas.BaseRetrievalAdapter (abstract)
 
 Why this file exists
 --------------------
@@ -53,8 +53,8 @@ from typing import Optional
 
 from pydantic import BaseModel
 
-from docs.schemas.acp_schemas import EvidenceItem
-from docs.schemas.retrieval_schemas import BaseRetrievalAdapter, RetrievalError
+from schemas.acp_schemas import EvidenceItem
+from schemas.retrieval_schemas import BaseRetrievalAdapter, RetrievalError
 
 logger = logging.getLogger(__name__)
 

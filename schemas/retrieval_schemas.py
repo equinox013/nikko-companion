@@ -1,5 +1,5 @@
 """
-docs/schemas/retrieval_schemas.py
+schemas/retrieval_schemas.py
 ===================================
 Typed I/O contracts and function signatures for all four evidence retrieval
 adapter classes used by the Evidence Retrieval Agent.
@@ -45,7 +45,7 @@ from pydantic import BaseModel, Field
 
 # Import shared types from ACP schemas.
 # Phase 3 note: keep this import; do not redefine EvidenceItem locally.
-from docs.schemas.acp_schemas import EvidenceItem, EvidenceTier, SourceTier
+from schemas.acp_schemas import EvidenceItem, EvidenceTier, SourceTier
 
 
 # ---------------------------------------------------------------------------
@@ -407,7 +407,7 @@ class BetterHealthAdapter(BaseRetrievalAdapter):
 
     Phase 3 notes:
     - No live API in v0. Search operates against a pre-loaded StaticCacheIndex.
-    - Cache index file: docs/schemas/better_health_cache.json (to be created in Phase 3).
+    - Cache index file: schemas/better_health_cache.json (to be created in Phase 3).
     - Review BHC content licensing and scraping terms before building the index.
       (REQ-200-ER4)
     - Cache TTL: 30 days + weekly HEAD check (BETTER_HEALTH_CACHE_POLICY).

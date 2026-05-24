@@ -1,5 +1,5 @@
 """
-docs/schemas/validate.py
+schemas/validate.py
 ========================
 Runtime signal validation utilities for Phase 3 agent implementations.
 
@@ -36,7 +36,7 @@ from typing import NamedTuple
 # [CONCEPT] Path(__file__).parent
 # ---------------------------------------------------------------------------
 # __file__ is the absolute path to *this* file at runtime. .parent gives us
-# the directory it lives in (docs/schemas/). We resolve signal_enum.json
+# the directory it lives in (schemas/). We resolve signal_enum.json
 # relative to that directory so the import works regardless of which
 # directory the caller is running from. This pattern appears again in every
 # retrieval adapter when loading local cache indexes.
@@ -269,7 +269,7 @@ def run_pydantic_smoke_test() -> None:
         )
 
     # Import the Phase 2 schema contracts.
-    from docs.schemas.acp_schemas import (
+    from schemas.acp_schemas import (
         DistressLevel,
         OperationalMode,
         SignalPayload,

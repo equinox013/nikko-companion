@@ -59,7 +59,7 @@ from typing import Optional, Protocol, runtime_checkable
 # specific LLM library. See PEP 544.
 from typing import Protocol, runtime_checkable
 
-from docs.schemas.acp_schemas import (
+from schemas.acp_schemas import (
     CrisisResource,
     DistressLevel,
     EvaluationPayload,
@@ -76,7 +76,7 @@ from docs.schemas.acp_schemas import (
     SynthesizedEvidence,
     VerificationResult,
 )
-from docs.schemas.retrieval_schemas import (
+from schemas.retrieval_schemas import (
     PubMedQueryParams,
     RetrievalResult,
     StaticCacheQueryParams,

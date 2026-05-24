@@ -43,7 +43,7 @@ import re
 import time
 from typing import Optional
 
-from docs.schemas.acp_schemas import (
+from schemas.acp_schemas import (
     DistressLevel,
     OperationalMode,
     SignalPayload,

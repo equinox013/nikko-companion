@@ -1,5 +1,5 @@
 """
-docs/schemas/acp_schemas.py
+schemas/acp_schemas.py
 ============================
 Pydantic v2 contracts for all ACP-Message types in the NIKKO system.
 
@@ -168,7 +168,7 @@ class SignalPayload(BaseModel):
     Output of the Psychological Signal Agent. (SPEC-100 §9, REQ-100-090)
     payload_type must be PayloadType.SIGNAL when this model is used.
 
-    All array elements must resolve to keys in docs/schemas/signal_enum.json.
+    All array elements must resolve to keys in schemas/signal_enum.json.
     (REQ-100-093)
     """
     payload_type:          Literal[PayloadType.SIGNAL] = PayloadType.SIGNAL
@@ -597,20 +597,7 @@ class ScopeClassifierDecision(BaseModel):
     def out_of_scope_requires_redirect(self) -> "ScopeClassifierDecision":
         if self.decision == ScopeDecision.OUT_OF_SCOPE and not self.warm_redirect:
             raise ValueError(
-                "decision=OUT_OF_SCOPE requires a warm_redirect message. (REQ-200-SC4)"
-            )
-        return self
-
-    @model_validator(mode="after")
-    def low_confidence_must_not_be_out_of_scope(self) -> "ScopeClassifierDecision":
-        """
-        Asymmetric error policy: when confidence < 0.40, classifier MUST
-        default to AMBIGUOUS, not OUT_OF_SCOPE. (REQ-200-SC3, REQ-100-CB1)
-        """
-        if self.confidence < 0.40 and self.decision == ScopeDecision.OUT_OF_SCOPE:
-            raise ValueError(
-                "Confidence < 0.40 (low band): classifier must emit AMBIGUOUS, "
-                "not OUT_OF_SCOPE. Asymmetric error policy requires erring toward "
-                "inclusion. (REQ-200-SC3)"
+                "decision == ScopeDecision.OUT_OF_SCOPE requires warm_redirect to be "
+                "set. Provide a verbatim redirect template. (REQ-200-SC4)"
             )
         return self

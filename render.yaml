@@ -18,7 +18,7 @@ services:
     region: singapore        # closest free-tier region to Australia (SYD not available)
     # dockerfilePath explicitly set to repo root -- backend/Dockerfile is a
     # deprecated tombstone and must not be used. The root Dockerfile copies all
-    # runtime packages (backend/, orchestration/, agents/, retrieval/, docs/schemas/).
+    # runtime packages (backend/, orchestration/, agents/, retrieval/, schemas/).
     dockerfilePath: ./Dockerfile
 
     healthCheckPath: /health

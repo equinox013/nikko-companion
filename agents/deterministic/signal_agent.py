@@ -57,11 +57,11 @@ from typing import Optional
 # on this: they can import the class and test parse/validate logic without
 # triggering a model download.
 
-from docs.schemas.acp_schemas import (
+from schemas.acp_schemas import (
     DistressLevel,
     SignalPayload,
 )
-from docs.schemas.validate import (
+from schemas.validate import (
     VALID_SIGNAL_KEYS,
     get_confidence_band,
     validate_signal_payload,

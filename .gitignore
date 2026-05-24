@@ -105,3 +105,16 @@ tokenizer.json
 rng_state.pth
 training_args.bin
 tokenizer.model
+
+# --- Schemas package: old location (migrated to schemas/ during Phase 6 housekeeping) ---
+# Run: git rm --cached -r docs/schemas/ before pushing.
+docs/schemas/
+
+# --- Decommissioned local training notebooks (superseded by Phase 4.1 cloud runs 20–25) ---
+notebooks/step11_adp_c_data_generation.ipynb
+notebooks/step12_adp_c_training.ipynb
+notebooks/step15_adp_b_data_generation.ipynb
+notebooks/step16_adp_b_training.ipynb
+
+# --- Retrieval runtime cache (query cache, not source) ---
+retrieval/cache/

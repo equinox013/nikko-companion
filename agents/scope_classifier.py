@@ -35,13 +35,13 @@ import re
 import time
 from typing import Optional
 
-# [CONCEPT] Importing from docs.schemas
-# The Phase 2 schema contracts live in docs/schemas/. We import from there
+# [CONCEPT] Importing from schemas
+# The Phase 2 schema contracts live in schemas/. We import from there
 # directly. In production the package will be installed properly; during
 # Phase 3 development, ensure the repo root is on sys.path (the notebook
 # does this automatically).
-from docs.schemas.acp_schemas import ScopeClassifierDecision, ScopeDecision
-from docs.schemas.validate import get_confidence_band
+from schemas.acp_schemas import ScopeClassifierDecision, ScopeDecision
+from schemas.validate import get_confidence_band
 
 # ---------------------------------------------------------------------------
 # Constants

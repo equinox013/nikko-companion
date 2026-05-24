@@ -51,7 +51,7 @@ from typing import Optional
 # are the single source of truth for all inter-agent data shapes. The
 # Synthesizer never defines its own data classes — it consumes and produces
 # types already ratified in SPEC-200 §5.4/5.5.
-from docs.schemas.acp_schemas import (
+from schemas.acp_schemas import (
     EvidenceItem,
     EvidencePayload,
     EvidenceTier,

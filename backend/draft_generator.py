@@ -52,7 +52,7 @@ from backend.context_prompt_builder import (
     build_adp_c_system,
 )
 from backend.paralinguistic_detector import detect as detect_struct_signals
-from docs.schemas.acp_schemas import ResponseContextPayload
+from schemas.acp_schemas import ResponseContextPayload
 from orchestration.pipeline import (
     ADPB_CRISIS_SENTINEL,
     MODERATION_BLOCK_SENTINEL,
@@ -325,65 +325,4 @@ class HFSpaceFullGenerator:
                 "Returning ADPB_CRISIS_SENTINEL for pipeline re-route.",
                 result.get("flags"),
             )
-            self._last_metadata = result   # preserve for trace even on crisis path
-            return ADPB_CRISIS_SENTINEL
-
-        # Modal LLM moderation pass detected coded hate (antisemitism, Islamophobia,
-        # etc.) that the Render regex pre-gate missed. Return sentinel so pipeline.run()
-        # issues the static _HATE_RESPONSE (REQ-XXX-CM3: static strings only).
-        if result.get("moderation_block"):
-            logger.warning(
-                "HFSpaceFullGenerator: Modal moderation block — category=%s. "
-                "Returning MODERATION_BLOCK_SENTINEL.",
-                result.get("harm_category", "unknown"),
-            )
-            self._last_metadata = result
-            return MODERATION_BLOCK_SENTINEL
-
-        # Modal LLM scope pass determined the message is OUT_OF_SCOPE for Nikko
-        # after the regex ScopeClassifier passed or called it AMBIGUOUS. Return
-        # sentinel so pipeline.run() issues the WARM_REDIRECT (static string).
-        if result.get("scope_block"):
-            logger.info(
-                "HFSpaceFullGenerator: Modal scope block — reason=%r. "
-                "Returning SCOPE_BLOCK_SENTINEL.",
-                result.get("oos_reason", ""),
-            )
-            self._last_metadata = result
-            return SCOPE_BLOCK_SENTINEL
-
-        text = result.get("text", "")
-
-        # Log analysis enrichment if present — useful for Phase 6 evaluation audit.
-        # Hashes of user text are NOT logged here (SPEC-800 PII scrubbing).
-        _enh_sig  = result.get("enhanced_signal")
-        _enh_strat = result.get("enhanced_strategy")
-        if _enh_sig:
-            logger.info(
-                "HFSpaceFullGenerator: signal enrichment | tone='%s' nudge=%s conf_adj=%+.2f",
-                (_enh_sig.get("tone_note") or "")[:80],
-                _enh_sig.get("distress_nudge"),
-                _enh_sig.get("confidence_adjustment", 0.0),
-            )
-        if _enh_strat:
-            logger.info(
-                "HFSpaceFullGenerator: strategy enrichment | tone='%s'",
-                (_enh_strat.get("tone_refinement") or "")[:80],
-            )
-
-        # modal_load_ts comes from nikko_modal/app.py; hf_load_ts from hf_space/app.py.
-        # Both are cold-start timestamps that identify which deploy served this request.
-        _deploy_ts = result.get("modal_load_ts") or result.get("hf_load_ts") or "unknown"
-        logger.info(
-            "HFSpaceFullGenerator: /pipeline done | verdict=%s regen=%s elapsed=%.1fs chars=%d | deploy_ts=%s",
-            result.get("verdict"),
-            result.get("regen"),
-            result.get("elapsed", 0),
-            len(text),
-            _deploy_ts,
-        )
-        # Store full result for side-channel metadata read in _step10_draft().
-        # Includes pre_analysis_raw, enhanced_signal, enhanced_strategy, and
-        # raw adapter outputs for the debug trace panel. REQ-FIS-DB1.
-        self._last_metadata = result
-        return text
+            self._last_metadata = result  

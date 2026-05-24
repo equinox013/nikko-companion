@@ -1,145 +1,181 @@
-# Nikko — design notes
+# web/ — NIKKO Frontend
 
-A safety-aligned, non-diagnostic wellbeing companion. Research preview, Australia only.
-This file records the design decisions baked into the UI so future edits stay coherent.
+The NIKKO frontend is a standalone React SPA deployed via GitHub Pages at
+[equinox013.github.io/nikko](https://equinox013.github.io/nikko). It communicates
+with the Render backend over HTTP/SSE and falls back to canned responses when the
+backend is unreachable.
 
 ---
 
-## Voice & posture
-- **Quiet, not clinical.** Copy is short, lowercase-leaning, never alarmist. No diagnosis language.
-- **Opt-in by default.** Memory, mood diary, and reflection are all things the user actively enables — nothing is on by surprise.
-- **Local-first.** Mood entries and memory live on the user's device. Surface this in microcopy ("Stays on your device").
+## Architecture overview
 
-## Type system
-Loaded once via Google Fonts at the top of `styles.css`.
-
-| Variable          | Family            | Used for                                          |
-|-------------------|-------------------|---------------------------------------------------|
-| `--font-display`  | Newsreader        | Page-level titles, gate headline                  |
-| `--font-body`     | Geist             | UI body, buttons, labels                          |
-| `--font-mono`     | Geist Mono        | Eyebrows, timestamps, pills, scale endpoints      |
-| `--font-brand`    | Sniglet           | Wordmark "Nikko", emphasised display words        |
-| `--font-chat`     | Belgrano          | Conversation bubbles (assistant + user)           |
-
-Rules of thumb:
-- Mono is reserved for metadata/uppercase eyebrows (10–11px, +0.06–0.08em tracking).
-- Section labels inside the Mood Diary use sentence-case body, not all-caps mono — this came out of the de-crowding pass to reduce noise.
-- Display weight is light (300) at large sizes; body weight is 400/500.
-
-## Color palette
-Defined as CSS custom properties at the top of `styles.css`. Both light and dark themes share the same token names; only the values change.
-
-### Light (default)
-| Token            | Hex        | Role                                       |
-|------------------|------------|--------------------------------------------|
-| `--bg`           | `#EAE7DF`  | Warm parchment app background              |
-| `--bg-2`         | `#e1ddd2`  | Hover surfaces, secondary panels           |
-| `--bg-3` / `--surface` | `#FFFFFF` | Cards, inputs, raised surfaces        |
-| `--ink`          | `#1a1a1a`  | Primary text                               |
-| `--ink-2`        | `#3a3a3a`  | Body text                                  |
-| `--muted`        | `#5d5d5d`  | Secondary text, labels                     |
-| `--faint`        | `#846a6a`  | Tertiary metadata (mauve-leaning)          |
-| `--line`         | `#d4cfc1`  | Borders                                    |
-| `--line-soft`    | `#ddd8c9`  | Hairline dividers                          |
-| `--accent`       | `#279af1`  | Primary blue (memory, links, focus)        |
-| `--accent-2`     | `#846a6a`  | Mauve — selection, mood-diary chrome       |
-| `--accent-soft`  | `#d8eaff`  | Tinted backgrounds for accent surfaces     |
-| `--sun`          | `#CE844C`  | Nikko avatar / brand sun                   |
-| `--sun-soft`     | `#f1d9c2`  | Tinted sun glow                            |
-| `--crisis`       | `#b85450`  | Crisis affordance only — never decorative  |
-
-### Dark
-A deep navy reskin (`--bg: #1A2B5F`) with teal accents (`--accent: #42858c`, `--accent-2: #397367`). The sun stays warm to keep the avatar recognisable.
-
-### Mood color scale
-1 (low) → 10 (good), warm-red through teal-green, used on the rating pips and as the dot in past-entry rows. Hand-tuned in `styles.css`; do not hue-shift without re-checking contrast against `#fff` text.
-
-## Spacing, radii, motion
-- Radii: `--r-sm` 8 / `--r-md` 12 / `--r-lg` 18 / `--r-xl` 26.
-- Shadows: `--shadow-soft` for raised inputs, `--shadow-card` for modal-grade surfaces.
-- Motion: `--t-fast` 160ms / `--t-med` 280ms / `--t-slow` 520ms — all share the same easing curve.
-
-## Mood Diary — layout principles (revised)
-The diary lives in the left panel. Earlier versions stacked five long sections vertically; this read as crowded. Current rules:
-
-1. **One core action per screen.** The mood rating row + a one-line note are the only always-visible inputs. Everything else is opt-in.
-2. **Progressive disclosure.** Emotions and triggers sit inside a single `<details>` block ("Emotions & context") so users without anything to add are never confronted with 14 chips.
-3. **Curate, then expand.** Primary chip lists show the 6–8 most common options; the long tail is behind a `+N more` ghost chip.
-4. **Reflection is opt-in.** The 10-minute pomodoro + journal textarea is hidden behind a single dashed "+ Add a 10-minute reflection" button. Reopens automatically when revisiting a day that already has a reflection saved.
-5. **Past entries are quiet.** One row per day — colored dot, date, single-line summary, score. No nested cards, no per-row borders.
-6. **Save / Clear day** sit at the end of the active section, before past entries, so they don't compete with the day list.
-
-## Avatar
-The Nikko avatar is a simple sun: warm `--sun` disc, soft `--sun-soft` halo. Drawn in CSS/SVG, never replaced with imagery.
-
-## Crisis affordances
-- Crisis colors (`--crisis`, `--crisis-soft`) are reserved for safety messaging and the Quick Exit button.
-- Quick Exit lives top-right and is one tap away at all times.
-
-## Agent transparency
-
-Nikko is a multi-agent pipeline (see `agents/README.md` for the full agent map). Two surfaces show this to the user:
-
-### Public ribbon — under every assistant message
-A small caption appears under each assistant reply:
-
-> ⌖ **5 AGENTS COORDINATED THIS REPLY** · sources queried: Beyond Blue, headspace, Lifeline
-
-Rules:
-- **Agent count is public; agent names are not.** The ribbon never names individual agents (`signal_agent`, `evaluator`, etc).
-- **Evidence sources are fully public.** Whenever the Evidence retrieval phase runs (Guidance mode), the actual sources queried are listed by name — this is non-negotiable transparency.
-- The ribbon is always visible, never collapsed. It uses mono type, low contrast, accent-tinted left border so it sits adjacent to the bubble without competing with it.
-
-### Hidden debug — gesture-protected
-Power-user / researcher view. Reveals the full SPEC-700 pipeline including every agent name, latency, and per-phase payload.
-
-**To open:** click twice on the top-left Nikko sun, then press and hold for 3 seconds. A faint progress ring expands during the hold; releasing early cancels.
-
-**What it shows:**
-1. Turn picker — every turn in this session.
-2. Mode badge (COMFORT / GUIDANCE / CRISIS), distress level, model confidence, total latency.
-3. Pipeline list — each phase as a row with: ordinal, agent label, agent module, LLM badge (if applicable), `public` badge (only on Evidence retrieval), summary, duration.
-4. **Read full trace** button → expands the panel and dumps per-phase detail JSON (signal payload, router rationale, evidence sources with tier + ref, evaluator red-line counts, verification checks).
-
-The debug overlay is for inspection only — it does not change behaviour. Trace data lives in memory on the device and is cleared on refresh.
-
-## Mobile layout (≤600px)
-
-At ≤600px (typical phone portrait), the side panel cards switch to bottom sheets:
-
-- `.chat.floating .left-float` and `.right-float` panels become `position: fixed; bottom: 0; left/right: 0; height: 82vh`, sliding up via `@keyframes sheet-up`.
-- `.tab-float` side buttons are hidden (`display: none`). Replaced by `.mobile-tabbar` fixed at the footer — two tabs (Mood, Sources) that toggle their respective sheets.
-- `.sheet-backdrop` — full-screen overlay (`z-index: 45`) that closes both panels on tap.
-- Opening one panel auto-closes the other: click handlers call `setLeftTab(null)` / `setRightTab(null)` on open.
-- Composer lifts above the tab bar via `padding-bottom` on `.chat-composer`.
-
-At ≤480px additional fixes apply: gate card full-width, modals drop horizontal padding, mood chip and pip touch targets enlarged to 44px minimum, research preview pill hidden.
-
-**Design rule:** the bottom sheet opening animation (`sheet-up`) uses `--t-med` (280ms) easing — consistent with all other modal transitions in the system. Do not make it faster; on low-end phones it looks like a flash.
-
-## Mood diary round-trip
-
-The diary stores data in two layers:
-
-1. **Session layer** — React state (`moodEntries` in `chat.jsx`). Cleared on refresh (SPEC-800). Never touches sessionStorage.
-2. **Durable layer** — `## Mood Diary` section of the encrypted memory file. Written by `MoodDiaryPanel.save()` via `formatDiaryEntry()` in `panels.jsx`. Read back by `parseDiaryEntries()` in `chat.jsx` inside `onMemoryLoaded`.
-
-Serialisation format (one block per entry, blank-line separated):
 ```
-YYYY-MM-DD | mood: N | emotions: a, b | triggers: c
-note: free text
+Browser
+  │
+  ├── index.html          GitHub Pages entry point (5-line redirect → Nikko.html)
+  └── Nikko.html          App shell — loads styles, compiled JS bundles, React via CDN
+        │
+        ├── nikko.jsx     Root component: theme, layout, decorative canvas elements
+        ├── gate.jsx      Consent gate: 18+ check, regional disclaimers, onboarding
+        ├── chat.jsx      Main loop: message thread, SSE stream handler, composer
+        │     ├── avatar.jsx        Emotion state visualiser (calm/listen/think/speak/care)
+        │     ├── memory.jsx        USM file encryption/decryption modal
+        │     ├── panels.jsx        Mood diary panel + sources/citations panel
+        │     ├── nikko-data.jsx    Offline fallback: NIKKO_PATTERNS + canned responses
+        │     └── agent-debug.jsx   Developer debug overlay (ADP-B/A/C trace viewer)
+        │
+        └── styles.css    Light/dark theme, animations, mobile breakpoints
 ```
 
-If either function is changed, change both — they are an inverse pair and will silently break the round-trip if they diverge.
+### Compiled bundles
 
-## File map (updated)
-- `Nikko.html` — entry point; loads scripts in dependency order.
-- `styles.css` — all tokens + component CSS.
-- `gate.jsx` — opening attestation screen.
-- `avatar.jsx` — sun avatar component.
-- `nikko-data.jsx` — seed data, sample entries, reply patterns.
-- `memory.jsx` — personal memory drawer.
-- `panels.jsx` — Sources panel (right), **Mood Diary panel (left)**, Tutorial overlay.
-- `agent-debug.jsx` — **NEW.** Agent ribbon, gesture hook, debug overlay, trace store.
-- `chat.jsx` — conversation thread; wires the ribbon under assistant messages and the gesture host on the top-left sun.
-- `nikko.jsx` — root composition.
+esbuild compiles entry-point JSX files into plain JS for GitHub Pages (no bundler at
+runtime). Compiled files are committed alongside sources so GitHub Pages can serve them
+directly.
+
+| Source | Compiled output | Entry point? |
+|--------|----------------|--------------|
+| `chat.jsx` | `chat.js` | Yes — imports avatar, gate, memory, panels, nikko-data, agent-debug |
+| `panels.jsx` | `panels.js` | Yes |
+| `memory.jsx` | `memory.js` | Yes |
+| `agent-debug.jsx` | `agent-debug.js` | Yes |
+| `loading.js` | *(none)* | Handwritten vanilla JS — no JSX source, not compiled |
+| `nikko.jsx` | *(bundled into chat.js)* | Module only |
+| `avatar.jsx` | *(bundled into chat.js)* | Module only |
+| `gate.jsx` | *(bundled into chat.js)* | Module only |
+| `nikko-data.jsx` | *(bundled into chat.js)* | Module only |
+
+**Rebuild command** (run from repo root, requires esbuild):
+
+```bash
+npx esbuild@0.25.3 web/chat.jsx        --bundle --outfile=web/chat.js        --loader:.jsx=jsx --external:react --external:react-dom
+npx esbuild@0.25.3 web/panels.jsx      --bundle --outfile=web/panels.js      --loader:.jsx=jsx --external:react --external:react-dom
+npx esbuild@0.25.3 web/memory.jsx      --bundle --outfile=web/memory.js      --loader:.jsx=jsx --external:react --external:react-dom
+npx esbuild@0.25.3 web/agent-debug.jsx --bundle --outfile=web/agent-debug.js --loader:.jsx=jsx --external:react --external:react-dom
+```
+
+> **Bash sandbox warning (CLAUDE.md §5a):** The bash mount may serve a stale version
+> of large JSX files. Before rebuilding, use Python to verify the source file tail is
+> intact, then splice in the correct tail if truncated.
+
+---
+
+## Backend integration
+
+The frontend talks to the Render backend at `https://nikko-companion.onrender.com`.
+The full API contract is in `docs/integration/FRONTEND_INTEGRATION_SPEC.md`.
+
+### Key endpoints
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `GET /health` | GET | Startup poll — frontend shows loading screen until 200 |
+| `POST /api/message` | POST + SSE | Send user message, stream response chunks |
+| `POST /api/memory/decrypt` | POST | Decrypt USM memory file (AES-GCM, client key) |
+| `POST /api/memory/encrypt` | POST | Encrypt updated memory file before download |
+
+### SSE chunk format
+
+Each chunk from `/api/message` is a JSON object:
+
+```json
+{ "text": "...", "emotion": "listen", "done": false, "trace": null }
+```
+
+The final substantive chunk carries `"trace": { "adp_b": {...}, "adp_a": {...}, "adp_c": {...}, "elapsed": 0.0, "regen": false }` for the debug overlay.
+
+### Offline fallback
+
+When the backend is unreachable, `chat.jsx` falls through to `matchNikkoPattern()` in
+`nikko-data.jsx`, which runs regex pattern matching against `NIKKO_PATTERNS` and returns
+a canned response. This is intentionally minimal — it exists to prevent a blank screen,
+not to provide real support.
+
+---
+
+## Component reference
+
+### `Nikko.html` — App shell
+The actual application entry point loaded by `index.html`. Loads React 18 via CDN,
+imports compiled JS bundles, and mounts the root `<NikkoApp />` component.
+
+### `index.html` — GitHub Pages redirect
+Five-line file. Redirects the GitHub Pages root to `Nikko.html`. Required because
+GitHub Pages serves from the repo root but the app shell is `Nikko.html`.
+
+### `gate.jsx` — Consent gate
+First screen shown to every user. Enforces: 18+ age check, Australia-only disclaimer,
+English-only notice, non-diagnostic notice, session-scoped data notice. Refs SPEC-000,
+SPEC-300.
+
+### `chat.jsx` — Main loop (1600+ lines)
+Owns the SSE stream handler, message history state, emotion prop derivation, memory
+file round-trip, and composer. Dispatches to all sub-components. The `onMemoryLoaded`
+handler calls `parseDiaryEntries(md)` immediately after `setMemName` — these two
+functions are an inverse pair with `formatDiaryEntry()` in `panels.jsx` and must be
+kept in sync.
+
+### `avatar.jsx` — Emotion visualiser
+Renders the NIKKO glyph and animated rays. State machine: `calm → listen → think →
+speak → care`. Driven by the `emotion` field on incoming SSE chunks.
+
+### `memory.jsx` — USM file handler
+Handles the generate-memory and load-memory modals. All encryption is AES-GCM,
+client-side only — the server never sees plaintext memory content. Refs SPEC-200,
+SPEC-800, SPEC-850.
+
+### `panels.jsx` — Mood diary + sources
+Two side panels: mood diary (session-scoped React state, no `sessionStorage` per
+SPEC-800) and source citations (APA7-formatted, driven by evidence payload). Mood
+diary entries are serialised to the `## Mood Diary` section of the encrypted memory
+file via `formatDiaryEntry()`.
+
+### `nikko-data.jsx` — Offline fallback
+Contains `NIKKO_PATTERNS` (regex array) and `NIKKO_SOURCES` (citation library).
+In live operation, `NIKKO_SOURCES` is still used for the sources panel. Pattern
+matching is only invoked when the backend SSE stream is empty or unreachable.
+
+### `agent-debug.jsx` — Debug overlay
+Shows real ADP-B / ADP-A / ADP-C adapter results from the live pipeline trace.
+Published via `window.__nikkoAgentLog` (`NikkoAgentLog` pub/sub store). Falls back
+to a keyword-classification trace when `liveData` is absent.
+
+### `loading.js` — Loading screen
+Handwritten vanilla JS (no JSX source). Polls `GET /health` on page load and shows
+a staged loading animation until the Render backend returns 200. Refs
+FRONTEND_INTEGRATION_SPEC §12.
+
+### `loading.css` — Loading screen styles
+Companion stylesheet for `loading.js`.
+
+### `styles.css` — Main stylesheet
+Light/dark theme (CSS variables), avatar animations, mobile breakpoints. Key
+breakpoints: ≤600px (panels → bottom sheets), ≤480px (gate full-width, touch targets
+≥44px).
+
+### `eula.html`, `privacy.html` — Legal pages
+Standalone HTML pages linked from within the app. Not compiled or processed.
+
+---
+
+## Safety features
+
+All safety UI is hard-coded and cannot be suppressed by the backend or any agent output.
+
+| Feature | Implementation |
+|---------|---------------|
+| Quick exit | Always-visible button; wipes session state and navigates to an external domain |
+| Safety banner | Auto-shows on crisis keywords detected client-side; displays Lifeline 13 11 14, Beyond Blue, 13YARN, 000 |
+| Non-diagnostic notice | Shown in gate and periodically in UI |
+| Session-only data | No `localStorage` or `sessionStorage` for message history or mood diary (SPEC-800) |
+| Memory encryption | AES-GCM client-side; server never receives plaintext (SPEC-850) |
+
+---
+
+## Mobile layout
+
+| Breakpoint | Change |
+|------------|--------|
+| ≤600px | Side panels become bottom sheets (`height: 82vh`, `animation: sheet-up`) |
+| ≤600px | `.tab-float` hidden; `.mobile-tabbar` fixed footer replaces it |
+| ≤480px | Gate card full-width; modal padding reduced; mood chip/pip touch targets ≥44px; research preview pill hidden |

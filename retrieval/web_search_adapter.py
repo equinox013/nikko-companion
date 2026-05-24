@@ -111,8 +111,8 @@ from enum import Enum
 from typing import FrozenSet, Optional
 from urllib.parse import urlparse
 
-from docs.schemas.acp_schemas import EvidenceItem, EvidenceTier, SourceTier
-from docs.schemas.retrieval_schemas import (
+from schemas.acp_schemas import EvidenceItem, EvidenceTier, SourceTier
+from schemas.retrieval_schemas import (
     WEB_SEARCH_CACHE_POLICY,
     StaticCacheQueryParams,
     RetrievalError,

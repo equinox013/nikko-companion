@@ -41,8 +41,8 @@ from typing import Optional
 
 import requests
 
-from docs.schemas.acp_schemas import EvidenceItem, EvidenceTier, SourceTier
-from docs.schemas.retrieval_schemas import (
+from schemas.acp_schemas import EvidenceItem, EvidenceTier, SourceTier
+from schemas.retrieval_schemas import (
     PUBMED_CACHE_POLICY,
     PubMedArticleType,
     PubMedQueryParams,

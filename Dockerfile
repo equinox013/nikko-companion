@@ -13,7 +13,7 @@
 #   orchestration/← NikkoPipeline + all SPEC-700 step logic
 #   agents/       ← SignalAgent, Router, Synthesizer, Evaluator, VS, etc.
 #   retrieval/    ← PubMedAdapter, WebSearchAdapter, base adapters
-#   docs/schemas/ ← ACP schemas (acp_schemas.py, retrieval_schemas.py, validate.py)
+#   schemas/      ← ACP schemas (acp_schemas.py, retrieval_schemas.py, validate.py)
 #
 # [CONCEPT] Multi-stage builds are skipped here — dep set is small and the
 # app is CPU-only. Revisit if the image exceeds 500 MB.
@@ -44,7 +44,7 @@ COPY backend/       ./backend/
 COPY orchestration/ ./orchestration/
 COPY agents/        ./agents/
 COPY retrieval/     ./retrieval/
-COPY docs/schemas/  ./docs/schemas/
+COPY schemas/       ./schemas/
 
 # ── Runtime ───────────────────────────────────────────────────────────────────
 # PORT env var: Render injects $PORT at runtime; Fly.io uses 8080.
