@@ -108,7 +108,7 @@ class RouterDecision(BaseModel):
     confidence:         float = Field(ge=0.0, le=1.0)
     crisis_override:    bool
     passive_risk_flag:  bool  = False
-    attempt_count:      int   = Field(default=1, ge=1, le=2)
+    attempt_count:      int   = Field(default=1, ge=1, le=MAX_REGEN_ATTEMPTS)
 
     @model_validator(mode="after")
     def crisis_override_matches_mode(self) -> "RouterDecision":

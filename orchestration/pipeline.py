@@ -39,7 +39,7 @@ Hard constraints (all from spec)
   REQ-700-131 — No bypass: Router and Evaluator are mandatory.
   REQ-700-132 — No cross-mode mixing within a turn.
   REQ-700-133 — LLM receives only synthesized/filtered inputs.
-  REQ-200-170 — Regeneration loop capped at MAX_REGEN_ATTEMPTS = 2.
+  REQ-200-170 — Regeneration loop capped at MAX_REGEN_ATTEMPTS = 3.
   REQ-700-LOG1 — All trace data is session-scoped and ephemeral.
 """
 
@@ -1632,15 +1632,26 @@ class NikkoPipeline:
                 "payload for backend-level fresh generation (regen_count=%d).",
                 regen_count,
             )
+            # [G-REGEN-01] Retrieve the actual ADP-C rejection reason so ADP-A
+            # gets specific feedback on the next attempt — not a generic message.
+            # last_adpc_reason parses adp_c_raw from the generator's metadata:
+            # e.g. "Comfort Mode: 'explore some self-care practices' — pure validation only."
+            # Falls back to generic string if reason is unavailable (parse error, etc.).
+            _adp_c_reason = getattr(self._draft_generator, "last_adpc_reason", "")
+            _rejection_msg = (
+                f"ADP-C remote regen exhausted. Specific failure: {_adp_c_reason}"
+                if _adp_c_reason
+                else (
+                    "ADP-C remote regen exhausted — Modal returned regen=True "
+                    "after max internal attempts. Local rule engine gap identified."
+                )
+            )
             synthetic_regen = EvaluationPayload(
                 verdict=EvaluationVerdict.REGENERATE,
                 safety_check=True,
                 tone_check=False,     # tone failure is why ADP-C rejected it
                 hallucination_check=True,
-                rejection_reasons=[
-                    "ADP-C remote regen exhausted — Modal returned regen=True "
-                    "after max internal attempts. Local rule engine gap identified."
-                ],
+                rejection_reasons=[_rejection_msg],
             )
             return self._handle_evaluator_failure(
                 synthetic_regen, user_input, session_id, regen_count, trace, t0
@@ -2307,7 +2318,7 @@ class NikkoPipeline:
         REQ-700-082: on Evaluator failure, regenerate if within loop limit;
         otherwise emit safe fallback.
 
-        REQ-200-170: maximum 2 regeneration attempts per request.
+        REQ-200-170: maximum 3 regeneration attempts per request.
         REQ-200-171: no more than 1 evaluation cycle per response — so we
         regenerate by re-running the full pipeline from STEP 2, not by
         re-calling just the Evaluator.

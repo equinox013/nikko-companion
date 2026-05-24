@@ -353,14 +353,17 @@ class HFSpaceFullGenerator:
             self._last_metadata = result
             return SCOPE_BLOCK_SENTINEL
 
-        # ADP-C remote evaluation loop exhausted — both Modal regen attempts returned
-        # REGENERATE and the pipeline gave up. The response text was rejected by the
-        # fine-tuned ADP-C adapter but would pass the Render-side local rule engine
-        # (a known gap for declarative COMFORT-mode advice e.g. lifestyle suggestions).
-        # Return the sentinel so NikkoPipeline.run() synthesises a REGENERATE payload
-        # and triggers a fresh generation from scratch.
-        # [BUG-FIX 2026-05-25] Previously regen=True was logged but silently ignored.
-        if result.get("regen"):
+        # ADP-C remote evaluation loop exhausted — BOTH Modal ADP-C passes returned
+        # REGENERATE, meaning the fine-tuned adapter rejected the original draft AND
+        # the internal regen2 draft. Return the sentinel so NikkoPipeline.run()
+        # synthesises a REGENERATE payload and triggers a fresh backend-level cycle.
+        #
+        # [BUG-FIX 2026-05-25 B] Only trigger sentinel when verdict=="REGENERATE".
+        # When regen=True but verdict=="APPROVE", Modal's internal second ADP-C pass
+        # approved draft2 — result["text"] is the clean response. Returning sentinel
+        # here was discarding a good response and triggering an unnecessary extra cycle.
+        # regen=True is a status flag ("internal regen ran"), not a failure signal.
+        if result.get("regen") and result.get("verdict", "").upper() == "REGENERATE":
             logger.warning(
                 "HFSpaceFullGenerator: ADP-C regen exhausted (verdict=%s, regen=True) — "
                 "returning ADPC_REGEN_SENTINEL for backend-level fresh generation.",
@@ -404,3 +407,27 @@ class HFSpaceFullGenerator:
         # raw adapter outputs for the debug trace panel. REQ-FIS-DB1.
         self._last_metadata = result
         return text
+
+    @property
+    def last_adpc_reason(self) -> str:
+        """
+        Extract the ADP-C rejection reason string from the last generate() call.
+
+        [G-REGEN-01] Used by pipeline.py's ADPC_REGEN_SENTINEL handler to build
+        actionable regen_feedback for ADP-A. When ADP-C returns REGENERATE,
+        adp_c_raw contains the raw JSON: '{"verdict": "REGENERATE", "reason": "..."}' —
+        the reason field is the specific failure description ADP-A needs to avoid
+        the same pattern on the next attempt.
+
+        Returns "" when no reason is available (APPROVE paths, metadata not set,
+        or JSON parse failure — pipeline falls back to generic rejection message).
+        """
+        import json as _json  # standard library; local import avoids top-level cycle risk
+        adp_c_raw = self._last_metadata.get("adp_c_raw", "")
+        if not adp_c_raw:
+            return ""
+        try:
+            parsed = _json.loads(adp_c_raw)
+            return str(parsed.get("reason", ""))
+        except Exception:
+            return ""
