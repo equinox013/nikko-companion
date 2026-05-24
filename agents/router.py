@@ -41,6 +41,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from schemas.acp_schemas import DistressLevel, OperationalMode, SignalPayload
 from schemas.validate import get_confidence_band
+from agents.verification_supervisor import MAX_REGEN_ATTEMPTS
 
 # ---------------------------------------------------------------------------
 # Constants — routing thresholds (all locked, REQ-100-CB1, REQ-000-F01)
@@ -169,10 +170,11 @@ class Router:
             ValueError: If attempt_count > 2 (loop limit exceeded).
         """
         # --- Loop limit guard (REQ-200-170) ---
-        if attempt_count > 2:
+        # Mirrors MAX_REGEN_ATTEMPTS from verification_supervisor — single source of truth.
+        if attempt_count > MAX_REGEN_ATTEMPTS:
             raise ValueError(
                 f"Router called {attempt_count} times for this turn — exceeds the "
-                f"maximum of 2 re-execution attempts. (REQ-200-170) "
+                f"maximum of {MAX_REGEN_ATTEMPTS} re-execution attempts. (REQ-200-170) "
                 f"The pipeline must fall back to a safe response."
             )
 

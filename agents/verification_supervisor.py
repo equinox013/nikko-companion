@@ -70,8 +70,13 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 # REQ-200-170: Each agent MUST NOT iterate more than 2 times per request.
-# Director ratified: maximum 2 regeneration attempts; VS blocks the 3rd.
-MAX_REGEN_ATTEMPTS: int = 2
+# Director ratified 2026-05-25: increased from 2 to 3 regeneration attempts.
+# Rationale: with ADPC_REGEN_SENTINEL now triggering a backend-level regen
+# (in addition to the two Modal-internal regen passes), a limit of 2 was too
+# tight — the first backend regen attempt consumed both Modal internal passes,
+# leaving no headroom for a genuinely different generation. 3 backend attempts
+# gives the model a meaningful number of chances to produce a clean response.
+MAX_REGEN_ATTEMPTS: int = 3
 
 # Minimal safe fallback text emitted when VS fails (REQ-700-092).
 # Kept intentionally neutral — the VS is a structural gate, not a clinical one.

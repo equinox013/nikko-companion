@@ -648,6 +648,30 @@ def build_adp_a_system(context: ResponseContextPayload) -> str:
         "determines HOW to say it."
     )
 
+    # [G-REGEN-01] Regen feedback injection — only on regeneration turns.
+    # When the previous attempt was rejected (by local rule engine or remote ADP-C),
+    # the pipeline passes the rejection reason + incriminating sentence here so
+    # ADP-A has a concrete negative reference to avoid on this attempt.
+    # This turns the regen loop from a random re-roll into a targeted correction.
+    if context.regen_feedback:
+        parts.append(
+            "\n[REGENERATE INSTRUCTION — DO NOT REPEAT]\n"
+            "Your previous response was rejected for the following reason:\n"
+            f"  {context.regen_feedback}\n\n"
+            "You MUST generate a completely different response that avoids the failure "
+            "described above. Specific guidance:\n"
+            "- If the failure was a COMFORT mode violation (analytical question, strategy "
+            "suggestion, technique recommendation, lifestyle advice): respond with pure "
+            "emotional acknowledgement ONLY. No questions except one soft continuation "
+            "at most ('want to tell me more?'). No coping strategies, no techniques, "
+            "no suggestions — not even framed as offers.\n"
+            "- If the failure was a tone violation (directive, perceptual framing, "
+            "sycophancy): produce the hedged, warm alternative that avoids the flagged "
+            "phrasing.\n"
+            "The incriminating sentence is shown in the reason above. Do not produce "
+            "any sentence structurally similar to it."
+        )
+
     return "\n".join(parts)
 
 

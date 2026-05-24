@@ -824,12 +824,34 @@ class EvaluatorAgent:
                 continue
             match = pattern.search(draft)
             if match:
+                # [G-REGEN-01] Extract the incriminating sentence — not just the
+                # matched token — so the regen feedback injected into the next
+                # ADP-A prompt gives the model a concrete example to avoid.
+                # Walk left to the previous sentence boundary, right to the next.
+                m_start, m_end = match.start(), match.end()
+                left_ctx  = draft[max(0, m_start - 150): m_start]
+                right_ctx = draft[m_end: min(len(draft), m_end + 150)]
+                for sep in (". ", "! ", "? ", "\n"):
+                    idx = left_ctx.rfind(sep)
+                    if idx != -1:
+                        left_ctx = left_ctx[idx + len(sep):]
+                        break
+                for sep in (". ", "! ", "? ", "\n"):
+                    idx = right_ctx.find(sep)
+                    if idx != -1:
+                        right_ctx = right_ctx[:idx + 1]
+                        break
+                sentence = (left_ctx + draft[m_start:m_end] + right_ctx).strip()
+
                 tone_pass  = False
                 tone_notes = (
-                    f"[RULE-TONE] {description}: matched '{match.group(0)[:60]}' "
-                    f"in {mode_str} mode."
+                    f"[RULE-TONE] {description}. "
+                    f"Incriminating sentence: \"{sentence[:200]}\""
                 )
-                logger.warning("Tone violation (%s): %r", description, match.group(0)[:60])
+                logger.warning(
+                    "Tone violation (%s): %r | sentence: %r",
+                    description, match.group(0)[:60], sentence[:120],
+                )
                 break
 
         # -- Sycophancy check (G-SYCO-01) --

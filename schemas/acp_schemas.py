@@ -414,6 +414,21 @@ class ResponseContextPayload(BaseModel):
             "cleared on refresh. Used for multi-turn ADP-A context. Not persisted. "
         ),
     )
+    # [G-REGEN-01] Rejection feedback from the previous generation attempt.
+    # Populated by NikkoPipeline._handle_evaluator_failure() on regen turns.
+    # Contains the specific reason the prior response was rejected plus the
+    # incriminating sentence/phrase that triggered the violation, so ADP-A
+    # can avoid repeating the same failure. Injected into the ADP-A system
+    # prompt by build_adp_a_system() as a [REGENERATE INSTRUCTION] block.
+    # None on the first (non-regen) generation pass.
+    regen_feedback: Optional[str] = Field(
+        default=None,
+        description=(
+            "Rejection reason + offending snippet from the previous generation attempt. "
+            "Injected into ADP-A system prompt on regen turns to guide avoidance. "
+            "(G-REGEN-01)"
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------

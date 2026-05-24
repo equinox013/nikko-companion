@@ -55,6 +55,7 @@ from backend.paralinguistic_detector import detect as detect_struct_signals
 from schemas.acp_schemas import ResponseContextPayload
 from orchestration.pipeline import (
     ADPB_CRISIS_SENTINEL,
+    ADPC_REGEN_SENTINEL,
     MODERATION_BLOCK_SENTINEL,
     SCOPE_BLOCK_SENTINEL,
 )
@@ -351,6 +352,22 @@ class HFSpaceFullGenerator:
             )
             self._last_metadata = result
             return SCOPE_BLOCK_SENTINEL
+
+        # ADP-C remote evaluation loop exhausted — both Modal regen attempts returned
+        # REGENERATE and the pipeline gave up. The response text was rejected by the
+        # fine-tuned ADP-C adapter but would pass the Render-side local rule engine
+        # (a known gap for declarative COMFORT-mode advice e.g. lifestyle suggestions).
+        # Return the sentinel so NikkoPipeline.run() synthesises a REGENERATE payload
+        # and triggers a fresh generation from scratch.
+        # [BUG-FIX 2026-05-25] Previously regen=True was logged but silently ignored.
+        if result.get("regen"):
+            logger.warning(
+                "HFSpaceFullGenerator: ADP-C regen exhausted (verdict=%s, regen=True) — "
+                "returning ADPC_REGEN_SENTINEL for backend-level fresh generation.",
+                result.get("verdict"),
+            )
+            self._last_metadata = result
+            return ADPC_REGEN_SENTINEL
 
         text = result.get("text", "")
 

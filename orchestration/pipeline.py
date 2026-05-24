@@ -130,6 +130,17 @@ MODERATION_BLOCK_SENTINEL = "__NIKKO_MODERATION_BLOCK__"
 # pipeline.run() intercepts this and returns the generic WARM_REDIRECT.
 SCOPE_BLOCK_SENTINEL = "__NIKKO_SCOPE_BLOCK__"
 
+# Sentinel returned by HFSpaceFullGenerator.generate() when the Modal pipeline's
+# internal ADP-C regen loop was exhausted (both ADP-C passes returned REGENERATE).
+# The draft text was rejected by the remote fine-tuned evaluator but passed the
+# Render-side local rule engine — meaning the local rule engine has a gap the
+# remote ADP-C caught. Rather than delivering a remotely-rejected response, the
+# backend synthesises a REGENERATE EvaluationPayload and triggers a fresh
+# generation attempt via _handle_evaluator_failure (REQ-000-065 enforcement path).
+# [BUG-FIX 2026-05-25] Previously the regen=True flag from Modal was logged but
+# silently ignored, causing ADP-C-rejected responses to be delivered unchanged.
+ADPC_REGEN_SENTINEL = "__NIKKO_ADPC_REGEN__"
+
 # Crisis text used for the ADP-B late-override path. Mirrors _CRISIS_TEXT in
 # backend/main.py — keep in sync if the hotlines or framing ever change.
 _ADPB_CRISIS_RESPONSE = (
@@ -1351,6 +1362,7 @@ class NikkoPipeline:
         user_input: str,
         session_id: Optional[str] = None,
         regen_count: int = 0,
+        regen_feedback: Optional[str] = None,
         memory_context: Optional[str] = None,
         conversation_history: Optional[list] = None,
     ) -> PipelineResult:
@@ -1365,6 +1377,10 @@ class NikkoPipeline:
         regen_count          : Incremented on each regeneration loop. The pipeline
                                calls itself recursively when the Evaluator emits
                                REGENERATE. Callers should always pass 0 (default).
+        regen_feedback       : Rejection reason + offending snippet from the previous
+                               generation attempt (G-REGEN-01). None on first pass.
+                               Injected into the ADP-A system prompt so the model
+                               knows what to avoid on the regen turn.
         memory_context       : Decrypted USM memory file content (plaintext Markdown)
                                forwarded from the frontend.  None when no memory file
                                is loaded.  Injected into ADP-A system prompt via
@@ -1535,6 +1551,11 @@ class NikkoPipeline:
             # [REQ-100-PR2] True when ≥2 of last 5 user turns had passive risk
             # signals AND current distress is not LOW. Triggers support nudge.
             passive_risk_sustained=passive_risk_sustained,
+            # [G-REGEN-01] Rejection feedback from the previous attempt. None on
+            # the first pass. On regen turns, contains the specific failure reason
+            # + incriminating sentence so build_adp_a_system() can inject a
+            # [REGENERATE INSTRUCTION] block telling ADP-A what to avoid.
+            regen_feedback=regen_feedback,
         )
 
         # ── STEP 10: Draft generation (Interaction Model) ─────────────────
@@ -1592,6 +1613,37 @@ class NikkoPipeline:
                 response_text=WARM_REDIRECT,
                 out_of_scope=True,
                 trace=trace,
+            )
+
+        # ── ADP-C remote regen exhausted ────────────────────────────────────
+        # Modal's internal ADP-C evaluation loop consumed both regen attempts and
+        # still could not produce an APPROVE verdict. The draft text was remotely
+        # rejected but the local rule engine would pass it (local rule gaps = why
+        # ADP-C caught it and the rule engine didn't). Synthesise a REGENERATE
+        # EvaluationPayload so the backend triggers a fresh generation from scratch,
+        # rather than silently delivering a response ADP-C already rejected twice.
+        # [BUG-FIX 2026-05-25] REQ-000-065 enforcement path: declarative COMFORT
+        # mode advice (lifestyle suggestions, technique lists) is caught by the
+        # remote ADP-C fine-tuned adapter before it is caught by local regex.
+        if draft == ADPC_REGEN_SENTINEL:
+            trace.step("adpc_regen_sentinel")
+            logger.warning(
+                "Pipeline: ADP-C remote regen exhausted — synthesising REGENERATE "
+                "payload for backend-level fresh generation (regen_count=%d).",
+                regen_count,
+            )
+            synthetic_regen = EvaluationPayload(
+                verdict=EvaluationVerdict.REGENERATE,
+                safety_check=True,
+                tone_check=False,     # tone failure is why ADP-C rejected it
+                hallucination_check=True,
+                rejection_reasons=[
+                    "ADP-C remote regen exhausted — Modal returned regen=True "
+                    "after max internal attempts. Local rule engine gap identified."
+                ],
+            )
+            return self._handle_evaluator_failure(
+                synthetic_regen, user_input, session_id, regen_count, trace, t0
             )
 
         # ── STEP 11: Evaluator ─────────────────────────────────────────────
@@ -2268,7 +2320,19 @@ class NikkoPipeline:
                 "Evaluator REGENERATE — attempt %d/%d. Re-running pipeline.",
                 regen_count + 1, MAX_REGEN_ATTEMPTS,
             )
-            return self.run(user_input, session_id=session_id, regen_count=regen_count + 1)
+            # [G-REGEN-01] Build regen_feedback from the rejection reasons so
+            # ADP-A knows what specific pattern to avoid on the next attempt.
+            # rejection_reasons already contains the incriminating sentence
+            # (extracted by _rule_judge() when a tone violation fires).
+            feedback: Optional[str] = None
+            if evaluation.rejection_reasons:
+                feedback = "; ".join(evaluation.rejection_reasons)
+            return self.run(
+                user_input,
+                session_id=session_id,
+                regen_count=regen_count + 1,
+                regen_feedback=feedback,
+            )
 
         # FAIL verdict or regen limit exhausted — safe fallback.
         trace.final_action = "evaluator_safe_fallback"
