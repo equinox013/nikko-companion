@@ -332,7 +332,7 @@ function ThinkingBubble({ coldStart = false }) {
       },
       /* @__PURE__ */ React.createElement("circle", { cx: "6", cy: "6", r: "5" }),
       /* @__PURE__ */ React.createElement("path", { d: "M6 3.5V6l1.5 1.5" })
-    ), /* @__PURE__ */ React.createElement("span", { className: "cold-start-text" }, "Server is waking up \u2014 first load takes ~60\u201390 s"), /* @__PURE__ */ React.createElement("span", { className: "cold-start-elapsed", "aria-label": elapsed + " seconds elapsed" }, elapsed, "s")), /* @__PURE__ */ React.createElement("div", { className: "cold-start-bar", "aria-hidden": "true" }, /* @__PURE__ */ React.createElement("div", { className: "cold-start-bar-fill" })))
+    ), /* @__PURE__ */ React.createElement("span", { className: "cold-start-text" }, "Server is waking up \u2014 first load takes ~60\u201390"), /* @__PURE__ */ React.createElement("span", { className: "cold-start-elapsed", "aria-label": elapsed + " seconds elapsed" }, elapsed, "s")), /* @__PURE__ */ React.createElement("div", { className: "cold-start-bar", "aria-hidden": "true" }, /* @__PURE__ */ React.createElement("div", { className: "cold-start-bar-fill" })))
   );
 }
 function Chat({ theme, onToggleTheme }) {

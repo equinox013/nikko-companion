@@ -2178,7 +2178,8 @@ body::before {
    visually consistent. Unselected buttons also get a very soft tint so the
    scale is readable before clicking. */
 .mood-checkin-num.active {
-  color: #fff;
+  color: #fff !important; /* !important needed — specificity tie with data-r color rules */
+  text-shadow: 0 1px 3px rgba(0,0,0,0.35); /* mid-range gold backgrounds ~2:1 contrast without this */
   border-color: transparent;
   font-weight: 600;
 }
@@ -2674,7 +2675,8 @@ body::before {
 .mood-rating-row .pip:hover { background: var(--bg-2); }
 .mood-rating-row .pip.on {
   border-color: transparent;
-  color: #fff;
+  color: #fff !important; /* overrides per-data-r color rules that follow in source order */
+  text-shadow: 0 1px 3px rgba(0,0,0,0.35); /* low-contrast mid-range golds need this to read */
   font-weight: 500;
 }
 /* mood color scale (1=red-ish through 10=green-ish) — unselected get a subtle
