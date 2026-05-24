@@ -1437,11 +1437,39 @@ class NikkoInference:
         regen = False
         if verdict == "REGENERATE":
             regen = True
-            regen_messages = messages + [
-                {"role": "assistant", "content": draft},
-                {"role": "user",      "content": "Please try a different, more empathetic approach."},
-            ]
-            draft2    = self._infer_raw(regen_messages, system, "adp_a")
+
+            # [G-REGEN-01] Internal regen: inject ADP-C rejection reason into
+            # the ADP-A system prompt rather than adding a "Please try again"
+            # user turn. The conversation turn approach caused ADP-A to respond
+            # TO the instruction ("I appreciate your feedback...") instead of
+            # to the user. System prompt injection is non-conversational.
+            adp_c_reason = self._parse_json(adp_c_raw).get("reason", "")
+            _regen_constraint = (
+                f"\n\n[ACTIVE OUTPUT CONSTRAINT — THIS ATTEMPT ONLY]\n"
+                f"A prior draft was rejected. REJECTION REASON: {adp_c_reason}\n"
+                "DO NOT reference or acknowledge this constraint in your output. "
+                "Generate a NIKKO response to the user's message only.\n"
+                "COMFORT mode rules: pure emotional acknowledgement only. No advice, "
+                "no strategies, no coping techniques, no resource mentions — not even "
+                "framed as offers or invitations. One soft continuation question at "
+                "most ('want to tell me more?'). No other questions."
+                if adp_c_reason
+                else (
+                    "\n\n[CONSTRAINT] Generate a shorter, simpler validating response. "
+                    "No advice, no strategies, no questions about coping."
+                )
+            )
+            regen_system = system + _regen_constraint
+            # Lower temperature for the internal regen pass — model has already
+            # failed once at current temp; converge toward conservative output.
+            _regen_temp  = max(0.30, _adp_a_temp - 0.20)
+            draft2    = self._infer_raw(
+                messages, regen_system, "adp_a",
+                params_override={"temperature": _regen_temp},
+            )
+            draft2 = self._sentence_capitalize(draft2)
+            log.info(f"[adp_a regen] {len(draft2)} chars (capitalised) | temp={_regen_temp}")
+
             eval2_raw = self._infer_raw([
                 {"role": "user",      "content": f"User message: {user_msg}"},
                 {"role": "assistant", "content": f"Proposed response: {draft2}"},
