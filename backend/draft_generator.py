@@ -233,10 +233,14 @@ class HFSpaceFullGenerator:
             # [G-REGEN-01] Piggyback regen_attempt inside rule_signal so Modal can
             # reduce ADP-A temperature per regen without a new positional parameter
             # (which would break warm containers during rolling deploys).
+            # Always pass rule_signal as a dict so _mode reaches Modal even on the
+            # first attempt (regen_attempt=0). _mode gates _strip_questions() in
+            # run_pipeline() — without it, question stripping doesn't activate.
             "rule_signal":        {
                 **(rule_signal or {}),
                 "_regen_attempt": getattr(context, "regen_attempt", 0),
-            } if (rule_signal or getattr(context, "regen_attempt", 0) > 0) else rule_signal,
+                "_mode":          context.mode.value,
+            },
             "base_strategy_text": base_strategy_text,
         }
 

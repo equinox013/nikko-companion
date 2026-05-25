@@ -1044,6 +1044,42 @@ class NikkoInference:
         return text
 
     @staticmethod
+    def _strip_questions(text: str) -> str:
+        """
+        Post-process ADP-A draft to remove question sentences before ADP-C evaluation.
+
+        WHY THIS EXISTS:
+        ADP-C fine-tuned weights reject any sentence ending in '?' in COMFORT mode
+        regardless of the PERMITTED EXCEPTION clause in the eval_system prompt.
+        Rather than fighting the model weights with instruction engineering, we strip
+        question-terminated sentences deterministically here — zero latency cost,
+        guaranteed compliance. Applied to COMFORT mode drafts only; GUIDANCE mode
+        questions are therapeutically intentional and must not be stripped.
+
+        APPROACH — punctuation-boundary, not pattern-matching:
+        English questions end in '?'. We split on sentence boundaries, remove any
+        sentence ending in '?', and rejoin. This is reliable across all question
+        surface forms ('want to share more?', 'what's been going on?', 'how are you
+        feeling?') without maintaining a fragile pattern list.
+
+        EDGE CASE — all sentences are questions:
+        Returns the original text unchanged. ADP-C handles it; returning an empty
+        string would be worse. In practice, ADP-A always generates at least one
+        declarative sentence alongside any question.
+        """
+        import re
+        if not text:
+            return text
+        # Split on sentence boundaries, keeping punctuation attached to the preceding
+        # sentence so 'Hello. How are you?' → ['Hello.', 'How are you?'].
+        sentences = re.split(r'(?<=[.!?])\s+', text.strip())
+        clean = [s for s in sentences if s.rstrip() and not s.rstrip().endswith('?')]
+        if not clean:
+            # Guard: entire response was questions — return original, let ADP-C decide.
+            return text
+        return ' '.join(clean).strip()
+
+    @staticmethod
     def _build_adp_b_system_with_context(base_system: str, annotations: str) -> str:
         """
         Inject pre-analysis annotations into the ADP-B safety system prompt.
@@ -1190,13 +1226,20 @@ class NikkoInference:
     # ── Full pipeline ─────────────────────────────────────────────────────────
 
     # Temperature schedule for ADP-A regen attempts. (G-REGEN-01)
-    # Each failed attempt reduces temperature to steer Qwen3-4B toward
-    # conservative, validation-focused outputs rather than creative re-rolls.
     # Index = regen_attempt (0 = first/original pass; clamped at max index).
-    # Schedule is intentionally aggressive: 0.30 is the empirical convergence
-    # point (ADP-C approved at attempt=3 temp=0.30 in Phase 6 testing), so
-    # reaching it at attempt=1 rather than attempt=3 saves two full regen cycles.
-    _REGEN_TEMPERATURES: list[float] = [0.70, 0.35, 0.25, 0.20]
+    # Temperature is applied on ALL passes including attempt=0 — starting at 0.50
+    # rather than the model default (~0.70) reduces first-pass strategy generation.
+    #
+    # On the FINAL schedule entry, the ADP-A LoRA adapter is disabled and bare
+    # Qwen3-4B runs instead. When the adapter keeps producing violations even at
+    # low temperature, the base model + explicit constraint system prompt is a
+    # cleaner last resort before safe fallback.
+    #
+    # Schedule:
+    #   attempt=0 → 0.50  (LoRA active)
+    #   attempt=1 → 0.25  (LoRA active)
+    #   attempt=2 → 0.20  (LoRA DISABLED — base Qwen3-4B)
+    _REGEN_TEMPERATURES: list[float] = [0.50, 0.25, 0.20]
 
     @modal.method()
     def run_pipeline(
@@ -1244,14 +1287,19 @@ class NikkoInference:
         start    = time.time()
         user_msg = messages[-1]["content"] if messages else ""
 
-        # [G-REGEN-01] Extract regen_attempt piggybacked on rule_signal.
-        # Using the rule_signal dict avoids adding a new positional parameter to
+        # [G-REGEN-01] Extract regen_attempt and pipeline mode piggybacked on rule_signal.
+        # Using the rule_signal dict avoids adding new positional parameters to
         # run_pipeline() — which would break warm containers still running the old
-        # signature during rolling deploys. Old containers ignore the unknown key;
-        # new containers extract it here and restore rule_signal without it.
+        # signature during rolling deploys. Old containers ignore unknown keys;
+        # new containers pop them here before any downstream rule_signal processing.
         regen_attempt = 0
         if rule_signal and "_regen_attempt" in rule_signal:
             regen_attempt = int(rule_signal.pop("_regen_attempt", 0))
+        # _mode: "comfort" | "guidance" | "crisis" — used to gate _strip_questions().
+        # Popped here to keep rule_signal clean for downstream ADP-B context building.
+        _pipeline_mode = ""
+        if rule_signal and "_mode" in rule_signal:
+            _pipeline_mode = str(rule_signal.pop("_mode", "")).lower()
 
         # Use explicit user_text if provided; fall back to the last message.
         _user_text = user_text.strip() or user_msg
@@ -1366,24 +1414,40 @@ class NikkoInference:
         # generated here but only returned to the caller if ADP-B approves it.
         # If ADP-B fires crisis=True, this draft is silently discarded.
         #
-        # [G-REGEN-01] Temperature reduction on regen attempts. The first pass uses
-        # the baseline 0.75 for natural variation. Each failed regen lowers the
-        # temperature (0.55, 0.40, 0.30) so the model converges toward a simple,
-        # conservative acknowledgement rather than generating creative variants that
-        # keep triggering the same violation pattern.
+        # [G-REGEN-01] Temperature schedule — applied on ALL passes including attempt=0.
+        # Starting at 0.50 (not the model default ~0.70) reduces first-pass strategy
+        # generation. Each failed regen drops further (0.25, 0.20).
         _adp_a_temp = self._REGEN_TEMPERATURES[
             min(regen_attempt, len(self._REGEN_TEMPERATURES) - 1)
         ]
-        _adp_a_params = {"temperature": _adp_a_temp} if regen_attempt > 0 else None
-        if regen_attempt > 0:
-            log.info(f"[adp_a] regen_attempt={regen_attempt} → temperature={_adp_a_temp}")
-        draft = self._infer_raw(messages, system, "adp_a", params_override=_adp_a_params)
+        # On the final schedule entry, disable the ADP-A LoRA adapter and run bare
+        # Qwen3-4B. The adapter's training bias toward expressive outputs persists
+        # at low temperature; the base model with an explicit constraint system prompt
+        # is a cleaner last resort. disable_adapter() is the PEFT context manager —
+        # O(1), no weight copy, thread-safe for single-GPU single-request containers.
+        _use_base_model = regen_attempt >= len(self._REGEN_TEMPERATURES) - 1
+        _adp_a_params   = {"temperature": _adp_a_temp}
+        log.info(
+            f"[adp_a] regen_attempt={regen_attempt} → temperature={_adp_a_temp}"
+            + (" (LoRA disabled — base Qwen3-4B)" if _use_base_model else "")
+        )
+        if _use_base_model:
+            with self._qwen_model.disable_adapter():
+                draft = self._infer_raw(messages, system, "adp_a", params_override=_adp_a_params)
+        else:
+            draft = self._infer_raw(messages, system, "adp_a", params_override=_adp_a_params)
         # [REQ-000-041] Enforce standard English capitalisation on the draft.
         # Qwen3-4B mirrors the user's all-lowercase register despite the TYPOGRAPHY
         # RULE in the system prompt. _sentence_capitalize() applies deterministic
         # post-processing: capitalise sentence-initial characters without touching
         # internal casing, proper nouns, or whitespace. (Director-approved 2026-05-23)
         draft = self._sentence_capitalize(draft)
+        # [G-REGEN-01] Strip question sentences in COMFORT mode before ADP-C sees the
+        # draft. ADP-C fine-tuned weights reject '?'-terminated sentences regardless
+        # of the PERMITTED EXCEPTION in eval_system — deterministic stripping here is
+        # more reliable than instruction engineering against trained priors.
+        if _pipeline_mode == "comfort":
+            draft = self._strip_questions(draft)
         log.info(f"[adp_a] {len(draft)} chars (capitalised)")
 
         # Stage 2: ADP-B safety classification (Gemma-2 + adp_b adapter)
@@ -1463,17 +1527,29 @@ class NikkoInference:
                 )
             )
             regen_system = system + _regen_constraint
-            # Lower temperature for the internal regen pass — model has already
-            # failed once at current temp; converge toward conservative output.
-            # Floor is 0.15 (not 0.30) so that even the lowest schedule entry
-            # (0.20) still gets a meaningful reduction on the internal retry.
-            _regen_temp  = max(0.15, _adp_a_temp - 0.15)
-            draft2    = self._infer_raw(
-                messages, regen_system, "adp_a",
-                params_override={"temperature": _regen_temp},
-            )
+            # Lower temperature for the internal regen pass — already failed once
+            # at current temp; step down further to converge toward conservative output.
+            _regen_temp = max(0.15, _adp_a_temp - 0.15)
+            # Mirror the base model flag — if the outer pass already disabled LoRA,
+            # the internal retry should too for consistency.
+            if _use_base_model:
+                with self._qwen_model.disable_adapter():
+                    draft2 = self._infer_raw(
+                        messages, regen_system, "adp_a",
+                        params_override={"temperature": _regen_temp},
+                    )
+            else:
+                draft2 = self._infer_raw(
+                    messages, regen_system, "adp_a",
+                    params_override={"temperature": _regen_temp},
+                )
             draft2 = self._sentence_capitalize(draft2)
-            log.info(f"[adp_a regen] {len(draft2)} chars (capitalised) | temp={_regen_temp}")
+            if _pipeline_mode == "comfort":
+                draft2 = self._strip_questions(draft2)
+            log.info(
+                f"[adp_a regen] {len(draft2)} chars (capitalised) | temp={_regen_temp}"
+                + (" (base model)" if _use_base_model else "")
+            )
 
             eval2_raw = self._infer_raw([
                 {"role": "user",      "content": f"User message: {user_msg}"},
