@@ -292,7 +292,21 @@ The **Router** reads the `SignalPayload` and assigns exactly one operational mod
 
 ### STEPs 4–8 — Evidence Retrieval and Synthesis (Guidance Mode only)
 
-If the Router assigned GUIDANCE, the **PubMed Adapter** queries NCBI's research database and the **Web Search Adapter** searches five sanctioned health-information domains (Healthdirect Australia, Better Health Channel, the World Health Organization, Beyond Blue, and Black Dog Institute). Results are cached on disk.
+If the Router assigned GUIDANCE, two adapters run in parallel — the **PubMed Adapter** against NCBI's research database and the **Web Search Adapter** against a registry of 14 sanctioned health-information domains.
+
+**PubMed Adapter** — queries NCBI E-utilities (ESearch → PMIDs, EFetch → XML) and returns up to 5 peer-reviewed articles per turn (hard cap: 20). By default it restricts to Meta-Analyses, Systematic Reviews, and Randomised Controlled Trials from the PMC Open Access subset, so every citation the LLM sees has full-text access and no institutional paywall. A 5-year recency filter is applied by default (REQ-200-ER1). When topic hints are present and narrow (≤ 3 tags), MeSH heading clauses are AND-appended to the query to improve precision — for example, an `indigenous` tag appends `"Australian Aboriginal and Torres Strait Islander Peoples[MeSH] OR Indigenous Peoples[MeSH]"`. Results are disk-cached for 7 days. The adapter never raises — all errors return as `RetrievalError` so the pipeline can proceed without evidence rather than crash.
+
+**Web Search Adapter** — queries a registry of 14 sanctioned health-information domains, routed by detected topic:
+
+| Category | Domains |
+|----------|---------|
+| Government / clinical | Healthdirect Australia, Better Health Channel, WHO, Medicare Mental Health |
+| Broad NGOs | Beyond Blue, Black Dog Institute, Lifeline Australia |
+| Population-specific | headspace, ReachOut Australia, Kids Helpline, MensLine Australia |
+| Specialised conditions | Blue Knot Foundation (trauma), GriefLine |
+| Cultural / Indigenous | 13YARN (priority-10; no substitute) |
+
+Topic routing is keyword-driven and deterministic — no LLM involved. When no specific topic is detected, the adapter falls back to a default set of five high-coverage domains (Beyond Blue, Healthdirect, Black Dog Institute, Better Health Channel, WHO). Results are cached on disk.
 
 The **Evidence Synthesizer** then ranks all retrieved items by quality — peer-reviewed content within the last five years scores highest — and produces a single `SynthesizedEvidence` object. No LLM is involved in ranking or scoring.
 
