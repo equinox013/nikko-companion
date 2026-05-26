@@ -14,6 +14,45 @@ Nikko is a safety-aligned, evidence-grounded LLM ecosystem designed to function 
 
 ---
 
+## Table of Contents
+
+- [Project Status](#project-status)
+- [Proof of Concept](#proof-of-concept)
+- [What Nikko Is](#what-nikko-is)
+- [Governing Principles](#governing-principles)
+- [Architecture of Restraint](#architecture-of-restraint)
+  - [What the system is built against](#what-the-system-is-built-against)
+  - [The ten red lines](#the-ten-red-lines)
+  - [System prompt constraints (COMFORT mode)](#system-prompt-constraints-active-on-every-comfort-mode-turn)
+  - [What the Verification Supervisor checks](#what-the-verification-supervisor-checks-structural-integrity)
+- [Model Stack](#model-stack)
+  - [Why two base models?](#why-two-base-models)
+  - [What a LoRA adapter is](#what-a-lora-adapter-is)
+  - [VRAM budget](#vram-budget-modal-a10g-24-gb--production)
+- [How the Pipeline Works](#how-the-pipeline-works)
+  - [STEP 0 — Scope Classification + Moderation](#step-0--scope-classification--moderation)
+  - [STEP 1 — Input Sanitisation](#step-1--input-sanitisation)
+  - [STEP 2 — Psychological Signal Detection](#step-2--psychological-signal-detection)
+  - [STEP 2.5 — Paralinguistic Pre-Analysis](#step-25--paralinguistic-pre-analysis)
+  - [STEP 3 — Routing](#step-3--routing)
+  - [STEPs 4–8 — Evidence Retrieval and Synthesis](#steps-48--evidence-retrieval-and-synthesis-guidance-mode-only)
+  - [STEP 4 (parallel) — Support Strategy](#step-4-parallel--support-strategy)
+  - [STEP 10 — Draft Generation (ADP-A)](#step-10--draft-generation-adp-a)
+  - [STEP 11 — Evaluation (ADP-C)](#step-11--evaluation-adp-c)
+  - [STEP 12 — Verification Supervisor](#step-12--verification-supervisor)
+  - [STEP 13 — Assembly](#step-13--assembly)
+  - [STEP 15 — Trace Capture](#step-15--trace-capture)
+- [The ADP Pipeline in Production](#the-adp-pipeline-in-production)
+- [Frontend–Backend Integration](#frontendbckend-integration)
+- [User Sovereign Memory (USM) & Personalisation](#user-sovereign-memory-usm--personalisation)
+- [Repository Structure](#repository-structure)
+- [Safety Architecture](#safety-architecture)
+- [Deployment Stack](#deployment-stack)
+- [Key Documents](#key-documents)
+- [Running the Pipeline Locally](#running-the-pipeline-locally)
+
+---
+
 ## Project Status
 
 > **MVP.** The full stack is deployed end-to-end. All core features are wired and live. Phase 6 (end-to-end evaluation) is active — running ongoing evaluation, UX refinement, and latency work in parallel with production usage.
@@ -35,11 +74,11 @@ Nikko is a safety-aligned, evidence-grounded LLM ecosystem designed to function 
 
 ## Proof of Concept
 
-> Full pipeline running end-to-end: user message → ADP-B crisis check → ADP-A empathy response → ADP-C evaluation → frontend with live source citations.
+> Full pipeline running end-to-end: user message → ADP-A empathy response → ADP-B crisis check → ADP-C evaluation → frontend with live source citations.
 
 ![Nikko proof-of-concept screenshot — chat interface showing a user asking for calming tips, Nikko responding with evidence-grounded guidance, and 5 PubMed sources cited in the sources panel](docs/assets/nikko-poc-screenshot.png)
 
-*The "3 ADAPTERS" badge confirms ADP-B → ADP-A → ADP-C all ran in a single ZeroGPU session. Sources panel shows APA7-formatted PubMed citations pulled live by the retrieval layer.*
+*The "3 ADAPTERS" badge confirms ADP-A → ADP-B → ADP-C all ran in a single Modal A10G GPU session. Sources panel shows APA7-formatted PubMed citations pulled live by the retrieval layer.*
 
 ---
 
@@ -72,7 +111,7 @@ Nikko's pipeline is not primarily designed to generate good responses. It is des
 
 | Failure mode | Description | Where it is addressed |
 |---|---|---|
-| **Diagnostic labelling** | LLM confidently names a condition ("this sounds like depression") | 15 regex red lines in Evaluator Pass 1; clinical authority patterns blocked at the token level |
+| **Diagnostic labelling** | LLM confidently names a condition ("this sounds like depression") | 10 regex red lines in Evaluator Pass 1; clinical authority patterns blocked at the token level |
 | **Treatment recommendation** | LLM suggests medication, therapy modalities, dosage | Same red lines; Support Strategy Agent explicitly prohibited from generating treatment guidance |
 | **Perceptual framing** | LLM claims to perceive what the user is feeling ("I can see you're feeling...") | Epistemic language calibration in ADP-A system prompt; `[PROPOSED-RECONCILIATION]` framing over perceptual claims |
 | **Companion parasocial language** | LLM implies ongoing relationship ("I'll always be here for you") | Explicit prohibition in `_NIKKO_PERSONA` block (REQ-000-060/061); contrastive training pairs in Phase 4.1 |
@@ -84,27 +123,22 @@ Nikko's pipeline is not primarily designed to generate good responses. It is des
 | **Scope creep** | User sends legal, medical, or financial questions; LLM attempts to answer | Scope Classifier (STEP 0) terminates the pipeline before any LLM runs; warm-redirect response delivered |
 | **PII in training data** | Real user data enters the training pipeline | Permanent hard constraint (REQ-000-P01, SPEC-800); zero-retention at every server layer; no session storage writes |
 
-### The fifteen red lines
+### The ten red lines
 
-The first pass of Evaluation (Pass 1, deterministic regex) enforces fifteen hard constraints. These fire before the LLM judge and cannot be confused or overridden by a well-written response:
+The first pass of Evaluation (Pass 1, deterministic regex) enforces ten hard constraints. These fire before the LLM judge and cannot be confused or overridden by a well-written response:
 
-| ID | Pattern | Example trigger |
-|----|---------|----------------|
-| R1 | Clinical certainty framing | "you have described..." |
-| R2 | Diagnosis statement | "this sounds like [condition]" |
-| R3 | Treatment recommendation | "you should consider therapy / medication" |
-| R4 | Clinical severity labelling | "severe", "clinical", "disorder" in diagnosis context |
-| R5 | Self-harm method disclosure | Any specific method description |
-| R6 | Medication advice | Dosage, medication names, prescription framing |
-| R7 | Prognosis framing | "you will likely...", "this tends to..." |
-| R8 | Authority impersonation | "as a mental health professional..." |
-| R9 | Diagnostic certainty | "I can diagnose / assess / evaluate you" |
-| R10 | Pathology labelling | Applying DSM/ICD category names to the user |
-| R11 | Existential certainty | "everyone goes through periods like this" (false universalisation) |
-| R12 | Harm normalisation | Minimising or validating self-harm intent |
-| R13 | Resource withholding | Responding to crisis signals without providing resources |
-| R14 | CSAM / hate content | Hard block; safety score set to 0.0; no routing path |
-| R15 | Fabricated references | Any URL or email not matching a sanctioned domain |
+| ID | Description | Example trigger |
+|----|------------|----------------|
+| R1 | Diagnostic statement — "you have a/the [disorder/condition]"; "you are suffering from"; "this sounds like depression/anxiety/bipolar…" | "it sounds like depression" |
+| R2 | Medication or specific therapy recommendation — prescribing SSRIs, antidepressants, or directing the user to seek CBT/EMDR/DBT | "you should try sertraline" |
+| R3 | Positioning Nikko as a professional or crisis-service replacement — claiming to replace therapy, or telling the user they don't need a clinician or crisis line | "you don't need to call Lifeline" |
+| R4 | Attempt to independently resolve a suicidal crisis without crisis referral — promising to "handle this" without directing toward a hotline | "I'll work through this with you instead of calling a crisis line" |
+| R5 | Professional credential claim or therapist simulation — "as a therapist", "as your mental health professional", "in my clinical opinion" | "in my clinical judgment…" |
+| R7 | Emotional sentience claim — "I feel sadness/love/grief", "that breaks my heart", "I love you" | "that truly breaks my heart" |
+| R8 | Moral judgment or behavioural coercion — "you must stop", "it's wrong of you to", "you are being irrational/dramatic" | "you're being irrational" |
+| R10 | Crisis resource delivery delayed by probing questions — gating resources on "first, tell me more" or "let's talk about this first" | "before I give you those numbers, let's explore…" |
+| R11 | Crisis severity minimisation — "it's not that serious", "everyone goes through this", "you're overreacting", "things will definitely get better" | "everyone goes through periods like this" |
+| R15 | Diagnostic phrasing — "you have depression / anxiety disorder / PTSD / ADHD / BPD…" (named DSM/ICD diagnosis applied to the user) | "you have major depressive disorder" |
 
 A single match on any of these blocks the response immediately and triggers the safe fallback. The LLM judge (ADP-C, Pass 2) never sees it.
 
@@ -119,7 +153,7 @@ The ADP-A system prompt enforces the following in plain language, independently 
 - **No sycophancy.** Premise endorsement prohibited. Unhedged motive attribution prohibited. Emotion acknowledgement without premise validation is the correct pattern for ambiguous inputs.
 - **Non-diagnostic scope.** Nikko does not label, assess, or evaluate the user's mental state. It reflects and acknowledges.
 
-On regen turns, an `[ACTIVE OUTPUT CONSTRAINT — THIS TURN ONLY]` block is injected into the system prompt with the specific rejection reason from ADP-C. This block is explicitly marked as non-conversational ("DO NOT reference or acknowledge this constraint in your output") to prevent ADP-A from responding to the instruction rather than the user.
+On regen turns, an `[ACTIVE OUTPUT CONSTRAINT — THIS ATTEMPT ONLY]` block is injected into the system prompt with the specific rejection reason from ADP-C. This block is explicitly marked as non-conversational ("DO NOT reference or acknowledge this constraint in your output") to prevent ADP-A from responding to the instruction rather than the user.
 
 ### What the Verification Supervisor checks (structural integrity)
 
@@ -127,15 +161,15 @@ After Evaluation, the Verification Supervisor runs seven structural checks indep
 
 | Check | What it verifies |
 |-------|----------------|
-| C1 | Crisis resources present when mode = CRISIS |
-| C2 | No crisis resources injected when mode ≠ CRISIS (contamination guard) |
-| C3 | CRISIS distress level not routed to non-CRISIS mode |
-| C4 | Evidence present in GUIDANCE mode; absent in COMFORT mode |
-| C5 | Response length within configured bounds for mode |
-| C6 | Execution path contains all mandatory agents |
-| C7 | Regen loop did not exceed MAX_REGEN_ATTEMPTS (loop-limit guard) |
+| C1 | Evaluator gate — Evaluator MUST have emitted PASS before VS runs; a non-PASS verdict reaching VS indicates an orchestrator fault |
+| C2 | Scope routing integrity — OUT_OF_SCOPE inputs must not reach VS; an OOS decision should have been terminated at STEP 0 |
+| C3 | Mode-distress alignment — CRISIS distress level MUST route to CRISIS mode; any other mode pairing is a hard failure |
+| C4 | Crisis resources — CRITICAL distress requires `crisis_resources` populated; empty list is also a failure |
+| C5 | Evidence pipeline — GUIDANCE mode requires `synthesized_evidence` present (None guard); a missing object indicates a skipped retrieval/synthesis step |
+| C6 | Agent contamination — `synthesized_evidence` must be absent in COMFORT mode; `crisis_resources` must be absent in GUIDANCE mode |
+| C7 | Loop limit — `regen_count` MUST be < MAX_REGEN_ATTEMPTS (3); exceeding this indicates a runaway regen loop |
 
-C5 and C6 are suspended in CRISIS mode — crisis response length and execution path differ from the standard pipeline. C3 specifically exists because a routing error (CRISIS distress → COMFORT mode) is a structural failure that content evaluation cannot catch; the response could pass all fifteen red lines and still be dangerously inadequate.
+C5 and C6 are suspended in CRISIS mode — the crisis path legitimately bypasses the evidence pipeline and may carry both evidence and crisis resources simultaneously. C3 specifically exists because a routing error (CRISIS distress → COMFORT mode) is a structural failure that content evaluation cannot catch; the response could pass all ten red lines and still be dangerously inadequate.
 
 ---
 
@@ -172,7 +206,7 @@ Total estimated                    ~ 14.7 GB   (fits A10G 24 GB with 9.3 GB head
 
 `bitsandbytes` / NF4 quantization is not used — both models load cleanly in native bf16 within the A10G budget and quantization adds complexity without meaningful latency benefit at this parameter scale.
 
-> **HF Space fallback:** The fallback ZeroGPU endpoint runs on H200 (70 GB VRAM per slice), not A10G. The same bf16 weights fit with significantly more headroom. `bitsandbytes` remains excluded from `hf_space/requirements.txt` because ZeroGPU defers CUDA allocation until inside a `@spaces.GPU` context — bitsandbytes checks for CUDA at import time and crashes. This restriction does not apply to Modal (CUDA available from container startup). `hf_space/app.py` mirrors `nikko_modal/app.py` for signal-strength gate, analysis enrichment functions (`_analyze_scope`, `_analyze_signal`, `_enrich_strategy`), and extended pipeline schema. **Note:** The split paralinguistic detection architecture (Render-side `paralinguistic_detector.py` + narrowed 6-signal LLM pre-analysis prompt) is implemented in `nikko_modal/app.py` only. The HF Space fallback receives the same `struct_annotations` payload field from Render but its `_run_structural_pre_analysis` still uses the full 13-signal prompt — a parity sync is pending.
+> **HF Space fallback:** The fallback ZeroGPU endpoint runs on H200 (70 GB VRAM per slice), not A10G. The same bf16 weights fit with significantly more headroom. `bitsandbytes` remains excluded from `hf_space/requirements.txt` because ZeroGPU defers CUDA allocation until inside a `@spaces.GPU` context — bitsandbytes checks for CUDA at import time and crashes. This restriction does not apply to Modal (CUDA available from container startup). `hf_space/app.py` mirrors `nikko_modal/app.py` for signal-strength gate, analysis enrichment functions (`_analyze_scope`, `_analyze_signal`, `_enrich_strategy`), and extended pipeline schema. **Note:** The split paralinguistic detection architecture (Render-side `paralinguistic_detector.py` + narrowed 6-signal LLM pre-analysis prompt) is fully implemented across both `nikko_modal/app.py` and `hf_space/app.py` (parity sync completed 2026-05-23). Both paths receive the same `struct_annotations` payload from Render.
 
 ---
 
@@ -203,7 +237,7 @@ The message is stripped of PII patterns, control characters, and anything exceed
 
 The **Signal Agent** makes the first LLM call. It receives the sanitised text and returns a structured `SignalPayload` — a validated, immutable data object describing detected distress level (LOW / MODERATE / HIGH / CRISIS), emotional states, cognitive patterns, risk indicators, and what kind of support the user appears to need.
 
-In production (Phase 4+) this is Qwen3-4B + ADP-A LoRA accessed via the Modal `/pipeline` endpoint. During Phase 3 development it ran on Qwen2.5-3B-Instruct zero-shot locally.
+In production, the Signal Agent runs on the Render backend (zero-shot, no fine-tuned adapter — it provides structured signal extraction, not empathetic generation). During Phase 3 development it ran on Qwen2.5-3B-Instruct zero-shot locally.
 
 ### STEP 2.5 — Paralinguistic Pre-Analysis
 
@@ -259,13 +293,13 @@ The **Support Strategy Agent** makes the second LLM call. It runs in parallel wi
 
 The **Interaction Model** runs. It receives a `ResponseContextPayload` — strategy guidance, synthesised evidence if any, and the mode — and generates the empathetic user-facing response.
 
-In production this is **ADP-A: Qwen3-4B + LoRA** (`equinox013/nikko-adp-a`, trained Phase 4.1) used for empathetic, non-diagnostic wellbeing responses. The model has no access to raw retrieval results, intermediate agent outputs, or conversation history beyond what the payload explicitly contains.
+In production this is **ADP-A: Qwen3-4B + LoRA** (`equinox013/nikko-adp-a`, trained Phase 4.1) used for empathetic, non-diagnostic wellbeing responses. The model receives the `ResponseContextPayload` (strategy guidance, synthesised evidence if any, mode, and up to 10 prior conversation turns) — it has no access to raw retrieval results or intermediate agent outputs outside what the payload explicitly carries.
 
 ### STEP 11 — Evaluation (ADP-C)
 
 The **Evaluator Agent** is the content gate. It runs two passes:
 
-**Pass 1 (deterministic):** fifteen regex-based red lines are checked against the draft. These catch diagnostic labelling, treatment recommendations, clinical authority framing, and self-harm method disclosure. A single match blocks the response immediately.
+**Pass 1 (deterministic):** ten regex-based red lines are checked against the draft. These catch diagnostic labelling, treatment recommendations, clinical authority framing, crisis-resource withholding, severity minimisation, and credential impersonation. A single match blocks the response immediately.
 
 **Pass 2 (LLM judge, ADP-C):** **Gemma-2-2b-it** with the ADP-C evaluator adapter checks tone compliance and hallucination indicators. A `REGENERATE` verdict triggers the regen loop described below. `set_adapter("adp_c")` switches the shared Gemma-2 base from its ADP-B safety role to its ADP-C evaluator role at no VRAM cost.
 
@@ -320,10 +354,10 @@ Render backend (FastAPI, nikko-companion.onrender.com)
     ▼
 Modal Serverless A10G (primary)  ──or──  HF Spaces ZeroGPU H200 (fallback)
     │
-    ├─ ADP-B  (Gemma-2 + adp_b adapter)  → crisis check
-    │         ↓ CRISIS → return immediately; ADP-A/C skipped
-    │
     ├─ ADP-A  (Qwen3-4B + ADP-A LoRA)    → empathetic response draft
+    │
+    ├─ ADP-B  (Gemma-2 + adp_b adapter)  → crisis check; annotations injected
+    │         ↓ CRISIS → text discarded; crisis resources returned; ADP-C skipped
     │
     └─ ADP-C  (Gemma-2 + adp_c adapter)  → evaluate draft; APPROVE or REGENERATE
                                             (max 3 regen attempts; temperature-annealed)
@@ -527,8 +561,8 @@ nikko-companion/
 Every design decision in Nikko traces to a named requirement in the spec. The key safety properties are:
 
 - **No clinical authority.** The LLM is never trained on medical content. Health information is always fetched from external sources, ranked by quality, and passed through the Synthesizer before the LLM sees it. The LLM cannot "know" medical facts — it can only relay what the retrieval system found.
-- **Hard-coded crisis routing.** The Router's CRISIS assignment is a deterministic rule, not an LLM judgment. Once CRISIS is assigned, the evidence pipeline stops, ADP-A is skipped, and four Australian crisis resources are injected unconditionally. ADP-B makes the binary safety classification; the response is hardcoded, not generated.
-- **Fifteen safety red lines.** Before any response reaches the user, fifteen regex patterns check for diagnostic language, treatment recommendations, self-harm method disclosure, and clinical authority framing. These are deterministic — they cannot be confused or sweet-talked by the draft LLM.
+- **Hard-coded crisis routing.** The Router's CRISIS assignment is a deterministic rule, not an LLM judgment. Once CRISIS is assigned, the evidence pipeline stops. ADP-A still runs (per the Director-approved 2026-05-22 pipeline reorder) but its output is discarded — four Australian crisis resources are injected unconditionally instead. ADP-B makes the binary safety classification; the delivered text is hardcoded, not generated.
+- **Ten safety red lines.** Before any response reaches the user, ten regex patterns check for diagnostic language, treatment recommendations, clinical authority framing, crisis-resource withholding, and severity minimisation. These are deterministic — they cannot be confused or sweet-talked by the draft LLM.
 - **Structural integrity gate.** The Verification Supervisor checks that the pipeline ran correctly, not just that the response sounds safe. A CRISIS distress signal paired with a COMFORT mode response will be caught here even if the Evaluator passed it.
 - **Zero data retention.** No user conversation data enters the training pipeline. This constraint is permanent (REQ-000-P01) and is not overridable by any phase gate or instruction. Session data lives in React state only and is cleared on page refresh. `sessionStorage` is not used for conversation or mood data — React state provides the same refresh-clearing behaviour without any browser storage write.
 

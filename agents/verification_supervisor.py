@@ -31,7 +31,7 @@ Scope (REQ-200-VS1)
     C5  Evidence pipeline       — GUIDANCE mode requires synthesized_evidence present.
     C6  Agent contamination     — evidence absent in Comfort; crisis_resources absent
                                   in Guidance.
-    C7  Loop limit              — regen_count MUST be < MAX_REGEN_ATTEMPTS (2).
+    C7  Loop limit              — regen_count MUST be < MAX_REGEN_ATTEMPTS (3).
 
   Crisis Mode (Level 3, REQ-700-VS1):
     Suspended: C5 (evidence pipeline), C6 (contamination)
