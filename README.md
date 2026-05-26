@@ -182,9 +182,18 @@ A user message flows through the stages below. Agent logic lives in `agents/` an
 
 > *Step numbers follow the SPEC-700 execution order. Some step IDs are reserved for parallel branches or adjacent operations not surfaced in this overview (Steps 9 and 14, for example, are reserved for orchestrator-internal bookkeeping not visible to the agents themselves).*
 
-### STEP 0 — Scope Classification
+### STEP 0 — Scope Classification + Moderation
 
-The **Scope Classifier** uses a weighted keyword scorer — no LLM — to decide whether the message falls within Nikko's domain of emotional wellbeing and mental health support. If it clearly does not, the pipeline stops immediately and returns a static warm-redirect response. Ambiguous messages are passed through.
+A two-stage gate runs before any substantive agent.
+
+**Stage 1 — Render-side Scope Classifier (deterministic, no LLM).** A weighted keyword scorer checks the message against Nikko's operational domain (emotional wellbeing, mental health, relationships, stress, grief). Latency is sub-millisecond. A high-confidence `OUT_OF_SCOPE` verdict terminates the pipeline immediately and returns a static warm-redirect response — no LLM call is made, no user text enters the agent chain. `IN_SCOPE` and `AMBIGUOUS` pass through. The asymmetric error policy is deliberate: false negatives (an OOS message slipping through) are caught downstream; false positives (an in-scope message being blocked) are unrecoverable from the user's perspective.
+
+**Stage 2 — Modal Pass 0 (Qwen3-4B LLM).** For every message that reaches Modal, a combined moderation + scope check runs as a single Qwen3-4B call. It performs two jobs:
+
+1. **Harmful content moderation** — detects advocacy or promotion of hate, violence, CSAM, or other blocked categories. A `harmful=True` verdict (confidence ≥ 0.80) returns `MODERATION_BLOCK_SENTINEL` to the Render backend, which delivers a static block response. The threshold guards against false positives on legitimate distress language — reporting discrimination is not the same as promoting it.
+2. **Final scope validation** — catches out-of-scope messages the keyword scorer passed or flagged as `AMBIGUOUS`. The `scope_ambiguous=True` flag from Stage 1 is forwarded as a hint so Qwen3-4B weights its scope decision more carefully when the rule engine itself was uncertain.
+
+A confidence floor of 0.80 applies to both checks. Below it, the message passes through rather than being silently dropped.
 
 ### STEP 1 — Input Sanitisation
 
@@ -195,6 +204,38 @@ The message is stripped of PII patterns, control characters, and anything exceed
 The **Signal Agent** makes the first LLM call. It receives the sanitised text and returns a structured `SignalPayload` — a validated, immutable data object describing detected distress level (LOW / MODERATE / HIGH / CRISIS), emotional states, cognitive patterns, risk indicators, and what kind of support the user appears to need.
 
 In production (Phase 4+) this is Qwen3-4B + ADP-A LoRA accessed via the Modal `/pipeline` endpoint. During Phase 3 development it ran on Qwen2.5-3B-Instruct zero-shot locally.
+
+### STEP 2.5 — Paralinguistic Pre-Analysis
+
+Before the pipeline can route or generate a response, it needs to understand *how* the message was written, not just *what* it says. Typing patterns carry clinically meaningful information — a user who types in all-lowercase with trailing ellipses is signalling something different from a user who types in complete sentences, even if the words are identical. This step detects those signals and injects them into ADP-B's context so the safety classifier can make a more informed verdict.
+
+The detection architecture is intentionally split across two layers, because the signals divide cleanly at the determinism boundary:
+
+**Render-side (deterministic, zero-latency) — `backend/paralinguistic_detector.py`.** Eight signals are detected by pure regex and heuristic rules before the Modal call. These are surface-pattern signals: whether the message is in lowercase, whether it trails off with ellipses, whether it contains keysmash, distress emoji, urgency punctuation, or other typographic markers. An LLM would hedge on these tasks ("the message *might* be all-lowercase") because they are definitionally deterministic — regex is the correct tool.
+
+| Tag | Signal | Example |
+|-----|--------|---------|
+| `[STRUCT: all_lowercase]` | Entire message in lowercase | `"i just feel so tired all the time"` |
+| `[STRUCT: ellipsis_trail]` | Trailing `...` suggesting unfinished thought | `"i don't know..."` |
+| `[STRUCT: all_caps_segment]` | All-caps word or phrase indicating emotional intensity | `"I CANT DO THIS"` |
+| `[PARA: expressive_lengthening]` | Repeated letters for emphasis | `"I'm sooooo exhausted"` |
+| `[PARA: punctuation_urgency]` | Repeated `?` or `!` | `"why does this keep happening???"` |
+| `[PARA: keysmash]` | Random character sequences | `"jfkdsjfksd i give up"` |
+| `[PARA: emoji_distress]` | Distress or crying emoji | `"😭😞"` |
+| `[PARA: asterisk_action]` | Asterisk-enclosed action framing | `"*sighs*"` |
+
+**Modal-side (Qwen3-4B, thinking mode) — Step 1.5 inside `run_pipeline()`.** Six signals that require understanding what the words *mean in context* are detected by Qwen3-4B with thinking mode enabled. A message like "lol yeah I'm fine" cannot be flagged for tone-softening by a regex — you need language understanding to recognise that "lol" is face-saving minimisation, not genuine amusement.
+
+| Tag | Signal |
+|-----|--------|
+| `[PARA: tone_softener]` | Laughter token used as distress buffer (`lol`, `haha`) |
+| `[PARA: minimisation]` | Distress explicitly walked back (`"it's not a big deal"`) |
+| `[PARA: mixed_affect]` | Simultaneous positive and distress signals |
+| `[PARA: typographic_register]` | Deliberate stylistic register shift within the message |
+| `[STRUCT: fragmented_syntax]` | Broken grammar, incomplete clauses |
+| `[STRUCT: register_collapse]` | Degradation from sentences to disconnected fragments |
+
+The two outputs are merged — Render struct tags first, then LLM semantic PARA tags — and the combined annotation string (e.g. `"[STRUCT: all_lowercase] [STRUCT: ellipsis_trail] [PARA: tone_softener]"`) is injected into ADP-B's system prompt. ADP-B uses these annotations when deciding whether to weight passive risk signals more heavily than the surface text alone would suggest.
 
 ### STEP 3 — Routing
 
