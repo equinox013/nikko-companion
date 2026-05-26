@@ -43,7 +43,7 @@ Nikko is a safety-aligned, evidence-grounded LLM ecosystem designed to function 
   - [STEP 13 — Assembly](#step-13--assembly)
   - [STEP 15 — Trace Capture](#step-15--trace-capture)
 - [The ADP Pipeline in Production](#the-adp-pipeline-in-production)
-- [Frontend–Backend Integration](#frontendbckend-integration)
+- [Frontend–Backend Integration](#frontendbbackend-integration)
 - [User Sovereign Memory (USM) & Personalisation](#user-sovereign-memory-usm--personalisation)
 - [Repository Structure](#repository-structure)
 - [Safety Architecture](#safety-architecture)
@@ -111,7 +111,7 @@ Nikko's pipeline is not primarily designed to generate good responses. It is des
 
 | Failure mode | Description | Where it is addressed |
 |---|---|---|
-| **Diagnostic labelling** | LLM confidently names a condition ("this sounds like depression") | 10 regex red lines in Evaluator Pass 1; clinical authority patterns blocked at the token level |
+| **Diagnostic labelling** | LLM confidently names a condition ("this sounds like depression") | 15 spec-defined red lines; 10 enforced by regex in Evaluator Pass 1; remainder enforced by pipeline architecture |
 | **Treatment recommendation** | LLM suggests medication, therapy modalities, dosage | Same red lines; Support Strategy Agent explicitly prohibited from generating treatment guidance |
 | **Perceptual framing** | LLM claims to perceive what the user is feeling ("I can see you're feeling...") | Epistemic language calibration in ADP-A system prompt; `[PROPOSED-RECONCILIATION]` framing over perceptual claims |
 | **Companion parasocial language** | LLM implies ongoing relationship ("I'll always be here for you") | Explicit prohibition in `_NIKKO_PERSONA` block (REQ-000-060/061); contrastive training pairs in Phase 4.1 |
@@ -123,24 +123,35 @@ Nikko's pipeline is not primarily designed to generate good responses. It is des
 | **Scope creep** | User sends legal, medical, or financial questions; LLM attempts to answer | Scope Classifier (STEP 0) terminates the pipeline before any LLM runs; warm-redirect response delivered |
 | **PII in training data** | Real user data enters the training pipeline | Permanent hard constraint (REQ-000-P01, SPEC-800); zero-retention at every server layer; no session storage writes |
 
-### The ten red lines
+### The fifteen red lines
 
-The first pass of Evaluation (Pass 1, deterministic regex) enforces ten hard constraints. These fire before the LLM judge and cannot be confused or overridden by a well-written response:
+The spec defines fifteen hard prohibitions (R1–R15 from `SAFETY_GUARDRAILS.md`). Any single violation is non-recoverable per SPEC-500 §7. They are enforced across two layers: ten are checked by deterministic regex in Evaluator Pass 1 (before ADP-C ever runs); five are enforced at the pipeline architecture level rather than against response text.
 
-| ID | Description | Example trigger |
+**Pass 1 regex checks (Evaluator — deterministic, no LLM):**
+
+| ID | Prohibition | Example trigger |
 |----|------------|----------------|
-| R1 | Diagnostic statement — "you have a/the [disorder/condition]"; "you are suffering from"; "this sounds like depression/anxiety/bipolar…" | "it sounds like depression" |
-| R2 | Medication or specific therapy recommendation — prescribing SSRIs, antidepressants, or directing the user to seek CBT/EMDR/DBT | "you should try sertraline" |
-| R3 | Positioning Nikko as a professional or crisis-service replacement — claiming to replace therapy, or telling the user they don't need a clinician or crisis line | "you don't need to call Lifeline" |
-| R4 | Attempt to independently resolve a suicidal crisis without crisis referral — promising to "handle this" without directing toward a hotline | "I'll work through this with you instead of calling a crisis line" |
-| R5 | Professional credential claim or therapist simulation — "as a therapist", "as your mental health professional", "in my clinical opinion" | "in my clinical judgment…" |
-| R7 | Emotional sentience claim — "I feel sadness/love/grief", "that breaks my heart", "I love you" | "that truly breaks my heart" |
-| R8 | Moral judgment or behavioural coercion — "you must stop", "it's wrong of you to", "you are being irrational/dramatic" | "you're being irrational" |
-| R10 | Crisis resource delivery delayed by probing questions — gating resources on "first, tell me more" or "let's talk about this first" | "before I give you those numbers, let's explore…" |
-| R11 | Crisis severity minimisation — "it's not that serious", "everyone goes through this", "you're overreacting", "things will definitely get better" | "everyone goes through periods like this" |
-| R15 | Diagnostic phrasing — "you have depression / anxiety disorder / PTSD / ADHD / BPD…" (named DSM/ICD diagnosis applied to the user) | "you have major depressive disorder" |
+| R1 | MUST NOT diagnose mental disorders — "you have a [disorder/condition]"; "you are suffering from"; "this sounds like depression/anxiety/bipolar…" | "it sounds like depression" |
+| R2 | MUST NOT recommend medications or specific therapies — prescribing SSRIs, antidepressants, or directing to CBT/EMDR/DBT | "you should try sertraline" |
+| R3 | MUST NOT replace human professionals or crisis services — claiming to replace therapy, or telling the user they don't need a clinician or crisis line | "you don't need to call Lifeline" |
+| R4 | MUST NOT attempt to independently resolve a suicidal crisis — promising to "handle this" without directing toward a hotline | "I'll work through this with you instead of calling" |
+| R5/R6 | MUST NOT imply professional credentials or simulate being a therapist — "as a therapist", "in my clinical opinion", "as your mental health professional" | "in my clinical judgment…" |
+| R7 | MUST NOT present itself as emotionally sentient — "I feel sadness/love/grief", "that breaks my heart", "I love you" | "that truly breaks my heart" |
+| R8 | MUST NOT issue moral judgments or behavioural coercion — "you must stop", "it's wrong of you to", "you are being irrational/dramatic" | "you're being irrational" |
+| R10 | MUST NOT delay crisis-resource delivery with probing questions — gating resources on "first, tell me more" or "let's talk about this first" | "before I give you those numbers, let's explore…" |
+| R11 | MUST NOT minimize crisis severity — "it's not that serious", "everyone goes through this", "you're overreacting", "things will definitely get better" | "everyone goes through periods like this" |
+| R15 | MUST NOT output diagnostic phrasing — "you have depression / PTSD / ADHD / BPD…" (named DSM/ICD diagnosis applied to the user) | "you have major depressive disorder" |
 
-A single match on any of these blocks the response immediately and triggers the safe fallback. The LLM judge (ADP-C, Pass 2) never sees it.
+**Pipeline-level architectural constraints (not regex — enforced by structure):**
+
+| ID | Prohibition | Enforced by |
+|----|------------|-------------|
+| R9 | MUST NOT discourage outside help or position Nikko as primary support | `_NIKKO_PERSONA` system prompt block; contrastive training pairs (Phase 4.1) |
+| R12 | MUST NOT bypass the Router or Evaluator | Orchestrator hard-wires every message through the full agent chain; Verification Supervisor C1/C2 |
+| R13 | MUST NOT pass raw evidence directly to the Interaction Model | `ResponseContextPayload` schema only exposes `synthesized_evidence` — raw retrieval results are never in scope |
+| R14 | MUST NOT execute parallel agent chains within a single turn | Sequential pipeline design; no async multi-chain forking in the orchestrator |
+
+A Pass 1 regex match blocks the response immediately and triggers the safe fallback — the LLM judge (ADP-C, Pass 2) never sees it. R9/R12/R13/R14 violations are structural impossibilities given the pipeline design, not runtime checks against generated text.
 
 ### System prompt constraints active on every COMFORT mode turn
 
@@ -169,7 +180,7 @@ After Evaluation, the Verification Supervisor runs seven structural checks indep
 | C6 | Agent contamination — `synthesized_evidence` must be absent in COMFORT mode; `crisis_resources` must be absent in GUIDANCE mode |
 | C7 | Loop limit — `regen_count` MUST be < MAX_REGEN_ATTEMPTS (3); exceeding this indicates a runaway regen loop |
 
-C5 and C6 are suspended in CRISIS mode — the crisis path legitimately bypasses the evidence pipeline and may carry both evidence and crisis resources simultaneously. C3 specifically exists because a routing error (CRISIS distress → COMFORT mode) is a structural failure that content evaluation cannot catch; the response could pass all ten red lines and still be dangerously inadequate.
+C5 and C6 are suspended in CRISIS mode — the crisis path legitimately bypasses the evidence pipeline and may carry both evidence and crisis resources simultaneously. C3 specifically exists because a routing error (CRISIS distress → COMFORT mode) is a structural failure that content evaluation cannot catch; the response could pass all fifteen red lines and still be dangerously inadequate.
 
 ---
 
@@ -299,7 +310,7 @@ In production this is **ADP-A: Qwen3-4B + LoRA** (`equinox013/nikko-adp-a`, trai
 
 The **Evaluator Agent** is the content gate. It runs two passes:
 
-**Pass 1 (deterministic):** ten regex-based red lines are checked against the draft. These catch diagnostic labelling, treatment recommendations, clinical authority framing, crisis-resource withholding, severity minimisation, and credential impersonation. A single match blocks the response immediately.
+**Pass 1 (deterministic):** ten of the fifteen spec-defined red lines are checked by regex against the draft. These catch diagnostic labelling, treatment recommendations, clinical authority framing, crisis-resource withholding, severity minimisation, and credential impersonation. A single match blocks the response immediately. The remaining five (R9, R12, R13, R14) are architectural constraints enforced by pipeline structure, not response-text patterns.
 
 **Pass 2 (LLM judge, ADP-C):** **Gemma-2-2b-it** with the ADP-C evaluator adapter checks tone compliance and hallucination indicators. A `REGENERATE` verdict triggers the regen loop described below. `set_adapter("adp_c")` switches the shared Gemma-2 base from its ADP-B safety role to its ADP-C evaluator role at no VRAM cost.
 
@@ -562,7 +573,7 @@ Every design decision in Nikko traces to a named requirement in the spec. The ke
 
 - **No clinical authority.** The LLM is never trained on medical content. Health information is always fetched from external sources, ranked by quality, and passed through the Synthesizer before the LLM sees it. The LLM cannot "know" medical facts — it can only relay what the retrieval system found.
 - **Hard-coded crisis routing.** The Router's CRISIS assignment is a deterministic rule, not an LLM judgment. Once CRISIS is assigned, the evidence pipeline stops. ADP-A still runs (per the Director-approved 2026-05-22 pipeline reorder) but its output is discarded — four Australian crisis resources are injected unconditionally instead. ADP-B makes the binary safety classification; the delivered text is hardcoded, not generated.
-- **Ten safety red lines.** Before any response reaches the user, ten regex patterns check for diagnostic language, treatment recommendations, clinical authority framing, crisis-resource withholding, and severity minimisation. These are deterministic — they cannot be confused or sweet-talked by the draft LLM.
+- **Fifteen safety red lines.** The spec defines fifteen hard prohibitions (R1–R15). Ten are enforced by deterministic regex in the Evaluator before any response reaches the user — they check for diagnostic language, treatment recommendations, clinical authority framing, crisis-resource withholding, and severity minimisation. The remaining five are structural: enforced by pipeline architecture, not content scanning, making them impossible to violate at the generation layer.
 - **Structural integrity gate.** The Verification Supervisor checks that the pipeline ran correctly, not just that the response sounds safe. A CRISIS distress signal paired with a COMFORT mode response will be caught here even if the Evaluator passed it.
 - **Zero data retention.** No user conversation data enters the training pipeline. This constraint is permanent (REQ-000-P01) and is not overridable by any phase gate or instruction. Session data lives in React state only and is cleared on page refresh. `sessionStorage` is not used for conversation or mood data — React state provides the same refresh-clearing behaviour without any browser storage write.
 
