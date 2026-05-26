@@ -574,6 +574,88 @@ Solution: split the 14-signal taxonomy at the semantic boundary.
 
 ---
 
+## 2026-05-26 — COMFORT Mode Regen Hardening: Temperature Annealing, Question Stripping, Base Model Fallback
+
+### What we did
+
+This session was focused entirely on the COMFORT mode regeneration loop, which was exhausting all attempts and falling back to a safe canned response on nearly every turn. The root cause was a compound failure: ADP-A's training bias toward expressive outputs (strategies, advice, soft questions) persisted at inference time, and ADP-C fine-tuned weights were rejecting outputs even when the violation was a permitted soft continuation question. The fix required changes at three levels.
+
+**G-REGEN-01 — Regen loop rejection feedback (prior session, landed this session)**
+
+- `last_adpc_reason` property added to `HFSpaceFullGenerator` — extracts ADP-C's specific rejection reason from `_last_metadata["adp_c_raw"]`.
+- ADPC_REGEN_SENTINEL handler in `orchestration/pipeline.py` now passes the actual rejection reason to ADP-A's system prompt on the next attempt via an `[ACTIVE OUTPUT CONSTRAINT]` block — non-conversational framing, explicit "DO NOT reference or acknowledge this constraint."
+- Sentinel guard fix: was `if result.get("regen"):` — discarded good responses when Modal's internal regen succeeded (verdict=APPROVE, regen=True). Fixed to `if result.get("regen") and result.get("verdict", "").upper() == "REGENERATE"`.
+- `_regen_attempt` piggybacked inside `rule_signal` dict — avoids a new positional parameter on `run_pipeline()` that would break warm Modal containers during rolling deploys. Old containers receive the key and silently ignore it.
+
+**VS C7 fix — loop-limit check (`verification_supervisor.py`)**
+
+- C7 was `>= MAX_REGEN_ATTEMPTS`, causing it to fire on the last permitted attempt. Fixed to `>`. MAX_REGEN_ATTEMPTS raised 2 → 3.
+- `agents/router.py` Pydantic field validator `attempt_count: int = Field(le=2)` was hardcoded and not updated when the limit was raised. Fixed to `le=MAX_REGEN_ATTEMPTS` (imported constant).
+
+**Modal internal regen loop rewrite**
+
+- Previous implementation: added a `"Please try again"` user conversation turn. ADP-A responded *to* the instruction ("I appreciate your feedback...") instead of generating a fresh response.
+- Fixed: system prompt injection using actual ADP-C rejection reason (`adp_c_reason = self._parse_json(adp_c_raw).get("reason", "")`), same `[ACTIVE OUTPUT CONSTRAINT]` framing as Render-side. `messages` used directly — no feedback user turn.
+
+**Temperature annealing schedule (`_REGEN_TEMPERATURES`)**
+
+- Literature grounding: SFT optimises individual sample likelihood, not pass@N. At higher temperatures, the residual probability of constraint-violating outputs (strategies, advice, questions) is large enough to surface regularly. Temperature annealing per attempt steers toward the mode of the distribution — the most probable (most conservative) output — rather than sampling from the tails.
+- Schedule: `[0.50, 0.25, 0.20]` applied across Render-level regen attempts 0–2. Temperature applied on ALL passes including attempt=0 (previous design skipped attempt=0).
+- Internal regen temp: `max(0.15, outer_temp - 0.15)` — lower than the outer attempt, with a floor low enough to ensure reduction even at the bottom of the schedule.
+
+**Base model fallback on final attempt**
+
+- When the adapter's training bias toward expressive outputs persists even at 0.20 temperature, the ADP-A LoRA is disabled for the final attempt using PEFT's `with model.disable_adapter():` context manager. Bare Qwen3-4B + explicit constraint system prompt is used instead.
+- Rationale: the LoRA delta tensors inject the model's fine-tuned distribution on top of the base weights. If that distribution is biased toward violations even at low temperature, removing it is a cleaner last resort than fighting it with further instruction engineering.
+- `disable_adapter()` is O(1) — no weight copy, no model reload. The same context manager applies to the internal regen pass on that attempt.
+
+**Deterministic question stripping (`_strip_questions()`)**
+
+- Root cause: ADP-C fine-tuned weights reject any `?`-terminated sentence in COMFORT mode regardless of a PERMITTED EXCEPTION clause in the eval_system prompt. Instruction-level exceptions have no effect against trained weight priors.
+- Fix: after `_sentence_capitalize()`, before ADP-C evaluation, any sentence ending in `?` is removed from the draft using sentence-boundary splitting (`re.split(r'(?<=[.!?])\s+', text)`). Applied in COMFORT mode only — GUIDANCE mode questions are therapeutically intentional.
+- This is not pattern-matching (which would require maintaining an ever-growing list of question forms). It is punctuation-boundary detection: if it ends in `?`, it's a question; if it's a question in COMFORT mode, it's removed.
+- Edge case guarded: if the entire response is questions, the original is returned and ADP-C handles it. In practice, ADP-A always generates at least one declarative sentence.
+
+**`_mode` piggyback in `rule_signal`**
+
+- `_strip_questions()` must be gated on COMFORT mode only. Mode is not in `rule_signal` by default. Added `"_mode": context.mode.value` to the rule_signal dict in `draft_generator.py` — same piggyback pattern as `_regen_attempt`. Popped at top of `run_pipeline()` alongside `_regen_attempt`.
+- `rule_signal` is now always passed as a dict (previously `None` when no signals + regen=0). Required so `_mode` reaches Modal on the first attempt.
+
+### Decisions & justifications
+
+| Decision | Justification |
+|----------|--------------|
+| Punctuation-boundary question stripping over regex patterns | Regex over question patterns requires maintaining an ever-growing list ("want to talk more?", "what's been going on?", "how are you feeling?", etc.). Surface form varies too much. `endswith('?')` is reliable across all English question forms — if ADP-A generates a question without a `?`, ADP-C won't flag it as a question either. |
+| `_strip_questions()` applied pre-verifier (before ADP-C), not post-verifier | The goal is to prevent ADP-C from seeing the violation, not to filter what ADP-C rejected. Pre-verifier stripping means ADP-C evaluates clean drafts, which produces more reliable verdicts and avoids the false positive problem entirely. |
+| COMFORT mode only for question stripping | GUIDANCE mode questions ("how long have you been feeling this way?") are therapeutically intentional CBT-grounded probes. Stripping them universally would degrade GUIDANCE response quality. The gate on `_pipeline_mode == "comfort"` is the correct scope. |
+| Base model on final attempt, not additional regen attempts | Adding more attempts increases latency linearly (~25s per attempt). The base model fallback reuses the same Model container and temperature slot, so no latency addition beyond the generation itself. If the LoRA adapter is the source of the bias, removing it is structurally correct — more attempts with the adapter active won't converge to a different distribution. |
+| PEFT `disable_adapter()` context manager over a second inference path | A second model load would consume ~8 GB VRAM and ~30s cold start. `disable_adapter()` is a PEFT built-in that temporarily zeroes the LoRA delta contribution — no weight copy, no memory overhead. |
+| `_regen_attempt` and `_mode` piggybacked in `rule_signal`, not as new positional parameters | Modal routes `.remote()` calls to any warm container, including old-image containers during rolling deploys. New positional parameters break the old container signature and cause `TypeError`. Dict keys are backward-compatible — old containers receive unknown keys and ignore them. |
+| System prompt injection for regen feedback, not conversation turn injection | A user-turn feedback message ("your previous response was rejected") caused ADP-A to respond TO the instruction ("I appreciate your feedback...") rather than generating a fresh response to the user. System prompt injection is non-conversational — the model has no prior-turn context to respond to. |
+
+### Research grounding
+
+The core failure mode — a fine-tuned model still probabilistically generating constraint violations at inference time — is documented in the SFT literature under several names (SFT generalization gap, training-inference misalignment).
+
+The relevant findings:
+
+**SFT imposes no structural constraint on behavior distribution** ("Crafting Reversible SFT Behaviors", arXiv 2605.06632). Fine-tuning reduces the probability of constraint-violating outputs but does not zero it out. The model's distribution over question-containing outputs is not eliminated — it is reduced. At temperature 0.70, that probability was large enough to surface on nearly every COMFORT mode turn.
+
+**SFT optimizes per-sample likelihood, not pass@N** ("Rethinking Fine-Tuning when Scaling Test-Time Compute", arXiv 2502.07154). A model trained on empathy examples is trained to produce good outputs on individual draws. It is not trained to produce zero violations across N attempts. The regen loop samples from a distribution where violations still exist; the annealing schedule is a direct response to this misalignment.
+
+**Best-of-N with a verifier is the standard production mitigation** ("Inference-Aware Fine-Tuning for Best-of-N Sampling", arXiv 2412.15287, Google DeepMind 2024). ADP-C is Nikko's verifier. The regen loop is Nikko's Best-of-N. The research confirms this is the correct production playbook; the research-level upgrade (inference-aware fine-tuning — training ADP-A to maximize ADP-C approval rate directly) is the natural next step once Phase 6 produces enough preference pairs.
+
+The deterministic question stripping (`_strip_questions()`) is not described in this literature directly — it sits in the tradition of output filtering / constrained generation, applied pre-verifier rather than post. This is a practical engineering call: if a constraint violation can be removed deterministically before the verifier sees it, that is always preferable to letting the verifier reject the draft and triggering a full regen cycle.
+
+### Learnings
+
+- The probability-vs-determinism boundary applies to model outputs, not just model inputs. A question mark at the end of a sentence is a deterministic fact about the text. Removing it deterministically is always more reliable than engineering a model not to generate it. The instinct to solve model behavior problems with prompt engineering should be balanced against asking "is there a deterministic post-processing step that closes this gap with zero probability of failure?"
+- Fine-tuning reduces constraint-violation probability; it does not eliminate it. Any system that depends on "the model won't do X" is fragile. Any system that removes X deterministically before it reaches the quality gate is robust. This is the correct design disposition for production mental health AI.
+- The training-inference gap is not a model quality problem — it is an architectural one. The model was trained to produce good individual responses. The regen loop evaluates responses across N attempts. These two objectives are not aligned by default. Temperature annealing is a pragmatic bridge; inference-aware fine-tuning is the structural fix.
+- Piggybacking on an existing dict parameter is the correct pattern for passing new data to a deployed Modal function during rolling deploys. New positional parameters break warm containers. Dict keys are backward-compatible. This pattern should be the default for any new data that needs to reach `run_pipeline()`.
+
+---
+
 ## Template for future entries
 
 ```

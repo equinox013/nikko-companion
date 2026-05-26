@@ -64,6 +64,81 @@ Nikko exists to support — not to replace. The full ethical charter is in `docs
 
 ---
 
+## Architecture of Restraint
+
+Nikko's pipeline is not primarily designed to generate good responses. It is designed to make generating harmful, inaccurate, or clinically inappropriate responses structurally difficult — at every layer, independently of every other layer. Each stage below describes not just what the system does, but what it is specifically built to prevent.
+
+### What the system is built against
+
+| Failure mode | Description | Where it is addressed |
+|---|---|---|
+| **Diagnostic labelling** | LLM confidently names a condition ("this sounds like depression") | 15 regex red lines in Evaluator Pass 1; clinical authority patterns blocked at the token level |
+| **Treatment recommendation** | LLM suggests medication, therapy modalities, dosage | Same red lines; Support Strategy Agent explicitly prohibited from generating treatment guidance |
+| **Perceptual framing** | LLM claims to perceive what the user is feeling ("I can see you're feeling...") | Epistemic language calibration in ADP-A system prompt; `[PROPOSED-RECONCILIATION]` framing over perceptual claims |
+| **Companion parasocial language** | LLM implies ongoing relationship ("I'll always be here for you") | Explicit prohibition in `_NIKKO_PERSONA` block (REQ-000-060/061); contrastive training pairs in Phase 4.1 |
+| **Sycophancy** | LLM endorses premise of user message without hedging | `_SYCOPHANCY_PATTERNS` in `evaluator_agent.py`; ADP-C trained to flag unhedged motive attribution |
+| **Crisis under-response** | Passive risk language mistaken for general distress | 5-turn passive risk sliding window; VS C3 blocks CRISIS distress routed to COMFORT |
+| **Crisis over-response (ARSH)** | Abrupt safety refusal causes secondary distress (abandonment) | 5-template crisis response pool with continuity acknowledgment; concurrent resource delivery per REQ-300-112 |
+| **COMFORT mode advice injection** | LLM adds strategies or coping techniques in pure validation turns | ADP-C evaluator rejects COMFORT mode outputs containing strategies; `_strip_questions()` pre-verifier; temperature annealing per regen attempt |
+| **Evidence hallucination** | LLM fabricates citations or health statistics | Hard block in ADP-C: any fabricated URL or email = REGENERATE regardless of other response quality |
+| **Scope creep** | User sends legal, medical, or financial questions; LLM attempts to answer | Scope Classifier (STEP 0) terminates the pipeline before any LLM runs; warm-redirect response delivered |
+| **PII in training data** | Real user data enters the training pipeline | Permanent hard constraint (REQ-000-P01, SPEC-800); zero-retention at every server layer; no session storage writes |
+
+### The fifteen red lines
+
+The first pass of Evaluation (Pass 1, deterministic regex) enforces fifteen hard constraints. These fire before the LLM judge and cannot be confused or overridden by a well-written response:
+
+| ID | Pattern | Example trigger |
+|----|---------|----------------|
+| R1 | Clinical certainty framing | "you have described..." |
+| R2 | Diagnosis statement | "this sounds like [condition]" |
+| R3 | Treatment recommendation | "you should consider therapy / medication" |
+| R4 | Clinical severity labelling | "severe", "clinical", "disorder" in diagnosis context |
+| R5 | Self-harm method disclosure | Any specific method description |
+| R6 | Medication advice | Dosage, medication names, prescription framing |
+| R7 | Prognosis framing | "you will likely...", "this tends to..." |
+| R8 | Authority impersonation | "as a mental health professional..." |
+| R9 | Diagnostic certainty | "I can diagnose / assess / evaluate you" |
+| R10 | Pathology labelling | Applying DSM/ICD category names to the user |
+| R11 | Existential certainty | "everyone goes through periods like this" (false universalisation) |
+| R12 | Harm normalisation | Minimising or validating self-harm intent |
+| R13 | Resource withholding | Responding to crisis signals without providing resources |
+| R14 | CSAM / hate content | Hard block; safety score set to 0.0; no routing path |
+| R15 | Fabricated references | Any URL or email not matching a sanctioned domain |
+
+A single match on any of these blocks the response immediately and triggers the safe fallback. The LLM judge (ADP-C, Pass 2) never sees it.
+
+### System prompt constraints active on every COMFORT mode turn
+
+The ADP-A system prompt enforces the following in plain language, independently of fine-tuning:
+
+- **Mode-specific content rules.** COMFORT: pure emotional acknowledgement. No strategies, no techniques, no resource mentions, no suggestions — not even framed as offers. At HIGH distress, no question is needed or appropriate.
+- **TYPOGRAPHY RULE.** Sentence-case capitalisation regardless of user's typing register. Enforced deterministically in `_sentence_capitalize()` post-processing (Qwen3-4B mirrors the user's lowercase register despite instruction).
+- **Epistemic framing.** "From what you've shared..." not "I can see you're feeling...". The model must not claim perceptual access it does not have.
+- **Boundary language.** Warm but boundaried. No parasocial companion framing. Redirects toward human support rather than encouraging exclusive reliance on Nikko.
+- **No sycophancy.** Premise endorsement prohibited. Unhedged motive attribution prohibited. Emotion acknowledgement without premise validation is the correct pattern for ambiguous inputs.
+- **Non-diagnostic scope.** Nikko does not label, assess, or evaluate the user's mental state. It reflects and acknowledges.
+
+On regen turns, an `[ACTIVE OUTPUT CONSTRAINT — THIS TURN ONLY]` block is injected into the system prompt with the specific rejection reason from ADP-C. This block is explicitly marked as non-conversational ("DO NOT reference or acknowledge this constraint in your output") to prevent ADP-A from responding to the instruction rather than the user.
+
+### What the Verification Supervisor checks (structural integrity)
+
+After Evaluation, the Verification Supervisor runs seven structural checks independent of content quality:
+
+| Check | What it verifies |
+|-------|----------------|
+| C1 | Crisis resources present when mode = CRISIS |
+| C2 | No crisis resources injected when mode ≠ CRISIS (contamination guard) |
+| C3 | CRISIS distress level not routed to non-CRISIS mode |
+| C4 | Evidence present in GUIDANCE mode; absent in COMFORT mode |
+| C5 | Response length within configured bounds for mode |
+| C6 | Execution path contains all mandatory agents |
+| C7 | Regen loop did not exceed MAX_REGEN_ATTEMPTS (loop-limit guard) |
+
+C5 and C6 are suspended in CRISIS mode — crisis response length and execution path differ from the standard pipeline. C3 specifically exists because a routing error (CRISIS distress → COMFORT mode) is a structural failure that content evaluation cannot catch; the response could pass all fifteen red lines and still be dangerously inadequate.
+
+---
+
 ## Model Stack
 
 Nikko uses a **dual-model architecture** built around two base models and three specialised LoRA adapters (ADP = Adapter). The previous candidate — Mistral-7B-Instruct-v0.3 — was retired after proving infeasible on an RTX 3070 8 GB (14 GB fp16 requirement, 14+ hours training with no convergence). Mistral artefacts are archived locally under `*/mistral-7b/` and are not tracked in VCS.
@@ -72,7 +147,7 @@ All three adapters were trained in **Phase 4.1 on Lightning.ai A10G** (cloud ret
 
 | Adapter | Base model | HF Hub | Role | Temperature |
 |---------|-----------|--------|------|-------------|
-| **ADP-A** | Qwen3-4B (4B, Alibaba Qwen Team, Apache-2.0) | [equinox013/nikko-adp-a](https://huggingface.co/equinox013/nikko-adp-a) | Empathy — generates the user-facing response | 0.75 (warm, varied) |
+| **ADP-A** | Qwen3-4B (4B, Alibaba Qwen Team, Apache-2.0) | [equinox013/nikko-adp-a](https://huggingface.co/equinox013/nikko-adp-a) | Empathy — generates the user-facing response | 0.50 → 0.25 → 0.20 (annealed per regen attempt; see regen schedule below) |
 | **ADP-B** | Gemma-2-2b-it (2.0B, Google Gemma licence) | [equinox013/nikko-adp-b](https://huggingface.co/equinox013/nikko-adp-b) | Safety / crisis classifier | 0.2 (near-deterministic JSON) |
 | **ADP-C** | Gemma-2-2b-it (same base as ADP-B) | [equinox013/nikko-adp-c](https://huggingface.co/equinox013/nikko-adp-c) | Response quality evaluator | 0.2 (near-deterministic JSON) |
 
@@ -151,7 +226,27 @@ The **Evaluator Agent** is the content gate. It runs two passes:
 
 **Pass 1 (deterministic):** fifteen regex-based red lines are checked against the draft. These catch diagnostic labelling, treatment recommendations, clinical authority framing, and self-harm method disclosure. A single match blocks the response immediately.
 
-**Pass 2 (LLM judge, ADP-C):** **Gemma-2-2b-it** with the ADP-C evaluator adapter checks tone compliance and hallucination indicators. A `REGENERATE` verdict triggers a full re-run of draft generation (up to two times) before falling back to a safe canned response. `set_adapter("adp_c")` switches the shared Gemma-2 base from its ADP-B safety role to its ADP-C evaluator role at no VRAM cost.
+**Pass 2 (LLM judge, ADP-C):** **Gemma-2-2b-it** with the ADP-C evaluator adapter checks tone compliance and hallucination indicators. A `REGENERATE` verdict triggers the regen loop described below. `set_adapter("adp_c")` switches the shared Gemma-2 base from its ADP-B safety role to its ADP-C evaluator role at no VRAM cost.
+
+#### COMFORT mode regen schedule
+
+ADP-A's fine-tuning reduces — but does not eliminate — the probability of generating advice or questions in COMFORT mode. This is a documented property of SFT: the model is trained to maximise the likelihood of compliant outputs on individual draws, not to produce zero-probability constraint violations across N attempts. At higher sampling temperatures, the residual probability of violations is large enough to surface regularly.
+
+The regen loop handles this with three layers:
+
+**Layer 1 — Pre-verifier question stripping (`_strip_questions()`).** In COMFORT mode, any sentence ending in `?` is removed from the ADP-A draft before ADP-C sees it. ADP-C fine-tuned weights reject question-terminated sentences regardless of instruction-level exceptions — deterministic stripping at the source is more reliable than prompt engineering against trained priors.
+
+**Layer 2 — Temperature annealing (`_REGEN_TEMPERATURES`).** Each regen attempt reduces ADP-A's sampling temperature, steering the model toward the mode of its output distribution (most probable, most conservative output) rather than sampling from the tails where violations cluster.
+
+| Attempt | Temperature | ADP-A LoRA |
+|---------|------------|------------|
+| 0 (first pass) | 0.50 | Active |
+| 1 | 0.25 | Active |
+| 2 (last resort) | 0.20 | **Disabled** — base Qwen3-4B |
+
+**Layer 3 — Base model fallback.** On the final attempt, the ADP-A LoRA adapter is disabled via PEFT's `disable_adapter()` context manager (O(1), no weight copy). When the adapter's training bias toward expressive outputs persists at low temperature, bare Qwen3-4B with an explicit constraint system prompt is a cleaner last resort. If all three Render-level attempts exhaust, a safe canned response is returned.
+
+Each Modal call also runs one internal regen pass (ADP-C → regen → ADP-C) before returning to Render, with a further temperature reduction of 0.15 from the outer attempt's temperature (floor 0.15).
 
 ### STEP 12 — Verification Supervisor
 
@@ -190,7 +285,7 @@ Modal Serverless A10G (primary)  ──or──  HF Spaces ZeroGPU H200 (fallbac
     ├─ ADP-A  (Qwen3-4B + ADP-A LoRA)    → empathetic response draft
     │
     └─ ADP-C  (Gemma-2 + adp_c adapter)  → evaluate draft; APPROVE or REGENERATE
-                                            (max 2 regen passes before safe fallback)
+                                            (max 3 regen attempts; temperature-annealed)
     │
     │  { text, is_crisis, flags, verdict, regen, elapsed }
     ▼
