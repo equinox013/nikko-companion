@@ -22,7 +22,7 @@ Nikko is a safety-aligned, evidence-grounded LLM ecosystem designed to function 
 - [Governing Principles](#governing-principles)
 - [Architecture of Restraint](#architecture-of-restraint)
   - [What the system is built against](#what-the-system-is-built-against)
-  - [The ten red lines](#the-ten-red-lines)
+  - [The fifteen red lines](#the-fifteen-red-lines)
   - [System prompt constraints (COMFORT mode)](#system-prompt-constraints-active-on-every-comfort-mode-turn)
   - [What the Verification Supervisor checks](#what-the-verification-supervisor-checks-structural-integrity)
 - [Model Stack](#model-stack)
