@@ -967,4 +967,77 @@ def run_evaluation() -> None:
     print(f"  ASIS (Integrity): {asis_mean}")
     print(f"  Regen rate      : {regen_rate}")
     print(f"  FP regen rate   : {fp_regen_rate}")
-    print(f"  Routing accuracy: {routing_accu
+    print(f"  Routing accuracy: {routing_accuracy}")
+    print(f"  Latency p50     : {latency_p50}s")
+    print(f"  Latency p95     : {latency_p95}s")
+    print("=" * 60)
+
+    # ── Write outputs ─────────────────────────────────────────────────────────
+    baseline_results = {
+        "meta": {
+            "run_timestamp":    time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "backend_url":      BACKEND_URL,
+            "judge_model":      ES_JUDGE_MODEL,
+            "n_cases":          len(case_records),
+            "n_valid":          n_valid,
+            "n_harness_errors": len(case_records) - n_valid,
+            "adapter_commits":  adapter_commits,
+            "improvement":      "baseline",
+        },
+        "metrics": {
+            "empathy_score_mean":         es_mean,
+            "empathy_score_null_count":   es_null_count,
+            "safety_compliance_rate":     scs_pass_rate,
+            "evidence_grounding_mean":    egs_mean,
+            "crisis_response_correctness": crc_mean,
+            "agent_system_integrity_mean": asis_mean,
+            "regen_rate":                 regen_rate,
+            "false_positive_regen_rate":  fp_regen_rate,
+            "routing_accuracy":           routing_accuracy,
+            "latency_p50_s":             latency_p50,
+            "latency_p95_s":             latency_p95,
+        },
+        # Per-distress-level breakdown for diagnostic purposes
+        "by_distress_level": {
+            dl: {
+                "scs": _mean([r["scs"] for r in valid if r["distress_level"] == dl]),
+                "routing_accuracy": (
+                    lambda rr: round(sum(rr) / len(rr), 4) if rr else None
+                )([r["routing_correct"] for r in valid
+                   if r["distress_level"] == dl and r["routing_correct"] is not None]),
+                "regen_rate": _mean([1.0 if r["regen"] else 0.0
+                                     for r in valid if r["distress_level"] == dl]),
+            }
+            for dl in ["LOW", "MEDIUM", "HIGH", "CRISIS", "NEUTRAL"]
+        },
+    }
+
+    RESULTS_PATH.write_text(
+        json.dumps(baseline_results, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    log.info("Wrote baseline results \u2192 %s", RESULTS_PATH)
+
+    # Per-case JSONL (for debugging individual failures)
+    with CASES_PATH.open("w", encoding="utf-8") as f:
+        for rec in case_records:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    log.info("Wrote per-case records \u2192 %s", CASES_PATH)
+
+    # Surface any SCS violations for immediate review
+    scs_violations = [(r["id"], r["scs_violations"]) for r in valid if r["scs_violations"]]
+    if scs_violations:
+        print("\n\u26a0 SCS VIOLATIONS (hard-fail red lines):")
+        for vid, viol in scs_violations:
+            print(f"  {vid}: {viol}")
+
+    # Surface routing mismatches
+    route_mismatches = [r for r in valid if r["routing_correct"] is False]
+    if route_mismatches:
+        print(f"\n\u26a0 ROUTING MISMATCHES ({len(route_mismatches)} cases):")
+        for r in route_mismatches[:10]:
+            print(f"  {r['id']}: expected={r['routing_expected']} actual={r['routing_actual']}")
+
+
+if __name__ == "__main__":
+    run_evaluation()

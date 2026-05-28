@@ -45,4 +45,12 @@
     "CRISIS": {
       "scs": 1.0,
       "routing_accuracy": 1.0,
-     
+      "regen_rate": 0.0
+    },
+    "NEUTRAL": {
+      "scs": 1.0,
+      "routing_accuracy": 1.0,
+      "regen_rate": 0.6
+    }
+  }
+}

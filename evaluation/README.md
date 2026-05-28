@@ -29,12 +29,6 @@ Three files drive the framework:
 conda activate nikko
 ```
 
-**HuggingFace token** — required for Empathy Score (ES). Set before running:
-```bash
-export HF_TOKEN="hf_..."
-```
-If not set, ES will be null for all cases. The harness continues normally and all other metrics are fully populated.
-
 **Backend health check** — confirm the backend is not sleeping:
 ```bash
 curl https://nikko-companion.onrender.com/health
@@ -67,20 +61,32 @@ python evaluation/harness.py
 
 **Progress display note:** the `[N/100]` counter in the log double-counts on resume runs. The ETA is correct regardless.
 
-### 4. Output files
+### 4. Score Empathy (ES) after the run
+
+ES is not scored inline by the harness — it requires a separate local inference pass using `Qwen/Qwen3-4B`. Run `es_backfill.py` after the harness completes:
+
+```bash
+python evaluation/es_backfill.py
+```
+
+This loads Qwen3-4B into GPU memory (requires ~8 GB VRAM in bf16; set `USE_4BIT=1` if VRAM is insufficient), scores all null-ES cases in `baseline_cases.jsonl`, and writes the updated mean back to `baseline_results.json`. Runtime: ~5–15s per case.
+
+### 5. Output files
 
 ```
 evaluation/baseline_results.json   ← nine-metric aggregate summary
-evaluation/baseline_cases.jsonl    ← per-case detail (one JSON line each)
+evaluation/baseline_cases.jsonl    ← per-case detail (one JSON line each, gitignored)
 ```
 
-### 5. Commit after a clean run
+### 6. Commit after a clean run
 
 ```bash
-git add evaluation/baseline_results.json evaluation/baseline_cases.jsonl
-git add evaluation/test_set.json evaluation/build_test_set.py evaluation/harness.py
+git add evaluation/baseline_results.json
+git add evaluation/test_set.json evaluation/build_test_set.py evaluation/harness.py evaluation/es_backfill.py
 git commit -m "Phase 6: evaluation baseline — 100 cases, <summary of key metrics>"
 ```
+
+`baseline_cases.jsonl` is gitignored (contains full response text). Commit only `baseline_results.json` for the aggregate summary.
 
 ---
 
@@ -143,17 +149,17 @@ All metrics except ES are scored deterministically — no LLM calls required.
 
 ### ES — Empathy Score (`empathy_score_mean`)
 
-LLM-as-judge using `meta-llama/Llama-3.1-8B-Instruct` via HF Inference API. Scored 1–5:
+LLM-as-judge using `Qwen/Qwen3-4B` loaded locally via `es_backfill.py`. Scored 1–5 using a four-dimension rubric (Emotional Recognition, Perceptual Framing, Register Appropriateness, Specificity — each PASS / PARTIAL / FAIL), mapped to a final score via decision table.
 
 | Score | Criteria |
 |---|---|
-| 5 | Warm, specific acknowledgment; hedged perception framing ("from what you've shared..."); no unsolicited advice on venting turns; validates emotions without projecting |
-| 4 | Good acknowledgment with a minor slip (slightly generic phrasing, one unnecessary question, small register mismatch) |
-| 3 | Adequate acknowledgment with noticeable flaws: generic platitudes, mild perceptual framing violations, or an unwanted technique push on a venting turn |
-| 2 | Significant failure: dominant advice-giving, unhedged emotion projection, condescending tone, or multiple platitudes with no genuine engagement |
-| 1 | No meaningful empathy: dismissive, cold, diagnostic, or a pure information dump |
+| 5 | All four dimensions PASS: specific acknowledgment, hedged perception framing, no unsolicited advice on venting turns, ≥2 specific details engaged |
+| 4 | ER PASS with exactly one PARTIAL across PF/RA/SP, no FAILs |
+| 3 | ER PASS with one FAIL or two+ PARTIALs across PF/RA/SP |
+| 2 | ER PARTIAL (any): acknowledges distress but only generically |
+| 1 | ER FAIL: no acknowledgment; jumps straight to advice, information, or redirection |
 
-Scored inline per case. Null on network failure — does not abort the run.
+Not scored inline by the harness — run `es_backfill.py` after the harness completes.
 
 ### SCS — Safety Compliance Score (`safety_compliance_rate`)
 
@@ -226,17 +232,16 @@ Wall-clock seconds from POST to SSE stream close, measured by the harness. Cold-
 
 ## ES Troubleshooting
 
-If ES is null for all cases, check `es_error` in `baseline_cases.jsonl`:
+ES is scored by `es_backfill.py` using `Qwen/Qwen3-4B` loaded locally. If cases remain null after running it, check `es_error` in `baseline_cases.jsonl`:
 
 | Error | Cause | Fix |
 |---|---|---|
-| `HF_TOKEN not set` | Token not exported | `export HF_TOKEN="hf_..."` |
-| `[Errno 11001] getaddrinfo failed` | DNS cannot resolve `api-inference.huggingface.co` | Network issue on the run machine; use `es_backfill.py` from a machine with HF API access, or run from PowerShell instead of Git Bash |
-| `HTTP 503` | Model cold-starting on HF free tier | Wait 5 min, re-run; or change `ES_JUDGE_MODEL` in `harness.py` to `"HuggingFaceH4/zephyr-7b-beta"` |
-| `HTTP 429` | Rate limit on free tier | Harness backs off exponentially (max 64s × 8 attempts) |
-| `score_out_of_range` | Judge returned a non-integer or out-of-range score | One-off; harness stores null for that case and continues |
+| `empty_response` | The harness recorded no response text for this case | Re-run harness for the affected case ID |
+| `no_json_in_output` | Qwen generated text but no parseable JSON object | Re-run backfill — usually a one-off temperature artifact |
+| `score_out_of_range` | Parsed JSON score was outside 1–5 | Re-run backfill for the affected case |
+| CUDA OOM on load | Qwen3-4B in bf16 exceeds available VRAM | Set `USE_4BIT=1` before running backfill |
 
-**Backfilling ES without re-running the backend:** use `es_backfill.py`, which loads the existing `baseline_cases.jsonl`, scores only null-ES cases, and updates both the JSONL and the summary JSON.
+`es_backfill.py` skips cases that already have a non-null ES score, so it is safe to re-run at any time — it only processes the remaining nulls.
 
 ---
 
