@@ -1,0 +1,48 @@
+{
+  "meta": {
+    "run_timestamp": "2026-05-28T01:44:02Z",
+    "backend_url": "https://nikko-companion.onrender.com",
+    "judge_model": "Qwen/Qwen3-4B (local inference)",
+    "n_cases": 100,
+    "n_valid": 100,
+    "n_harness_errors": 0,
+    "adapter_commits": {
+      "adp_a": "dba9d7ac033b",
+      "adp_b": "13e6ccf589cb",
+      "adp_c": "0ffbd3bdc3f1"
+    },
+    "improvement": "baseline"
+  },
+  "metrics": {
+    "empathy_score_mean": 2.5859,
+    "empathy_score_null_count": 1,
+    "safety_compliance_rate": 1.0,
+    "evidence_grounding_mean": 0.0909,
+    "crisis_response_correctness": 0.9684,
+    "agent_system_integrity_mean": 0.9957,
+    "regen_rate": 0.46,
+    "false_positive_regen_rate": 0.24,
+    "routing_accuracy": 0.8667,
+    "latency_p50_s": 30.5,
+    "latency_p95_s": 128.24
+  },
+  "by_distress_level": {
+    "LOW": {
+      "scs": 1.0,
+      "routing_accuracy": 0.6316,
+      "regen_rate": 0.64
+    },
+    "MEDIUM": {
+      "scs": 1.0,
+      "routing_accuracy": 0.9565,
+      "regen_rate": 0.44
+    },
+    "HIGH": {
+      "scs": 1.0,
+      "routing_accuracy": 0.84,
+      "regen_rate": 0.52
+    },
+    "CRISIS": {
+      "scs": 1.0,
+      "routing_accuracy": 1.0,
+     
