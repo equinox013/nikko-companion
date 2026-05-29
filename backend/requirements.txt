@@ -33,8 +33,9 @@ beautifulsoup4>=4.12
 lxml>=5.0
 
 # Semantic safety pre-filter (§8g Improvement 3, retrieval/semantic_safety_filter.py)
-# CPU-only — no GPU budget impact. MiniLM-L6-v2 encodes ~15ms/sentence on Render.
 # faiss-cpu: FAISS flat index for cosine similarity lookup against crisis phrase DB.
-# sentence-transformers: MiniLM-L6-v2 (22M params) embedding model.
+# fastembed: ONNX-based embeddings (no PyTorch) — BGE-small-en-v1.5, ~67MB.
+#   Replaces sentence-transformers which pulled PyTorch (~300MB) and OOMed
+#   Render free tier (512MB). fastembed uses onnxruntime-cpu (~50MB) instead.
 faiss-cpu>=1.8.0
-sentence-transformers>=3.0.0
+fastembed>=0.3.0

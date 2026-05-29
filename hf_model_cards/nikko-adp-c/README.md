@@ -41,10 +41,14 @@ A `REGENERATE` verdict triggers a second ADP-A pass. If the second draft is also
 | LoRA rank | 16 |
 | LoRA alpha | 32 |
 | Target modules | `q_proj`, `v_proj`, `k_proj`, `o_proj`, `gate_proj`, `up_proj`, `down_proj` |
-| Training platform | Lightning.ai A10G (24 GB VRAM) |
-| Training phase | NIKKO Phase 4.1 (Step 25) |
-| Smoke test | 6/7 PASS |
-| Dataset sources | AnnoMI, ESConv, EmpatheticDialogues, handcrafted sycophancy contrastive pairs |
+| Training platform | Google Colab T4 (16 GB VRAM) |
+| Training phase | NIKKO Phase 6 Improvement 2 (Step 30 + Colab) |
+| Training loss | 0.0794 (epoch 1 best, early stop at epoch 5) |
+| Organic pass rate | **98.0%** on held-out AnnoMI/ESConv/EmpatheticDialogues set (was 1–11%) |
+| False-positive regen rate | ~2% (baseline: 24%) |
+| Smoke test | 7/7 PASS |
+| Dataset sources | AnnoMI, ESConv, EmpatheticDialogues (~50% organic), handcrafted sycophancy + crisis contrastive pairs |
+| Previous version | Phase 4.1 Step 25 (Lightning.ai A10G) — 6/7 PASS |
 
 ## Training Dataset Composition
 

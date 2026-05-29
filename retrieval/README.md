@@ -10,12 +10,37 @@ Evidence retrieval exists because Nikko's LLM is deliberately not trained on med
 
 | Component | Role |
 |-----------|------|
-| `base_adapter.py` | Shared cache I/O logic for all adapters (SHA-256 keying, TTL, JSON serialisation) |
+| `semantic_safety_filter.py` | FAISS semantic pre-filter — forces CRISIS on high-similarity matches before the pipeline runs (Phase 6 Improvement 3) |
+| `phrase_db/crisis_phrases.json` | 97-phrase crisis index (SPEC-100 §7 + C-SSRS items) |
+| `phrase_db/safe_anchor_phrases.json` | 83-phrase false-positive anchor index |
+| `base_adapter.py` | Shared cache I/O logic for all evidence adapters (SHA-256 keying, TTL, JSON serialisation) |
 | `pubmed_adapter.py` | Queries NCBI PubMed E-utilities for peer-reviewed abstracts; priority 1 |
 | `web_search_adapter.py` | DuckDuckGo search across five sanctioned domains + external fallback; priority 2 |
 | `__init__.py` | Exports adapters and `ADAPTER_PRIORITY_ORDER` |
 | `cache/` | Disk cache directory (auto-created; files are SHA-256-keyed JSON) |
 | `static/` | Static reference content (pre-seeded cache for offline/test use) |
+
+---
+
+## Semantic Safety Pre-Filter (`semantic_safety_filter.py`)
+
+Added in Phase 6 Improvement 3. Runs in `backend/main.py` (`_pipeline_run_sync`) **before** `NikkoPipeline.run()` on every user message.
+
+**Architecture:** FAISS `IndexFlatIP` (exact cosine similarity) over L2-normalised embeddings from `fastembed` / `BAAI/bge-small-en-v1.5` (ONNX runtime, CPU-only, ~6ms per query). Uses `fastembed` instead of `sentence-transformers` to avoid PyTorch as a dependency — critical for Render free tier (512MB RAM).
+
+**Threshold logic:**
+
+| Similarity | Decision | Action |
+|---|---|---|
+| ≥ 0.70 | `FORCE_CRISIS` | Return synthetic `PipelineResult(mode=CRISIS)` — skip ADP-B and HF Space inference entirely |
+| 0.55–0.70 | `SOFT_SIGNAL` | Pass to NikkoPipeline — ADP-B handles borderline cases |
+| < 0.55 | `CLEAR` | Normal path |
+
+**Safe anchor veto:** when a message also scores ≥0.75 against `phrase_db/safe_anchor_phrases.json` (e.g. "I'm dying of laughter"), the hard threshold is raised to 0.95 to prevent colloquial idiom mis-routes.
+
+**Validation (2026-05-29):** 97.9% crisis intercept (46/47 gated), 0% FP on 30 safe anchor phrases, p50 latency 6.3ms. See `evaluation/test_semantic_filter.py`.
+
+**Third-party disclosures:** the filter does not distinguish "I want to die" from "he told me he wants to die" — both trigger `FORCE_CRISIS`. This is intentional: third-party crisis disclosures warrant the same crisis routing path per SPEC-300.
 
 ---
 

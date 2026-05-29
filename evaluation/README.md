@@ -1,7 +1,7 @@
 # NIKKO Evaluation Framework — Phase 6
 
 **Spec:** SPEC-500 §4–7  
-**Status:** Baseline recorded 2026-05-28. Improvements 2–4 pending.
+**Status:** Improvement 1 (baseline) ✅ 2026-05-28 · Improvement 2 (ADP-C) ✅ 2026-05-29 · Improvement 3 (ADP-B + semantic pre-filter) ✅ 2026-05-29 · Improvement 4 (ADP-A + RLAIF) 🔲 pending.
 
 ---
 
@@ -15,8 +15,10 @@ Three files drive the framework:
 |------|---------|
 | `build_test_set.py` | Constructs `test_set.json` from preference pairs + supplemental cases |
 | `harness.py` | Runs the test set against the live backend and scores all metrics |
+| `es_backfill.py` | Post-run empathy scoring via Qwen3-4B local inference |
 | `baseline_results.json` | Aggregate nine-metric summary (written by harness) |
 | `baseline_cases.jsonl` | Per-case detail — one JSON record per line (written by harness) |
+| `test_semantic_filter.py` | Held-out validation for `retrieval/semantic_safety_filter.py` (Improvement 3) — 97.9% crisis intercept, 0% FP on 30 safe anchors |
 
 ---
 

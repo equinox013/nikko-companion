@@ -31,27 +31,29 @@ Threshold logic (REQ-300-001):
 
 Architecture
 -------------
-- Embedding model: sentence-transformers/all-MiniLM-L6-v2 (22 M params, CPU only)
-  Selected for: low latency (~80ms on CPU), no GPU budget impact, strong English
-  semantic similarity on short phrases.
+- Embedding model: BAAI/bge-small-en-v1.5 via fastembed (ONNX runtime, CPU only)
+  Selected for: low latency (~6ms on CPU), no PyTorch dependency, fits Render
+  free tier (512MB). fastembed uses onnxruntime-cpu (~50MB) vs sentence-transformers
+  which pulls PyTorch (~300MB) and would OOM the 512MB Render container.
+  BGE-small-en-v1.5 and MiniLM-L6-v2 score similarly on STS-B (0.87 vs 0.88
+  Spearman) — quality difference is negligible for crisis phrase matching.
 - Index: FAISS IndexFlatIP (inner product on L2-normalised vectors = cosine sim).
-  No Render DB — phrase files are flat JSON committed to the repo. Update by
-  editing the JSON and redeploying.
-- Build time: ~2s at startup (encoding ~160 phrases).
-- Query time: <5ms per message (flat index, no approximate search).
+  fastembed returns L2-normalised embeddings by default — no normalisation step
+  needed. No Render DB — phrase files are flat JSON committed to the repo.
+- Build time: ~2s at startup (encoding ~180 phrases + model load).
+- Query time: <10ms per message (flat index, no approximate search).
+
+[DECISION-RATIONALE] fastembed over sentence-transformers:
+  sentence-transformers requires PyTorch (~300MB installed). The Render free tier
+  has 512MB RAM total. Combined with spaCy (~100MB), FastAPI, and other deps the
+  container OOMs at startup. fastembed uses onnxruntime-cpu (~50MB), keeping total
+  runtime memory well within the 512MB budget.
 
 [DECISION-RATIONALE] FAISS flat index over ScaNN / annoy / hnswlib:
-  The phrase database is small (~160 phrases). Approximate nearest-neighbour
+  The phrase database is small (~180 phrases). Approximate nearest-neighbour
   indices (HNSW, IVF) have build overhead that exceeds the search savings at
   this scale. IndexFlatIP is exact, instant to build, and deterministic —
   important for a safety-critical path.
-
-[DECISION-RATIONALE] MiniLM-L6-v2 over larger models:
-  The safety pre-filter is latency-sensitive (runs on every message, on CPU).
-  MiniLM-L6-v2 encodes a sentence in ~15ms on CPU vs ~200ms for mpnet-base-v2.
-  Benchmark: MiniLM-L6-v2 achieves 0.88 Spearman on STS-B, adequate for
-  distinguishing "I want to die" from "I'm dying of laughter". A larger model
-  would not meaningfully improve the ≥0.90 threshold decision on these phrases.
 """
 
 from __future__ import annotations
@@ -70,7 +72,7 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 # ── Lazy imports — only loaded if the filter is initialised ──────────────────
-# faiss-cpu and sentence-transformers are optional dependencies.
+# faiss-cpu and fastembed are optional dependencies.
 # The filter degrades gracefully if they are unavailable (CLEAR result).
 try:
     import faiss  # type: ignore[import-untyped]
@@ -84,14 +86,14 @@ except ImportError:
     )
 
 try:
-    from sentence_transformers import SentenceTransformer  # type: ignore[import-untyped]
-    _ST_AVAILABLE = True
+    from fastembed import TextEmbedding  # type: ignore[import-untyped]
+    _FE_AVAILABLE = True
 except ImportError:
-    SentenceTransformer = None  # type: ignore[assignment,misc]
-    _ST_AVAILABLE = False
+    TextEmbedding = None  # type: ignore[assignment,misc]
+    _FE_AVAILABLE = False
     logger.warning(
-        "sentence-transformers not installed — SemanticSafetyFilter will return CLEAR. "
-        "Install with: pip install sentence-transformers"
+        "fastembed not installed — SemanticSafetyFilter will return CLEAR. "
+        "Install with: pip install fastembed"
     )
 
 
@@ -104,7 +106,9 @@ _DEFAULT_CRISIS_FILE = _PHRASE_DB / "crisis_phrases.json"
 _DEFAULT_ANCHOR_FILE = _PHRASE_DB / "safe_anchor_phrases.json"
 
 # ── Embedding model name ─────────────────────────────────────────────────────
-_EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+# fastembed model — ONNX-based, no PyTorch dependency.
+# BGE-small-en-v1.5: 384-dim, ~67MB, L2-normalised output (cosine sim via dot product).
+_EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"
 
 
 # ── Result types ─────────────────────────────────────────────────────────────
@@ -199,7 +203,7 @@ class SemanticSafetyFilter:
 
         self._ready = False
 
-        if not (_FAISS_AVAILABLE and _ST_AVAILABLE):
+        if not (_FAISS_AVAILABLE and _FE_AVAILABLE):
             logger.warning(
                 "SemanticSafetyFilter initialised in degraded mode "
                 "(faiss-cpu or sentence-transformers unavailable). "
@@ -212,12 +216,13 @@ class SemanticSafetyFilter:
 
         t0 = time.perf_counter()
 
-        # Load model on CPU — no GPU budget impact.
-        # [CONCEPT] SentenceTransformer automatically uses the best available device.
-        # We force CPU here to keep inference latency predictable regardless of
-        # whether a GPU is present on the Render instance.
+        # Load model via fastembed (ONNX runtime, CPU only — no PyTorch).
+        # [CONCEPT] fastembed downloads the ONNX model weights on first use and
+        # caches them in ~/.cache/fastembed. Subsequent starts use the cache.
+        # Unlike sentence-transformers, fastembed does NOT require PyTorch, keeping
+        # the Render free tier (512MB) well within memory budget.
         logger.info("Loading embedding model: %s", embedding_model_name)
-        self._model = SentenceTransformer(embedding_model_name, device="cpu")
+        self._model = TextEmbedding(embedding_model_name)
 
         # Load phrase lists.
         self._crisis_phrases = self._load_phrases(crisis_path)
@@ -258,12 +263,12 @@ class SemanticSafetyFilter:
             )
 
         try:
-            # Encode the incoming message — CPU, ~15ms for short texts.
-            query_vec = self._model.encode(
-                [user_text.strip()],
-                convert_to_numpy=True,
-                normalize_embeddings=True,
-            ).astype("float32")
+            # Encode the incoming message via fastembed (ONNX, CPU, ~6ms).
+            # fastembed.embed() returns a generator of L2-normalised numpy arrays.
+            query_vec = np.array(
+                list(self._model.embed([user_text.strip()])),
+                dtype="float32",
+            )
 
             # Search crisis index (k=1 — we only need the top match).
             crisis_sims, crisis_idxs = self._crisis_index.search(query_vec, k=1)
@@ -348,12 +353,12 @@ class SemanticSafetyFilter:
 
         Returns (index, embeddings_array).
         """
-        vecs = self._model.encode(
-            phrases,
-            convert_to_numpy=True,
-            normalize_embeddings=True,  # L2 normalise → inner product = cosine sim
-            show_progress_bar=False,
-        ).astype("float32")
+        # fastembed returns L2-normalised vectors by default — no extra normalisation
+        # step needed. Inner product on normalised vectors = cosine similarity.
+        vecs = np.array(
+            list(self._model.embed(phrases)),
+            dtype="float32",
+        )
 
         dim   = vecs.shape[1]
         index = faiss.IndexFlatIP(dim)  # exact cosine similarity via inner product

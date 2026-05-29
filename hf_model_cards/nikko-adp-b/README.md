@@ -40,9 +40,12 @@ ADP-B operates in the NIKKO pipeline **before** the ADP-A empathy response is re
 | LoRA rank | 16 |
 | LoRA alpha | 32 |
 | Target modules | `q_proj`, `v_proj`, `k_proj`, `o_proj`, `gate_proj`, `up_proj`, `down_proj` |
-| Training platform | Lightning.ai A10G (24 GB VRAM) |
-| Training phase | NIKKO Phase 4.1 (Step 23) |
-| Smoke test | 3/5 PASS (T4/T5 deferred to Phase 4.2 DPO) |
+| Training platform | Google Colab T4 (16 GB VRAM) |
+| Training phase | NIKKO Phase 6 Improvement 3 (Step 32) |
+| Training loss | 0.0793 (epoch 7.98, early stop) |
+| Runtime | 35 min |
+| Smoke test | 6/6 PASS |
+| Previous version | Phase 4.1 Step 23 (Lightning.ai A10G) — 3/5 PASS |
 
 ## Intended Use
 

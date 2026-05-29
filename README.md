@@ -30,11 +30,12 @@ Nikko is a safety-aligned, evidence-grounded LLM ecosystem designed to function 
   - [What a LoRA adapter is](#what-a-lora-adapter-is)
   - [VRAM budget](#vram-budget-modal-a10g-24-gb--production)
 - [How the Pipeline Works](#how-the-pipeline-works)
+  - [Semantic Safety Pre-Filter (runs before STEP 0)](#semantic-safety-pre-filter-runs-before-step-0)
   - [STEP 0 — Scope Classification + Moderation](#step-0--scope-classification--moderation)
   - [STEP 1 — Input Sanitisation](#step-1--input-sanitisation)
   - [STEP 2 — Psychological Signal Detection](#step-2--psychological-signal-detection)
   - [STEP 2.5 — Paralinguistic Pre-Analysis](#step-25--paralinguistic-pre-analysis)
-  - [STEP 3 — Routing](#step-3--routing)
+  - [STEP 3 — Routing (ADP-B)](#step-3--routing-adp-b)
   - [STEPs 4–8 — Evidence Retrieval and Synthesis](#steps-48--evidence-retrieval-and-synthesis-guidance-mode-only)
   - [STEP 4 (parallel) — Support Strategy](#step-4-parallel--support-strategy)
   - [STEP 10 — Draft Generation (ADP-A)](#step-10--draft-generation-adp-a)
@@ -68,17 +69,17 @@ Nikko is a safety-aligned, evidence-grounded LLM ecosystem designed to function 
 | Phase 7 — Deployment infra (Modal + Render + GH Pages) | ✅ Live (pulled forward of Phase 6) |
 | Frontend SPA | ✅ Complete |
 | Phase 5 — Backend API integration | ✅ Complete |
-| Phase 6 — End-to-end evaluation | 🔨 Active — running alongside UX + backend speed refinement |
+| Phase 6 — End-to-end evaluation | 🔨 Active — Imp. 1 ✅ baseline · Imp. 2 ✅ ADP-C 98% organic pass · Imp. 3 ✅ ADP-B routing + semantic pre-filter · Imp. 4 🔲 ADP-A + RLAIF |
 
 ---
 
 ## Proof of Concept
 
-> Full pipeline running end-to-end: user message → ADP-A empathy response → ADP-B crisis check → ADP-C evaluation → frontend with live source citations.
+> Full pipeline running end-to-end: user message → semantic pre-filter → ADP-B safety check → ADP-A empathy response → ADP-C evaluation → frontend with live source citations.
 
 ![Nikko proof-of-concept screenshot — chat interface showing a user asking for calming tips, Nikko responding with evidence-grounded guidance, and 5 PubMed sources cited in the sources panel](docs/assets/nikko-poc-screenshot.png)
 
-*The "3 ADAPTERS" badge confirms ADP-A → ADP-B → ADP-C all ran in a single Modal A10G GPU session. Sources panel shows APA7-formatted PubMed citations pulled live by the retrieval layer.*
+*The "3 ADAPTERS" badge confirms ADP-B → ADP-A → ADP-C all ran in a single Modal A10G GPU session (in that order — ADP-B safety gate runs first). Sources panel shows APA7-formatted PubMed citations pulled live by the retrieval layer.*
 
 ---
 
