@@ -1044,42 +1044,6 @@ class NikkoInference:
         return text
 
     @staticmethod
-    def _strip_questions(text: str) -> str:
-        """
-        Post-process ADP-A draft to remove question sentences before ADP-C evaluation.
-
-        WHY THIS EXISTS:
-        ADP-C fine-tuned weights reject any sentence ending in '?' in COMFORT mode
-        regardless of the PERMITTED EXCEPTION clause in the eval_system prompt.
-        Rather than fighting the model weights with instruction engineering, we strip
-        question-terminated sentences deterministically here — zero latency cost,
-        guaranteed compliance. Applied to COMFORT mode drafts only; GUIDANCE mode
-        questions are therapeutically intentional and must not be stripped.
-
-        APPROACH — punctuation-boundary, not pattern-matching:
-        English questions end in '?'. We split on sentence boundaries, remove any
-        sentence ending in '?', and rejoin. This is reliable across all question
-        surface forms ('want to share more?', 'what's been going on?', 'how are you
-        feeling?') without maintaining a fragile pattern list.
-
-        EDGE CASE — all sentences are questions:
-        Returns the original text unchanged. ADP-C handles it; returning an empty
-        string would be worse. In practice, ADP-A always generates at least one
-        declarative sentence alongside any question.
-        """
-        import re
-        if not text:
-            return text
-        # Split on sentence boundaries, keeping punctuation attached to the preceding
-        # sentence so 'Hello. How are you?' → ['Hello.', 'How are you?'].
-        sentences = re.split(r'(?<=[.!?])\s+', text.strip())
-        clean = [s for s in sentences if s.rstrip() and not s.rstrip().endswith('?')]
-        if not clean:
-            # Guard: entire response was questions — return original, let ADP-C decide.
-            return text
-        return ' '.join(clean).strip()
-
-    @staticmethod
     def _build_adp_b_system_with_context(base_system: str, annotations: str) -> str:
         """
         Inject pre-analysis annotations into the ADP-B safety system prompt.
@@ -1295,11 +1259,8 @@ class NikkoInference:
         regen_attempt = 0
         if rule_signal and "_regen_attempt" in rule_signal:
             regen_attempt = int(rule_signal.pop("_regen_attempt", 0))
-        # _mode: "comfort" | "guidance" | "crisis" — used to gate _strip_questions().
-        # Popped here to keep rule_signal clean for downstream ADP-B context building.
-        _pipeline_mode = ""
         if rule_signal and "_mode" in rule_signal:
-            _pipeline_mode = str(rule_signal.pop("_mode", "")).lower()
+            rule_signal.pop("_mode", None)  # retired 2026-05-29 — was used to gate _strip_questions()
 
         # Use explicit user_text if provided; fall back to the last message.
         _user_text = user_text.strip() or user_msg
@@ -1442,12 +1403,6 @@ class NikkoInference:
         # post-processing: capitalise sentence-initial characters without touching
         # internal casing, proper nouns, or whitespace. (Director-approved 2026-05-23)
         draft = self._sentence_capitalize(draft)
-        # [G-REGEN-01] Strip question sentences in COMFORT mode before ADP-C sees the
-        # draft. ADP-C fine-tuned weights reject '?'-terminated sentences regardless
-        # of the PERMITTED EXCEPTION in eval_system — deterministic stripping here is
-        # more reliable than instruction engineering against trained priors.
-        if _pipeline_mode == "comfort":
-            draft = self._strip_questions(draft)
         log.info(f"[adp_a] {len(draft)} chars (capitalised)")
 
         # Stage 2: ADP-B safety classification (Gemma-2 + adp_b adapter)
@@ -1475,8 +1430,7 @@ class NikkoInference:
 
         # Stage 3: ADP-C evaluation (Gemma-2 + adp_c adapter)
         eval_messages = [
-            {"role": "user",      "content": f"User message: {user_msg}"},
-            {"role": "assistant", "content": f"Proposed response: {draft}"},
+            {"role": "user", "content": f"User message: {user_msg}\n\nProposed response: {draft}"},
         ]
         adp_c_raw = self._infer_raw(eval_messages, eval_system, "adp_c")
         log.info(f"[adp_c] {len(adp_c_raw)} chars | full: {adp_c_raw!r}")
@@ -1544,16 +1498,13 @@ class NikkoInference:
                     params_override={"temperature": _regen_temp},
                 )
             draft2 = self._sentence_capitalize(draft2)
-            if _pipeline_mode == "comfort":
-                draft2 = self._strip_questions(draft2)
             log.info(
                 f"[adp_a regen] {len(draft2)} chars (capitalised) | temp={_regen_temp}"
                 + (" (base model)" if _use_base_model else "")
             )
 
             eval2_raw = self._infer_raw([
-                {"role": "user",      "content": f"User message: {user_msg}"},
-                {"role": "assistant", "content": f"Proposed response: {draft2}"},
+                {"role": "user", "content": f"User message: {user_msg}\n\nProposed response: {draft2}"},
             ], eval_system, "adp_c")
             raw_verdict2 = self._parse_json(eval2_raw).get("verdict", "APPROVE")
             verdict2     = _VERDICT_NORM.get(str(raw_verdict2).lower(), "APPROVE")
