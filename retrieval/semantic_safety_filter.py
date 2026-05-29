@@ -117,9 +117,9 @@ class FilterDecision(str, Enum):
     """
     Outcome returned by SemanticSafetyFilter.check().
 
-    FORCE_CRISIS : cosine_sim ≥ hard_threshold — skip ADP-B, route CRISIS.
-    SOFT_SIGNAL  : 0.70 ≤ cosine_sim < hard_threshold — pass through with context.
-    CLEAR        : cosine_sim < 0.70 — no signal, normal ADP-B path.
+    FORCE_CRISIS : cosine_sim ≥ hard_threshold (default 0.75) — skip ADP-B, route CRISIS.
+    SOFT_SIGNAL  : soft_threshold ≤ cosine_sim < hard_threshold — pass to ADP-B with context.
+    CLEAR        : cosine_sim < soft_threshold (default 0.55) — no signal, normal ADP-B path.
     """
     FORCE_CRISIS = "FORCE_CRISIS"
     SOFT_SIGNAL  = "SOFT_SIGNAL"
@@ -165,10 +165,19 @@ class SemanticSafetyFilter:
             # short-circuit to CRISIS response
 
     Configuration via environment variables (optional):
-        NIKKO_FILTER_HARD_THRESHOLD  : float, default 0.90
-        NIKKO_FILTER_SOFT_THRESHOLD  : float, default 0.70
-        NIKKO_FILTER_ANCHOR_VETO_SIM : float, default 0.75
+        NIKKO_FILTER_HARD_THRESHOLD  : float, default 0.75
+        NIKKO_FILTER_SOFT_THRESHOLD  : float, default 0.55
+        NIKKO_FILTER_ANCHOR_VETO_SIM : float, default 0.70
         NIKKO_FILTER_ANCHOR_VETO_HARD: float, default 0.95 (raised threshold when veto fires)
+
+    Threshold calibration note (BGE-small-en-v1.5, 2026-05-29):
+        BGE-small has high embedding anisotropy — mean pairwise cosine between
+        unrelated sentences is ~0.50–0.58. The previous hard_threshold of 0.55
+        sat at or below this floor, causing FORCE_CRISIS on completely benign
+        inputs ("Hey", "Can you help me write a cover letter?"). Thresholds
+        corrected to 0.75 hard / 0.55 soft — explicit crisis language
+        ("I want to kill myself") scores ~0.82–0.90 against the phrase database
+        at this embedding scale. See post_imp23 harness run (routing 51% issue).
     """
 
     def __init__(
@@ -176,8 +185,8 @@ class SemanticSafetyFilter:
         crisis_phrases_path:  Optional[Path] = None,
         anchor_phrases_path:  Optional[Path] = None,
         embedding_model_name: str             = _EMBEDDING_MODEL,
-        hard_threshold:       float           = 0.55,
-        soft_threshold:       float           = 0.40,
+        hard_threshold:       float           = 0.75,
+        soft_threshold:       float           = 0.55,
         anchor_veto_sim:      float           = 0.70,
         anchor_veto_hard:     float           = 0.95,
     ):
