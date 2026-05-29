@@ -17,11 +17,11 @@ startup from two flat JSON phrase files:
 
 Threshold logic (REQ-300-001):
 
-  cosine_sim ≥ 0.70 against any crisis phrase
+  cosine_sim ≥ 0.55 against any crisis phrase
       → FORCE_CRISIS  — skip ADP-B inference entirely
       → backend returns CRISIS routing immediately
 
-  0.55 ≤ cosine_sim < 0.70 (soft context band)
+  0.40 ≤ cosine_sim < 0.55 (soft context band)
       → SOFT_SIGNAL   — pass through to ADP-B with similarity score as context
       → Safe anchor veto: if any safe anchor scores ≥ 0.75, raise force threshold
         to 0.95 for this message (prevents "I'm dying of laughter" mis-routes)
@@ -176,9 +176,9 @@ class SemanticSafetyFilter:
         crisis_phrases_path:  Optional[Path] = None,
         anchor_phrases_path:  Optional[Path] = None,
         embedding_model_name: str             = _EMBEDDING_MODEL,
-        hard_threshold:       float           = 0.70,
-        soft_threshold:       float           = 0.55,
-        anchor_veto_sim:      float           = 0.75,
+        hard_threshold:       float           = 0.55,
+        soft_threshold:       float           = 0.40,
+        anchor_veto_sim:      float           = 0.70,
         anchor_veto_hard:     float           = 0.95,
     ):
         """

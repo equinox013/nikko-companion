@@ -140,12 +140,12 @@ log.info(
 # [CONCEPT] The semantic pre-filter (§8g Improvement 3) is a FAISS-backed cosine
 # similarity check that runs BEFORE the full NikkoPipeline on every message.
 #
-# Threshold logic (calibrated 2026-05-29 against held-out test set):
-#   cosine_sim ≥ 0.70 → FORCE_CRISIS: skip ADP-B inference entirely.
-#     0.70 is the empirical floor at which MiniLM-L6-v2 reliably indicates
-#     crisis content across direct, paraphrase, and informal registers.
-#   0.55 ≤ sim < 0.70 → SOFT_SIGNAL:  pass through to NikkoPipeline with context.
-#     ADP-B handles genuinely borderline or implicit preparatory phrases.
+# Threshold logic (calibrated 2026-05-29 for BGE-small-en-v1.5 via fastembed):
+#   cosine_sim ≥ 0.55 → FORCE_CRISIS: skip ADP-B inference entirely.
+#     BGE-small compresses similarity scores vs MiniLM — 0.55 is the empirical
+#     floor for reliable crisis detection across direct and paraphrase registers.
+#   0.40 ≤ sim < 0.55 → SOFT_SIGNAL:  pass through to NikkoPipeline with context.
+#     ADP-B handles genuinely borderline or implicit phrases.
 #   sim < 0.70        → CLEAR:        normal path.
 #
 # Safe anchor veto: if the user message is also semantically close to a known
