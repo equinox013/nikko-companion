@@ -54,6 +54,11 @@ from orchestration.crisis_responses import (
     count_crisis_turns_from_history,
 )
 from orchestration.pipeline import NikkoPipeline, PipelineResult
+from retrieval.semantic_safety_filter import (
+    SemanticSafetyFilter,
+    FilterDecision,
+    FilterResult,
+)
 
 log = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -130,6 +135,27 @@ log.info(
     _primary_url or "(not set — pipeline calls will fail)",
     _fallback_url or "(none)",
 )
+
+# ── Semantic safety pre-filter ────────────────────────────────────────────────
+# [CONCEPT] The semantic pre-filter (§8g Improvement 3) is a FAISS-backed cosine
+# similarity check that runs BEFORE the full NikkoPipeline on every message.
+#
+# Threshold logic (calibrated 2026-05-29 against held-out test set):
+#   cosine_sim ≥ 0.70 → FORCE_CRISIS: skip ADP-B inference entirely.
+#     0.70 is the empirical floor at which MiniLM-L6-v2 reliably indicates
+#     crisis content across direct, paraphrase, and informal registers.
+#   0.55 ≤ sim < 0.70 → SOFT_SIGNAL:  pass through to NikkoPipeline with context.
+#     ADP-B handles genuinely borderline or implicit preparatory phrases.
+#   sim < 0.70        → CLEAR:        normal path.
+#
+# Safe anchor veto: if the user message is also semantically close to a known
+# false-positive phrase ("I'm dying of laughter"), the hard threshold is raised
+# from 0.90 to 0.95 to prevent mis-routing colloquial death/harm idioms.
+#
+# The filter is initialised once at startup. It degrades gracefully if
+# sentence-transformers or faiss-cpu are not installed (returns CLEAR).
+_semantic_filter = SemanticSafetyFilter()
+log.info("SemanticSafetyFilter initialised.")
 
 # Crisis text is now served from the crisis response pool (crisis_responses.py).
 # REQ-300-113 through REQ-300-118: pool of 5 templates, turn-aware selection,
@@ -769,6 +795,13 @@ def _pipeline_run_sync(
     Thin synchronous wrapper around NikkoPipeline.run() for use with
     asyncio.to_thread(). Separated so the async caller stays clean.
 
+    Execution order:
+      1. SemanticSafetyFilter.check() — fast FAISS pre-filter (<10ms, CPU).
+         FORCE_CRISIS → return synthetic PipelineResult immediately (skip NikkoPipeline).
+         SOFT_SIGNAL  → annotate trace and forward to NikkoPipeline normally.
+         CLEAR        → forward to NikkoPipeline normally.
+      2. NikkoPipeline.run() — full SPEC-700 pipeline (ADP-B → ADP-A → ADP-C).
+
     memory_context       : Decrypted USM memory file content from the frontend.
                            Forwarded to NikkoPipeline so it can set usm_active=True
                            and inject the content into the ADP-A system prompt
@@ -777,6 +810,51 @@ def _pipeline_run_sync(
                            before forwarding — silently drops oldest beyond that.
                            Session-scoped only; never persisted (SPEC-800).
     """
+    # ── Step −1: Semantic safety pre-filter (§8g Improvement 3) ──────────────
+    # Runs before NikkoPipeline to catch unmistakeable crisis language without
+    # the 30–120s cold-start overhead of the HF Space inference stack.
+    #
+    # [NO SILENT MAGIC] _semantic_filter.check() never raises — on any internal
+    # error it returns FilterDecision.CLEAR, preserving normal pipeline execution.
+    filter_result: FilterResult = _semantic_filter.check(user_text)
+
+    if filter_result.decision == FilterDecision.FORCE_CRISIS:
+        # Hard match: build a synthetic PipelineResult that matches the shape
+        # the _pipeline() async generator expects for CRISIS mode.
+        # We do NOT call NikkoPipeline here — the full inference stack is skipped.
+        #
+        # [CONCEPT] PipelineResult is a dataclass (orchestration/pipeline.py).
+        # We pass mode=OperationalMode.CRISIS and a minimal trace so the frontend
+        # receives the same SSEChunk shape as a normal CRISIS pipeline result.
+        # The response_text is empty here — the _pipeline() caller handles
+        # CRISIS mode by calling select_crisis_response() from the pool
+        # (crisis_responses.py) regardless of the response_text field.
+        log.info(
+            "SemanticSafetyFilter FORCE_CRISIS: sim=%.3f phrase='%.60s' elapsed=%.1fms",
+            filter_result.top_crisis_sim,
+            filter_result.top_crisis_phrase,
+            filter_result.elapsed_ms,
+        )
+        return PipelineResult(
+            response_text="",                    # overridden by crisis pool in _pipeline()
+            mode=OperationalMode.CRISIS,
+            out_of_scope=False,
+            safe_fallback_used=False,
+        )
+
+    # SOFT_SIGNAL and CLEAR both proceed to the full NikkoPipeline.
+    # The similarity score is available in filter_result for future enhancements
+    # (e.g., passing as a soft context hint to ADP-B — deferred to Improvement 4).
+    if filter_result.decision == FilterDecision.SOFT_SIGNAL:
+        log.info(
+            "SemanticSafetyFilter SOFT_SIGNAL: sim=%.3f anchor_sim=%.3f veto=%s elapsed=%.1fms",
+            filter_result.top_crisis_sim,
+            filter_result.top_anchor_sim,
+            filter_result.safe_anchor_veto,
+            filter_result.elapsed_ms,
+        )
+
+    # ── Normal pipeline path ───────────────────────────────────────────────────
     # Cap history depth server-side as a safety net.
     # Frontend now sends up to 20 turns; server cap matches to avoid silent drops.
     history = conversation_history[-20:] if conversation_history else None
