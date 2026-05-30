@@ -40,6 +40,68 @@ The honest version of AI-assisted development, at least for me, is that AI remov
 
 ---
 
+## 2026-05-30 — Phase 6 Improvement 4 Complete: ADP-A DPO
+
+### What we did
+
+**Pre-session context:** step34 (ADP-A v2 SFT) was complete with 7/8 smoke PASS — T1 (hollow companion framing on gratitude turns) confirmed as a weight-level failure requiring DPO.
+
+**One-liner policy clarification (Director ruling):**
+Resolved the distress-level depth rule before authoring step35. HIGH distress: brief/one-liner responses acceptable if grounding and direct. LOW distress: 2-3 sentences minimum, conversational register. This inverted the earlier assumption that one-liners were only a problem on HIGH distress turns.
+
+**step35 — RLAIF preference pair generation:**
+- Discovered that `MessageRequest` has no temperature field — the two-temperature RLAIF approach specified in CLAUDE.md §8g is not implementable without backend changes.
+- Adopted a hybrid approach: 60 handcrafted supervision pairs (precise failure-mode targeting) + 40 Render-augmented prompts (live backend responses as chosen candidates, template rejected sides).
+- 95 pairs generated. Quality audit removed 22 weak render pairs (wrong rejection templates, "I notice" perceptual framing in chosen, chosen barely better than rejected). 73 pairs after cull.
+- 52 additional pairs added targeting: T6 pushback correction (10 pairs), conversational LOW distress (12), MEDIUM warmth (10), paralinguistic register (8), multi-turn coherence (6), diverse register (6). Final dataset: 125 pairs (112 handcrafted + 13 render).
+
+**step36 — DPO run 1 (LR=5e-5, 65 train pairs):**
+- Near-zero training loss by epoch 2 (0.0001). Gradient updates per epoch: only 16 (65 pairs / 4 grad_accum). Model memorized the dataset before generalization stabilized.
+- 8/9 smoke PASS. T6 FAIL: model responded to pushback by doubling down ("A lot of people say they like being alone...") rather than acknowledging the correction. Root cause: only 3 capitulation pairs in training data.
+- Do not push.
+
+**step36 — DPO run 2 (LR=1e-5, 113 train pairs):**
+- Healthy loss curve: 0.069 → 0.0773 final over 87 steps. Eval loss improved monotonically across all 3 epochs (0.071 → 0.047 → 0.046) — genuine learning, not memorization.
+- 9/9 smoke PASS. T6 response: "Fair — I misread that. Being alone is its own thing, not something to fix." — explicit correction language, natural pivot.
+- Adapter pushed to `equinox013/nikko-adp-a`. HF Space and Modal restarted.
+
+**Post-DPO harness and ES backfill:**
+- Harness: ES null (100 cases) — ES scoring model unavailable during harness run.
+- ES backfill via Qwen3-4B local inference: ES = 3.01 (100 cases scored, 0 null).
+- Non-crisis ES: 3.34 (excluding 14 CRISIS-path cases that score ES=1 by design).
+- SCS = 1.0, CRC = 1.0, ASIS = 1.0 — all safety floors held.
+- Regen rate: 50% (regression from 46% pre-DPO). ADP-C/ADP-A style mismatch — DPO shifted ADP-A's output distribution; ADP-C wasn't retrained on the new style.
+- Exit criteria: ES target ≥ 3.5 not met. REQ-000-060/061/062/063 patches retained.
+
+**Documentation:**
+- CLAUDE.md §8g Improvement 4 updated with full harness results and patch retention rationale.
+- evaluation/README.md: post-Imp4 section filled with actual results and exit criteria assessment.
+- hf_model_cards/nikko-adp-a/README.md: three-phase training history, DPO pair taxonomy, evaluation table with actual numbers.
+- GAPS.md: G-ES-01 added (ES rubric penalizes correct crisis behavior — excludes crisis path from denominator needed).
+
+### Decisions & justifications
+
+| Decision | Justification |
+|----------|--------------|
+| Hybrid handcrafted + render approach for step35 | Render API doesn't expose temperature — two-temperature RLAIF requires threading temperature through 4 layers of backend code. Handcrafted pairs give precise failure-mode control; render pairs add genuine production output diversity. Quality of signal matters more than purity of method. |
+| Culled 22 of 35 render pairs (63%) | Wrong rejection templates (semantic mismatch), perceptual framing in chosen ("I notice"), chosen barely better than rejected. DPO trains on surface-level differences between chosen and rejected — a weak pair with small quality differential trains surface hedging, not genuine empathetic calibration. Better to have 73 clean pairs than 95 noisy ones. |
+| Added 52 more pairs before run 2 | First run had 65 training pairs / 4 grad_accum = 16 optimizer steps per epoch. Model hit near-zero training loss by epoch 2 — too few unique preference patterns to generalise. Target was ~28 steps/epoch (minimum for DPO learning to spread across the preference space before memorization). |
+| Lowered LR 5e-5 → 1e-5 | With small DPO datasets, high LR causes the policy to jump too far from the reference in a few steps, causing training collapse. 1e-5 is standard for DPO with <200 pairs on a 3-4B model. |
+| Patches retained despite 9/9 smoke PASS | Smoke tests confirm specific behaviors on 9 fixed inputs. Harness ES = 3.01 is aggregate over 100 diverse inputs — the patches are still contributing on the marginal cases where the weight-level fix hasn't fully closed the failure mode. Removing patches before ES ≥ 3.5 risks regression on the cases that are still borderline. |
+| G-ES-01 logged rather than silently adjusting the target | The ES rubric gap (crisis path scores 1 by design) is a measurement problem, not a model problem. Logging it explicitly prevents future confusion when the next harness run also shows aggregate ES < 3.5 even after further ADP-A improvement. The rubric needs a fix in harness.py before it can be a reliable gate. |
+
+### Learnings
+
+- **DPO dataset volume is a calibration variable, not a threshold.** The relationship between dataset size and gradient updates per epoch needs to be calculated before training, not discovered after. 65 pairs × 3 epochs × 16 steps/epoch = 48 steps total. For DPO on a 3.8B parameter model, that's not enough for the preference signal to propagate. The rule of thumb: target ≥ 20-30 gradient updates per epoch. With grad_accum=4 and batch_size=1, that means ≥ 80-120 training pairs. Calculate first, collect pairs to meet the target, then train.
+
+- **Handcrafted rejection pairs are more reliable than auto-generated ones for specific failure modes.** Auto-generating at high temperature assumes the model will sample the exact failure pattern you want to train against. In practice, high-temperature outputs are noisy — you get general degradation, not the specific failure mode. Handcrafting rejected responses with known failure mode tags gives the DPO signal a cleaner target and avoids training the model to avoid random noise.
+
+- **ADP-C and ADP-A need to be retrained together after a large distribution shift.** Improving ADP-A via DPO shifts its output distribution. ADP-C was trained on the pre-DPO distribution. Post-DPO, ADP-C regenerates more responses not because they're worse, but because it hasn't seen the new style. This is the core alignment problem in a multi-adapter pipeline: each adapter's training distribution is a snapshot. When you update one adapter substantially, adjacent adapters need a refresh. The correct sequencing is: update ADP-A → collect ADP-C training pairs from the new ADP-A distribution → retrain ADP-C → measure the full pipeline again.
+
+- **ES rubric measurement gaps compound over improvement cycles.** A structural issue (crisis path always scores ES=1) that contributes ~0.4 points of depression to the aggregate ES means the target of ≥ 3.5 was effectively ≥ 3.9 on non-crisis cases. That was never stated explicitly. Measurement gaps in evaluation rubrics should be identified and logged before the first harness run, not discovered after the third. The lesson: validate the rubric against known-correct behaviors (a perfect crisis response should not score ES=1) before using it as a phase gate.
+
+---
+
 ## 2026-05-09 — Phase 1 & 2 Sign-off
 
 ### What we did
