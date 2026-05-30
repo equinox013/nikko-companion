@@ -656,6 +656,141 @@ The deterministic question stripping (`_strip_questions()`) is not described in 
 
 ---
 
+## 2026-05-28 — Phase 6 Improvement 1: Evaluation Baseline
+
+### What we did
+
+Recorded the Phase 6 evaluation baseline before any model changes. All nine SPEC-500 metrics written to `evaluation/baseline_results.json`.
+
+The 40 prompts from the abandoned step26 DPO notebook were repurposed as test cases — the chosen/rejected response pairs became reference quality anchors for false-positive regen analysis rather than training signal.
+
+ES scoring via HF Inference API failed (DNS-blocked on the run machine; `api-inference.huggingface.co` unreachable). ES was scored post-run using `evaluation/es_backfill.py` with `Qwen/Qwen3-4B` loaded locally.
+
+**Baseline metrics recorded:**
+
+| Metric | Value | Notes |
+|--------|-------|-------|
+| ES | 2.5859 | 99/100 scored (1 null) — Qwen3-4B local inference |
+| SCS | 1.0000 | Zero red-line violations |
+| EGS | 0.0909 | GUIDANCE cases only (~11); partly routing failure |
+| CRC | 0.9684 | 15 crisis cases; strong resource delivery |
+| ASIS | 0.9957 | Near-perfect ACP contract compliance |
+| Regen rate | 0.4600 | 46% of responses triggered ≥1 regen — ADP-C overfitting to synthetic data |
+| FP regen rate | 0.2400 | 24% of DPO-anchored cases regenerated — primary Improvement 2 target |
+| Routing accuracy | 0.8667 | 12 mismatches; LOW distress weakest segment (63%) |
+| Latency p50 / p95 | 30.5s / 128.24s | p95 inflated by cold-start cases |
+
+### Decisions & justifications
+
+| Decision | Justification |
+|----------|--------------|
+| Use Qwen3-4B local inference for ES scoring | HF Inference API free tier blocked on the run machine. Qwen3-4B is available locally and produces consistent rubric scoring. Logged as a reproducibility constraint — all future ES runs should use the same judge for comparability. |
+| Repurpose step26 DPO pairs as test anchors | 40 pairs collected for Phase 4.2 DPO (dropped). Converting them to test cases with positive/negative anchors adds structured quality references to the harness without requiring new collection work. |
+
+### Learnings
+
+- Evaluation infrastructure needs to be validated end-to-end before the baseline run, not during it. The ES scoring failure (HF API blocked) was only discovered mid-run, requiring a post-hoc backfill pass. For future cycles: run a single-case smoke test of each scoring function before committing to the full 100-case run.
+- 46% regen rate with 24% false-positive rate confirms the hypothesis from Phase 4 sign-off: ADP-C generalises poorly to organic distributions. The 93.7% synthetic pass rate at Phase 4 sign-off was a false positive — the evaluator was overfit to its training distribution.
+
+---
+
+## 2026-05-29 — Phase 6 Improvement 2: ADP-C Generalisation Fix
+
+### What we did
+
+Root-caused and fixed ADP-C's 1–11% organic corpus pass rate (vs 93.7% on synthetic MentalChat data). Two compounding bugs discovered.
+
+**Root cause 1 — train/inference format mismatch:**
+Training records used a JSON dict format: `{"user_message": ..., "nikko_response": ..., "mode": ..., "category": ...}`. Inference sent a natural-language prompt: `{EVAL_SYSTEM}\n\nUser message: ...\n\nProposed response: ...`. ADP-C learned JSON → APPROVE mapping (format recognition), not content-based classification.
+
+**Root cause 2 — MAX_SEQ_LEN=768 truncation:**
+After fixing to NL format, the EVAL_SYSTEM alone is ~878 tokens — exceeding the 768 budget. Every training record was truncated before the user message and nikko response appeared. The model learned to predict EVAL_SYSTEM text (language modelling perplexity ~0.11) rather than classify response quality.
+
+**Fix applied:**
+- All 1,148 training records converted to NL format matching inference: `{EVAL_SYSTEM}\n\nUser message: {msg}\n\nProposed response: {resp}`
+- MAX_SEQ_LEN raised to 2048 (covers all records; mean ~965 tokens, max ~1,189)
+- `DataCollatorForCompletionOnlyLM` added with `response_template="<start_of_turn>model\n"` — loss restricted to verdict JSON only
+- HF Space and Modal `app.py` both patched to single-turn NL eval_messages matching training format
+
+**Training platform:** Google Colab T4 (Lightning.ai credits exhausted; local RTX 3070 infeasible at 2048 seq len — 10–12 hr ETA). Notebook: `Nikko/adp_c_v3_colab_training.ipynb`. Loss: epoch 0 → 0.2159 / 0.1331; epoch 1 → 0.0679 / **0.0794** (best); early stop fired after epoch 5; `load_best_model_at_end=True` rolled back to epoch 1.
+
+**Validation results:**
+
+| Metric | Result | Gate |
+|--------|--------|------|
+| Organic pass rate | 98.0% (98/100) | ≥60% ✅ |
+| Anti-collapse rate | 96.9% (154/159) | Must not collapse to permissive ✅ |
+| False rejections | 2.0% (2/100) | Baseline was 24% ✅ |
+
+`_strip_questions()` retired from `hf_space/app.py` and `nikko_modal/app.py` — weight-level fix confirmed. Adapter pushed to `equinox013/nikko-adp-c`.
+
+### Decisions & justifications
+
+| Decision | Justification |
+|----------|--------------|
+| Colab T4 over Lightning.ai for retraining | Lightning.ai credits exhausted. Colab T4 (15.6 GB VRAM) confirmed working for Gemma-2-2b-it at 2048 seq len. Accepts the tradeoff of manual notebook upload over background job execution. |
+| `DataCollatorForCompletionOnlyLM` instead of standard causal LM collator | Standard collator applies loss to the entire sequence including the prompt. For classification tasks where the verdict is a single JSON token at the end, this means 90%+ of the loss gradient comes from the fixed prompt tokens (EVAL_SYSTEM) rather than the verdict. DCLM restricts loss to response tokens only — the model learns to predict the verdict, not reproduce the prompt. |
+| Retire `_strip_questions()` rather than retain as defence-in-depth | `_strip_questions()` was a deterministic workaround for ADP-C rejecting soft continuation questions — a symptom of the format mismatch. With the root cause fixed, retaining the strip adds latency and may remove therapeutically appropriate questions that the fixed ADP-C would approve. Clean removal is better than layered workarounds. |
+
+### Learnings
+
+- **Test the full train→inference loop on a single example before committing to a full training run.** The format mismatch existed through multiple training runs and was only discovered during Phase 6 live testing. A single end-to-end sanity check — train on one record, run inference with the production prompt format, confirm the verdict is sensible — would have caught this in Phase 4.
+- **Truncation bugs are silent.** A 768 token budget that silently truncates 878-token records doesn't raise an error — it just trains on garbage. The tell was perplexity ~0.11 on EVAL_SYSTEM tokens, which should have been suspicious (near-perfect language model on a fixed string = the model is memorising the prompt, not learning to classify). Loss curves alone are not sufficient — monitor per-token loss on prompt vs response tokens separately for classification tasks.
+
+---
+
+## 2026-05-29 (Session 2) — Phase 6 Improvement 3: ADP-B Routing Calibration + Semantic Pre-filter
+
+### What we did
+
+Two parallel workstreams: ADP-B routing calibration (steps 31/32) and a semantic similarity pre-filter wired to the backend.
+
+**Part A — ADP-B routing calibration:**
+
+Two confirmed routing failures from the baseline:
+1. Gratitude and acknowledgment turns ("the breathing really worked, thanks") misrouting to GUIDANCE — ADP-B was penalising COMFORT × CLEAR combinations for positive turns.
+2. HIGH distress venting misrouting to GUIDANCE/CRISIS — ADP-B was penalising COMFORT × HIGH distress combinations.
+
+Generated 53 targeted contrastive pairs (`finetuning/adp_b_safety/data/adp_b_v2_patch.jsonl`):
+- 23 acknowledgment/gratitude records with `routing_mode=comfort, pubmed_eligible=false`
+- 15 HIGH distress venting records with `routing_mode=comfort, is_crisis=false`
+
+Retrained on Colab T4 (`notebooks/step32_adp_b_v2_training.ipynb`): `train_loss=0.0793`, 35 min, BATCH_SIZE=1, GRAD_ACCUM=16, NUM_EPOCHS=8 (early stop patience=4). Dataset: v1 inline (~357) + patch (~53) = ~410 records. `DataCollatorForCompletionOnlyLM` applied — loss on classifier output JSON only.
+
+Step 32 smoke tests: 6/6 PASS (T1–T6). Adapter pushed to `equinox013/nikko-adp-b`.
+
+**Part B — Semantic pre-filter:**
+
+Motivation: Improvement 2 ADP-C fix reduced false-positive regens from 24% to ~2%. The remaining latency bottleneck is ADP-B inference for unmistakeable crisis language — the model doesn't need 30s of LLM inference to route "I want to kill myself."
+
+Architecture:
+- FAISS IndexFlatIP with cosine similarity
+- Embedding model: `BAAI/bge-small-en-v1.5` via `fastembed` (ONNX, no PyTorch — avoids Render 512MB memory limit)
+- Phrase database: 97 crisis phrases (SPEC-100 risk_indicators + C-SSRS items), 91 safe anchor phrases (false-positive guards)
+- Threshold logic: cosine ≥ 0.55 → FORCE_CRISIS; 0.40–0.55 → SOFT_SIGNAL; < 0.40 → CLEAR. Safe anchor veto: if anchor similarity ≥ 0.70, raise hard threshold to 0.95.
+
+Test results (`evaluation/test_semantic_filter.py`): 50/50 crisis intercept (100%), 0/30 false positives (0%). p50 latency 2.7ms.
+
+Wired to `backend/main.py` top of `_pipeline_run_sync()`. First call to `_semantic_filter.check()` runs before NikkoPipeline — FORCE_CRISIS cases bypass the full inference stack.
+
+**Post-improvement contaminated harness run:**
+Ran harness immediately after deployment. Results showed routing accuracy 0.5152 — catastrophic regression. Root cause: `hard_threshold=0.55` sat at BGE-small-en-v1.5's mean pairwise cosine floor (~0.50–0.58 for unrelated sentences), causing 47 FORCE_CRISIS false positives including "Hey", "I passed my certification exam", and "Can you help me write a cover letter?". Threshold raised to 0.75, 33 additional safe anchor phrases added. Clean re-run (`post_imp23_fixed`) confirmed routing 0.8478 (near-baseline), regen 0.45 (down from 0.46).
+
+### Decisions & justifications
+
+| Decision | Justification |
+|----------|--------------|
+| `fastembed` (ONNX) over `sentence-transformers` (PyTorch) for BGE-small | `sentence-transformers` pulls PyTorch (~300MB) which OOMs Render's free-tier 512MB container. `fastembed` runs BGE-small via ONNX runtime (~67MB download at first startup). Same model, same vectors, no PyTorch dependency. |
+| Hard threshold at 0.75 (not the initially calibrated 0.55) | BGE-small-en-v1.5 has high embedding anisotropy — mean pairwise similarity for unrelated sentences is ~0.50–0.58, meaning 0.55 effectively triggers on all input. Explicit crisis language ("I want to kill myself") scores ~0.82–0.90 against the crisis phrase database. Threshold 0.75 sits in the gap between the anisotropic floor and genuine crisis similarity. Required a live contaminated harness run to discover — BGE-small's behaviour under anisotropy is not well-documented. |
+| Safe anchor veto (0.70 threshold) | Colloquial harm idioms ("dying of laughter", "killing it at work", "I could kill for a coffee") share surface-level lexical overlap with crisis phrases. The safe anchor veto checks similarity against a set of known false-positive phrases — if the input is close to a safe anchor, the FORCE_CRISIS threshold is raised to 0.95. Prevents the most common FP patterns without per-phrase regex. |
+
+### Learnings
+
+- **Validate embedding model behaviour on your specific hardware/infrastructure before setting thresholds.** BGE-small-en-v1.5 anisotropy is a known property of contrastively-trained sentence embeddings but its specific magnitude depends on the model and domain vocabulary. The threshold calibrated on the test set (0.55) was correct for the test distribution; Render's production traffic revealed the anisotropic floor was higher than expected. The lesson: always include a sanity check case in the test set that should score LOW similarity (e.g. "Hello, how are you?") and verify the score is well below your threshold before deploying.
+- **Run the post-improvement harness before declaring the improvement complete.** The contaminated harness run would have been caught as a deployment regression rather than a test failure if the harness had been run against the live stack during testing rather than after. For any filter or routing change: run at least 5 representative non-crisis cases through the live system before deploying to confirm the threshold is calibrated correctly.
+
+---
+
 ## 2026-05-30 — Phase 6 Improvement 4 Complete: ADP-A DPO
 
 ### What we did
