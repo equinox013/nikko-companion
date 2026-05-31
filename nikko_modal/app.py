@@ -1044,6 +1044,44 @@ class NikkoInference:
         return text
 
     @staticmethod
+    @staticmethod
+    def _trim_adp_b_messages(messages: list[dict], max_user_turns: int = 2) -> list[dict]:
+        """
+        Return only the last `max_user_turns` user-role messages for ADP-B input.
+
+        [ADP-B history reduction 2026-05-31] ADP-B is a safety classifier whose
+        job is to evaluate whether the CURRENT message represents a crisis. Sending
+        the full session transcript causes false positives: cumulative emotional
+        language from prior turns accumulates into an inflated risk signal even when
+        the current message is benign.
+
+        Confirmed production failure: "I'd rather not... I don't want to really
+        remember it again." (user declining to elaborate on a sleep memory after a
+        positive outcome turn) → ADP-B returned crisis=true with flags
+        ["suicidal_ideation", "passive_ideation", "plan_disclosed"]. The prior
+        work-drain and minimisation turns provided the false context.
+
+        Why user turns only, no assistant turns?
+          ADP-B classifies USER intent. Assistant responses add conversational noise
+          without contributing safety signal. Stripping them keeps the input focused.
+
+        Why 2 turns (not 1)?
+          One prior user turn provides the minimal context to distinguish follow-up
+          messages ("I don't want to remember it") from decontextualised first messages
+          ("I don't want to be here anymore"). Zero prior context risks the opposite
+          error: missing escalation across two consecutive messages.
+
+        FALLBACK (restore full history if missed crises increase):
+          Change the call site in run_pipeline() from:
+            adp_b_messages = self._trim_adp_b_messages(messages)
+          back to:
+            adp_b_messages = messages
+          No change needed to this method.
+        """
+        user_turns = [m for m in messages if m.get("role") == "user"]
+        return user_turns[-max_user_turns:]
+
+    @staticmethod
     def _build_adp_b_system_with_context(base_system: str, annotations: str) -> str:
         """
         Inject pre-analysis annotations into the ADP-B safety system prompt.
@@ -1409,7 +1447,11 @@ class NikkoInference:
         # Inject pre-analysis annotations into the safety system prompt so ADP-B
         # can account for paralinguistic signals (tone softeners, minimisation, etc.).
         adp_b_safety_system = self._build_adp_b_system_with_context(safety_system, pre_analysis_raw)
-        adp_b_raw = self._infer_raw(messages, adp_b_safety_system, "adp_b")
+        # [ADP-B history reduction 2026-05-31] Trim to last 2 user turns only.
+        # ADP-A receives full history; ADP-B receives minimal context to prevent
+        # cumulative-history false positives. See _trim_adp_b_messages() docstring.
+        adp_b_messages = self._trim_adp_b_messages(messages)
+        adp_b_raw = self._infer_raw(adp_b_messages, adp_b_safety_system, "adp_b")
         log.info(f"[adp_b] {len(adp_b_raw)} chars: {adp_b_raw[:120]}")
         safety    = self._parse_json(adp_b_raw)
         is_crisis = bool(safety.get("crisis", False))

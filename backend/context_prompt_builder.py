@@ -380,6 +380,23 @@ _ADP_B_SYSTEM = (
     "not crisis signals.\n"
     '"flags": a list of triggered safety signals such as ["suicidal_ideation", '
     '"self_harm", "plan_disclosed"] if crisis=true, otherwise an empty list.\n'
+    # [ADP-B history reduction 2026-05-31] Multi-turn primacy instruction.
+    # ADP-B now receives at most the previous + current user turn (full history
+    # was causing false positives: cumulative emotional language from earlier turns
+    # was overriding benign current messages — confirmed live, "I'd rather not
+    # remember it again" → crisis=true with plan_disclosed flag).
+    # This instruction reinforces that the FINAL message is the primary signal.
+    #
+    # FALLBACK (restore if removing this causes missed crises on benign-sounding
+    # messages in high-distress sessions):
+    # (no fallback needed — original prompt had no multi-turn instruction;
+    #  removing this line reverts to the prior behaviour)
+    "If prior context is provided, base your verdict primarily on the FINAL "
+    "user message. A benign or ambiguous final message must not be classified "
+    "as crisis=true based on emotional language from earlier turns alone. "
+    "Avoidance language ('I'd rather not', 'I don't want to talk about it') "
+    "is not suicidal ideation. Refusal to elaborate on a prior topic is not "
+    "a plan disclosed.\n"
     "Output ONLY the JSON object. No explanation, no additional text."
 )
 
