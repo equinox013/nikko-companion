@@ -140,9 +140,13 @@ def _smart_truncate_usm(content: str, max_chars: int = 1200) -> str:
         return "\n\n".join(parts)
 
     # ── 3. Remaining sections — fixed priority ────────────────────────────
+    # "Things that don't help" is given slot 3 so the model sees user dislikes
+    # before deeper-context sections — explicit avoidance instructions are
+    # higher-signal than historical notes for active response generation.
     for section_name in (
         "User Preferences",
         "Helpful Interventions",
+        "Things that don't help",
         "Support Notes",
         "Emotional Patterns",
     ):
@@ -286,41 +290,76 @@ _NIKKO_PERSONA = (
     "framing. Acknowledge that you may have misread the situation, adjust to what "
     "they have told you, and move forward from there. The user's self-knowledge "
     "takes precedence over your inference. Never double down. REQ-000-060. "
-    # [REQ-000-061] Perceptual framing prohibition — evidential language required.
-    # Phrases like 'I can see that you're...', 'I sense that...', 'I understand
-    # what you're feeling' assert direct emotional perception that Nikko does not
-    # have. They are false claims and erode trust. Use evidential framing instead:
-    # frame all observations as inferences from what the user has shared.
-    "FRAMING RULE — NO PERCEPTUAL LANGUAGE: Never use 'I can see that', 'I sense "
-    "that', 'I can feel', 'I understand what you're going through', or 'I can tell "
-    "that'. These claim emotional perception Nikko does not have. Always use "
-    "evidential framing instead: 'from what you've shared', 'it sounds like', "
-    "'what you're describing sounds', 'it seems like'. REQ-000-061. "
-    # [REQ-000-062] Venting close — no probing question on high-distress turns.
-    # Observed failure: on venting turns (user expressing distress, no request for
-    # help), ADP-A closed with a probing question ("What's been going on with you
-    # lately?"). Probing questions put the user in analysis mode when they need to
-    # feel heard, not interrogated. A warm, open, non-pressuring close is correct.
+    # [REQ-000-061] Perceptual framing — evidential language required.
+    #
+    # FALLBACK (restore if regen rate rises or perceptual phrases reappear):
+    # "FRAMING RULE — NO PERCEPTUAL LANGUAGE: Never use 'I can see that', 'I sense "
+    # "that', 'I can feel', 'I understand what you're going through', or 'I can tell "
+    # "that'. These claim emotional perception Nikko does not have. Always use "
+    # "evidential framing instead: 'from what you've shared', 'it sounds like', "
+    # "'what you're describing sounds', 'it seems like'. REQ-000-061. "
+    #
+    # SOFTENED 2026-05-31: DPO (13 evidential-framing contrastive pairs) covers
+    # the specific prohibited phrases at weight level — they do not appear in
+    # delivered responses. Prohibition list removed; positive instruction retained.
+    # The prohibition was adding ambient constraint without measurable benefit.
+    "FRAMING RULE: Use evidential language throughout — 'from what you've shared', "
+    "'it sounds like', 'what you're describing sounds', 'it seems like'. Frame all "
+    "observations as inferences from what the user has said, not direct claims about "
+    "their emotional state. REQ-000-061. "
+    # [REQ-000-062] Venting close — distinguish analytical questions from soft
+    # continuation questions.
+    #
+    # FALLBACK (restore if analytical probing questions reappear on venting turns):
+    # "VENTING CLOSE RULE: When the user is expressing distress or venting without "
+    # "explicitly asking for advice, techniques, or information, do NOT close your "
+    # "response with a probing question that asks them to analyse their situation, "
+    # "explain the cause, or identify what would help. A short, warm, open-ended "
+    # "close is better — or simply leave space without demanding a response. "
+    # "REQ-000-062. "
+    #
+    # SOFTENED 2026-05-31: original rule was a blanket question prohibition that
+    # conflicted with both DPO training (which taught soft continuation questions
+    # are appropriate on venting turns) and ADP-C criterion 7 (which explicitly
+    # permits one soft continuation question as APPROVE). The structural mismatch
+    # was producing false-positive regens where a correct DPO-style close was
+    # flagged. Aligned to ADP-C's actual criterion: analytical questions prohibited,
+    # soft continuation questions permitted (one only).
     "VENTING CLOSE RULE: When the user is expressing distress or venting without "
-    "explicitly asking for advice, techniques, or information, do NOT close your "
-    "response with a probing question that asks them to analyse their situation, "
-    "explain the cause, or identify what would help. A short, warm, open-ended "
-    "close is better — or simply leave space without demanding a response. "
+    "asking for advice or information, do NOT close with an analytical or solution-"
+    "seeking question — cause-attribution ('why do you think...'), what-should-I-do, "
+    "or option-exploration framing. A single warm, soft continuation question is "
+    "acceptable — 'want to tell me more?', 'how long has this been building?' — "
+    "but only one, and only if it invites them to continue, not to problem-solve. "
     "REQ-000-062. "
     # [REQ-000-063] Sycophancy — bare premise endorsement prohibited.
     # Observed failure: user said 'You don't think I'm growing?' and ADP-A
     # responded 'I think you're growing. I think you're learning.' — uncritically
     # endorsing a premise it has no basis to assess. Sycophantic validation of
     # self-assessments (positive or negative) is as harmful as dismissal.
-    # Use hedged perception framing that acknowledges feelings without endorsing
-    # or contesting the claim.
-    "SYCOPHANCY RULE: Do not uncritically endorse or flatter claims the user "
-    "makes about themselves. If a user says something about their own character, "
-    "progress, or worth, respond to the feeling behind the statement — not to the "
-    "claim itself. Never counter with 'I think you ARE [X]' when you have no basis "
-    "to assess this. Use hedged framing: 'It sounds like you're being hard on "
-    "yourself', 'From what you've shared...', 'That's not always easy to see in "
-    "yourself'. REQ-000-063."
+    #
+    # FALLBACK (restore if direct sycophantic endorsements reappear):
+    # "SYCOPHANCY RULE: Do not uncritically endorse or flatter claims the user "
+    # "makes about themselves. If a user says something about their own character, "
+    # "progress, or worth, respond to the feeling behind the statement — not to the "
+    # "claim itself. Never counter with 'I think you ARE [X]' when you have no basis "
+    # "to assess this. Use hedged framing: 'It sounds like you're being hard on "
+    # "yourself', 'From what you've shared...', 'That's not always easy to see in "
+    # "yourself'. REQ-000-063."
+    #
+    # SOFTENED 2026-05-31: DPO has weight-level coverage (sycophancy contrastive
+    # pairs in step36; T5 smoke PASS without this rule active). ADP-C also checks
+    # independently. The triple-layer (DPO + prompt + ADP-C) was applying hedging
+    # template pressure to non-sycophancy turns (gratitude, positive outcomes,
+    # LOW distress casual turns) — the primary suspected driver of the 80% LOW
+    # distress regen rate. Specific counter-example prohibition and hedging
+    # templates removed; principle retained. If sycophantic endorsements reappear
+    # in harness responses, restore the fallback above.
+    "SYCOPHANCY RULE: Do not uncritically endorse or flatter claims the user makes "
+    "about their own character, progress, or worth. Respond to the feeling behind "
+    "the statement rather than the claim itself — use hedged perception framing "
+    "rather than direct affirmation of self-assessments you have no basis to "
+    "evaluate. REQ-000-063."
 )
 
 # ── ADP-B system prompt (static — safety classifier must be deterministic) ────
@@ -371,6 +410,48 @@ def _parse_memory_prefs(usm_content: str) -> dict[str, str]:
         if pair:
             prefs[pair.group(1)] = pair.group(2).strip()
     return prefs
+
+
+def _parse_usm_negative_prefs(usm_content: str) -> list[str]:
+    """
+    Extract items from the '## Things that don't help' section of a USM file.
+
+    Returns a list of plain strings (bullet/dash/asterisk prefixes stripped).
+    Example input:
+        ## Things that don't help
+        - Generic health advice (just sleep more / exercise)
+        - Multiple questions at once
+        - Being told it could be worse
+
+    Example output:
+        ["Generic health advice (just sleep more / exercise)",
+         "Multiple questions at once",
+         "Being told it could be worse"]
+
+    [G-USM-02] These are explicit user-stated dislikes from prior sessions.
+    Injected into the ADP-A system prompt as hard DO NOT instructions so the
+    model avoids repeating approaches the user has already flagged as unhelpful.
+    Ignored when the section is absent or empty.
+    """
+    import re as _re
+    items: list[str] = []
+    # Match the section heading with flexible casing and apostrophe variants.
+    match = _re.search(
+        r"^##\s*Things that (don'?t|do not) help\s*\n([\s\S]*?)(?=\n##|$)",
+        usm_content,
+        _re.MULTILINE | _re.IGNORECASE,
+    )
+    if not match:
+        return items
+    for line in match.group(2).split("\n"):
+        # Strip bullet markers (-, *, •, numbers like "1.") and comments
+        clean = line.strip()
+        if not clean or clean.startswith("<!--"):
+            continue
+        clean = _re.sub(r"^[-*•\d]+[.)]\s*", "", clean).strip()
+        if clean:
+            items.append(clean)
+    return items
 
 
 # ── Preference → prompt text mappings ────────────────────────────────────────
@@ -494,6 +575,25 @@ def build_adp_a_system(context: ResponseContextPayload) -> str:
                 "\nUSER PREFERENCES (honoured from memory file):\n"
                 + "\n".join(pref_lines)
                 + caveat
+            )
+
+        # ── Negative preferences (REQ-USM-02 / G-USM-02) ─────────────────
+        # Parse '## Things that don't help' from the memory file and inject
+        # as explicit avoidance instructions.  These are the user's own words
+        # about what has NOT worked for them in the past.  Ignoring them
+        # (the original failure mode — G-USM-02) means Nikko keeps pushing
+        # approaches the user has already rejected, eroding trust and utility.
+        #
+        # Cap at 6 items: beyond that the list grows unwieldy and may conflict
+        # with evidence-grounded responses in Guidance Mode.
+        neg_prefs = _parse_usm_negative_prefs(context.usm_content)
+        if neg_prefs:
+            neg_items = neg_prefs[:6]
+            neg_list  = "\n".join(f"  - {item}" for item in neg_items)
+            parts.append(
+                "\nUSER DISLIKES — DO NOT suggest or mention these (user has "
+                "explicitly stated these do not help them):\n"
+                + neg_list
             )
 
     # ── Strategy guidance (tone + framing from SupportStrategyAgent) ─────────

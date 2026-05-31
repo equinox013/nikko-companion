@@ -1658,7 +1658,9 @@ class NikkoPipeline:
                 rejection_reasons=[_rejection_msg],
             )
             return self._handle_evaluator_failure(
-                synthetic_regen, user_input, session_id, regen_count, trace, t0
+                synthetic_regen, user_input, session_id, regen_count, trace, t0,
+                memory_context=memory_context,
+                conversation_history=conversation_history,
             )
 
         # ── STEP 11: Evaluator ─────────────────────────────────────────────
@@ -1668,7 +1670,9 @@ class NikkoPipeline:
 
         if evaluation.verdict != EvaluationVerdict.PASS:
             return self._handle_evaluator_failure(
-                evaluation, user_input, session_id, regen_count, trace, t0
+                evaluation, user_input, session_id, regen_count, trace, t0,
+                memory_context=memory_context,
+                conversation_history=conversation_history,
             )
 
         # ── STEP 12: Verification Supervisor ──────────────────────────────
@@ -2317,6 +2321,13 @@ class NikkoPipeline:
         regen_count: int,
         trace: PipelineTrace,
         t0: float,
+        # [G-REGEN-01 fix 2026-05-31] These were missing from the original signature,
+        # which silently dropped USM memory context and conversation history on every
+        # regen turn. Without them, ADP-A on the second pass had no access to the
+        # user's memory file or prior conversation — producing depersonalised,
+        # context-blind regen responses. Both must be forwarded to self.run().
+        memory_context: Optional[str] = None,
+        conversation_history: Optional[list] = None,
     ) -> PipelineResult:
         """
         REQ-700-082: on Evaluator failure, regenerate if within loop limit;
@@ -2342,11 +2353,15 @@ class NikkoPipeline:
             feedback: Optional[str] = None
             if evaluation.rejection_reasons:
                 feedback = "; ".join(evaluation.rejection_reasons)
+            # [G-REGEN-01 fix] Forward memory_context and conversation_history
+            # so regen turns remain personalised and context-aware.
             return self.run(
                 user_input,
                 session_id=session_id,
                 regen_count=regen_count + 1,
                 regen_feedback=feedback,
+                memory_context=memory_context,
+                conversation_history=conversation_history,
             )
 
         # FAIL verdict or regen limit exhausted — safe fallback.
