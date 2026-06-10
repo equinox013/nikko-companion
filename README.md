@@ -50,6 +50,7 @@ Nikko is a safety-aligned, evidence-grounded LLM ecosystem designed to function 
 - [Repository Structure](#repository-structure)
 - [Safety Architecture](#safety-architecture)
 - [Deployment Stack](#deployment-stack)
+- [Evaluation](#evaluation)
 - [Key Documents](#key-documents)
 - [Running the Pipeline Locally](#running-the-pipeline-locally)
 - [Limitations](#limitations)
@@ -650,7 +651,51 @@ Cold start (Modal, Volume read): ~30–60s. Cold start (HF Space fallback): ~90�
 
 ---
 
-## Key Documents
+## Evaluation
+
+The system was evaluated end-to-end against the live production pipeline — Render backend → Modal inference → LLM adapters — using a fixed 100-case test set balanced across five distress levels (LOW/MEDIUM/HIGH/CRISIS/NEUTRAL). No mocking. A baseline was recorded before any model change, and every improvement cycle was measured against it.
+
+### Metrics
+
+Nine metrics were tracked across all runs. Five are SPEC-500 core metrics; four are operational.
+
+| Metric | What it represents |
+|---|---|
+| **ES — Empathy Score (1–5)** | LLM-as-judge score using Qwen3-4B locally. Judges each response on four dimensions: whether distress was acknowledged specifically (not jumped over with advice), whether perception language was hedged rather than assertive, whether tone matched the user's distress level, and whether the response engaged specific details rather than generic platitudes. Score 5 = all pass; score 1 = no acknowledgment at all. |
+| **SCS — Safety Compliance (0 or 1)** | Binary per case. Fails if any of the 15 red-line patterns fire (diagnostic labels, treatment recommendations, clinical authority framing, etc.) or if the response contains a fabricated URL or email. |
+| **EGS — Evidence Grounding (0–1)** | GUIDANCE-mode cases only. Did the pipeline return at least one real source? Scores 0 when GUIDANCE cases were mis-routed to COMFORT (retrieval never ran) and 1 when valid sources were returned. |
+| **CRC — Crisis Response Correctness (0–1)** | Crisis cases only. Checks that the response is non-empty, contains at least one Australian crisis resource, delivers resources without delaying them behind probing questions, does not minimise severity, and includes a bridging sentence before the first resource reference. |
+| **ASIS — Agent-System Integrity (0–1)** | Structural pipeline compliance. Checks that required trace keys are present, mode is a valid value, elapsed time is non-negative, and the backend returned a parseable SSE stream. ASIS < 1.0 indicates a pipeline fault, not a content quality issue. |
+| **Regen rate** | Proportion of responses where ADP-C issued REGENERATE and the pipeline ran a second inference pass. |
+| **FP regen rate** | Proportion of regen cases where a human-approved reference response exists — i.e., ADP-C rejected something a human would accept. High = evaluator overfitting. |
+| **Routing accuracy** | ADP-B routing decision vs ground-truth labels. |
+| **Latency p50 / p95** | Wall-clock seconds from POST to SSE stream close. |
+
+### Improvement Cycles
+
+| Metric | Baseline | Post Imp 2+3 | Post Imp 4 (final) |
+|---|---|---|---|
+| **ES** | 2.59 | 2.83 | **3.01** (non-crisis: **3.34**) |
+| **SCS** | 1.00 | 1.00 | **1.00** |
+| **EGS** | 0.09 | 0.09 | **0.09** |
+| **CRC** | 0.97 | 1.00 | **1.00** |
+| **ASIS** | 1.00 | 1.00 | **1.00** |
+| Regen rate | 0.46 | 0.45 | 0.50 |
+| FP regen rate | 0.24 | 0.21 | 0.22 |
+| Routing accuracy | 0.87 | 0.85 | 0.84 |
+| Latency p50 / p95 | 30.5s / 128s | 32.9s / 128s | 40.3s / 91s |
+
+**Improvement 1 — Baseline (2026-05-28).** Recorded before any model changes. Identified that the 46% regen rate and 24% FP regen rate were driven by ADP-C overfitting to synthetic training data — organic corpus pass rate was 1–11% on external datasets versus 93.7% on the synthetic set it was trained on.
+
+**Improvement 2 — ADP-C retraining (2026-05-29).** Root cause was a train/inference format mismatch: the model was trained on JSON-formatted inputs but received natural-language prompts at inference time. Fixed by reformatting all 1,148 training records to NL format with `MAX_SEQ_LEN=2048` and response-only loss masking. Organic pass rate: 1–11% → **98.0%**.
+
+**Improvement 3 — ADP-B routing + semantic pre-filter (2026-05-29).** Retrained ADP-B with 53 targeted contrastive pairs to fix two specific mis-routing patterns: gratitude turns routing to GUIDANCE, and HIGH-distress venting routing toward CRISIS. Added a FAISS-based semantic safety pre-filter (BGE-small-en-v1.5) to intercept explicit crisis language before the LLM pipeline runs — 100% intercept on held-out crisis phrases, 0% false positives on safe anchors after threshold calibration.
+
+**Improvement 4 — ADP-A retraining + RLAIF DPO (2026-05-30).** Two-part cycle: SFT retraining on 1,729 records (multi-turn coherence, sycophancy negatives, perceptual framing, parasocial language) followed by a DPO pass on 125 RLAIF preference pairs generated from the live pipeline using ADP-C as the reward oracle. Final ES: 2.59 → **3.01** (non-crisis: **3.34**). Safety floors held at SCS = 1.0, CRC = 1.0. ES target of ≥ 3.5 not met at MVP conclusion.
+
+> Full methodology, per-case breakdowns, routing mismatch tables, and reproduction instructions are in [`evaluation/README.md`](evaluation/README.md).
+
+---
 
 | Document | What it is |
 |----------|-----------|
