@@ -1,8 +1,8 @@
 ![docs/assets/nikko-banner.png](docs/assets/nikko-banner.png)
 
 [![GitHub](https://img.shields.io/badge/github-equinox013%2Fnikko--companion-black?logo=github)](https://github.com/equinox013/nikko-companion)
-![Status](https://img.shields.io/badge/status-MVP-brightgreen)
-![Phase](https://img.shields.io/badge/phase-6%20%E2%80%94%20evaluation-blue)
+![Status](https://img.shields.io/badge/status-concluded%20%E2%80%94%20MVP-brightgreen)
+![Phase](https://img.shields.io/badge/phase-concluded-lightgrey)
 ![Models](https://img.shields.io/badge/models-Qwen3--4B%20%2B%20Gemma--2--2b-informational)
 ![Python](https://img.shields.io/badge/python-3.11-green)
 ![License](https://img.shields.io/badge/license-research%20use-lightgrey)
@@ -17,6 +17,7 @@ Nikko is a safety-aligned, evidence-grounded LLM ecosystem designed to function 
 ## Table of Contents
 
 - [Project Status](#project-status)
+- [Executive Summary](#executive-summary)
 - [Proof of Concept](#proof-of-concept)
 - [What Nikko Is](#what-nikko-is)
 - [Governing Principles](#governing-principles)
@@ -51,12 +52,14 @@ Nikko is a safety-aligned, evidence-grounded LLM ecosystem designed to function 
 - [Deployment Stack](#deployment-stack)
 - [Key Documents](#key-documents)
 - [Running the Pipeline Locally](#running-the-pipeline-locally)
+- [Limitations](#limitations)
+- [Future Improvements](#future-improvements)
 
 ---
 
 ## Project Status
 
-> **MVP.** The full stack is deployed end-to-end. All core features are wired and live. Phase 6 (end-to-end evaluation) is active — running ongoing evaluation, UX refinement, and latency work in parallel with production usage.
+> **MVP — Concluded.** This project is complete as a research prototype. The full stack is deployed end-to-end and all core features are wired and live. Development has concluded at the MVP stage. The system demonstrates a spec-driven, multi-agent safety architecture for mental health AI — it is not intended for clinical deployment in its current form.
 
 | Layer | Status |
 |-------|--------|
@@ -64,12 +67,53 @@ Nikko is a safety-aligned, evidence-grounded LLM ecosystem designed to function 
 | Phase 3 — Agent pipeline (7 specialist agents) | ✅ Complete |
 | Phase 4 — ADP-C fine-tuning (Gemma-2-2b-it) | ✅ Complete |
 | Phase 4 — ADP-B fine-tuning (Gemma-2-2b-it) | ✅ Complete |
-| Phase 4 — ADP-A (Qwen3-4B base, no LoRA) | ⛔ Local fine-tuning discontinued (RTX 3070 VRAM limit) |
+| Phase 4 — ADP-A (Qwen3-4B + LoRA, cloud-retrained) | ✅ Complete (Cloud retraining 2026-05-24 + DPO 2026-05-30) |
 | Phase 4.1 — Cloud retraining (Lightning.ai A10G) | ✅ Complete 2026-05-24 — all 3 ADPs retrained; adapters on HF Hub |
-| Phase 7 — Deployment infra (Modal + Render + GH Pages) | ✅ Live (pulled forward of Phase 6) |
+| Phase 7 — Deployment infra (Modal + Render + GH Pages) | ✅ Live |
 | Frontend SPA | ✅ Complete |
 | Phase 5 — Backend API integration | ✅ Complete |
-| Phase 6 — End-to-end evaluation | 🔨 Active — Imp. 1 ✅ baseline · Imp. 2 ✅ ADP-C 98% organic pass · Imp. 3 ✅ ADP-B routing + semantic pre-filter · Imp. 4 🔲 ADP-A + RLAIF |
+| Phase 6 — End-to-end evaluation | ✅ Complete — baseline recorded · ADP-C 98% organic pass · ADP-B routing calibrated · ADP-A DPO (ES=3.01, SCS=1.0, CRC=1.0) |
+
+---
+
+## Executive Summary
+
+Nikko is a full-stack, production-deployed AI system built solo from a blank specification document. It spans clinical safety design, ML fine-tuning, multi-agent orchestration, backend API engineering, and a React frontend — end-to-end, with no pre-built AI framework doing the heavy lifting.
+
+### Software Engineering
+
+The entire system was built spec-first. Before any code was written, a suite of 11 specification documents was produced (`SPEC-000` through `SPEC-850`), each requirement assigned a traceable `REQ-XXX-NNN` ID using RFC-2119 normative language. Every implementation decision traces back to a named requirement — if it is not in the spec, it does not exist in the build.
+
+**Architecture and design patterns applied:**
+
+- **Multi-agent pipeline with strict separation of concerns.** Seven specialist agents, each doing exactly one job. The LLM that generates the final response never receives raw user input, never accesses evidence directly, and never decides whether its own output is safe. Those responsibilities are distributed across the pipeline by design, not convention.
+- **Schema-first inter-agent contracts.** All data crossing agent boundaries is validated Pydantic v2 (`schemas/acp_schemas.py`, `retrieval_schemas.py`). Agents cannot pass malformed payloads — the schema is the contract, enforced at runtime.
+- **Deterministic-first safety architecture.** The instinct throughout was to reach for deterministic code before LLMs. Ten of fifteen safety red lines are enforced by regex before any neural network runs. Crisis routing is a rule, not a model output. The scope classifier is a weighted keyword scorer, not a prompt. This makes the safety guarantees auditable and reproducible.
+- **Evaluation-driven development.** Phase 6 follows strict TDD: no evaluation module is written after the code it evaluates. Tests are organised across three tiers (unit / integration / system), with hard-failure thresholds per metric and a regression tagging policy (`@pytest.mark.regression`). A formal baseline was recorded before any model change, and all improvements are measured against it.
+- **Iterative debugging with root cause discipline.** The ADP-C false positive crisis (train/inference format mismatch + `MAX_SEQ_LEN` truncation) was diagnosed from first principles — not by tuning hyperparameters until it improved — and fixed in a single targeted retraining cycle that took organic pass rate from ~5% to 98%.
+- **Performance engineering at the inference layer.** The three-adapter GPU pipeline was consolidated from three separate Modal calls (three CPU→VRAM transfers) into a single `@spaces.GPU(duration=300)` session. Adapter hot-swapping uses PEFT's `set_adapter()` at O(1) cost — no weight duplication, no second model load. Temperature annealing across regen attempts is a principled strategy to steer the model toward its most conservative output mode rather than sampling from the tails.
+- **Split determinism boundary in paralinguistic detection.** Eight surface-pattern signals (lowercase, ellipsis, keysmash) are detected by regex on Render with sub-millisecond latency. Six semantic signals (tone-softening, minimisation, mixed affect) that require language understanding are detected by Qwen3-4B on Modal. The boundary is placed at exactly the line where deterministic rules stop being reliable — not earlier, not later.
+
+**Full-stack breadth:**
+
+- **Backend:** FastAPI on Render, SSE streaming endpoint, Docker-native deployment, multi-cloud inference routing with transparent fallback (Modal primary → HF Spaces ZeroGPU). Context prompt builder, smart USM truncation, and paralinguistic detection all live on the orchestration layer.
+- **Frontend:** React SPA with a real-time SSE consumer (`fetch()` + `ReadableStream`, not `EventSource`), emotion-driven avatar state machine, client-side AES-GCM encryption via the Web Crypto API, mobile-responsive layout with bottom-sheet panels at ≤600px. No third-party auth, no session storage — privacy-preserving by default.
+- **Infrastructure:** Four-service deployment across GitHub Pages, Render, Modal Serverless, and HF Spaces ZeroGPU — all free-tier, all wired together without a managed orchestration layer.
+- **Version control hygiene:** Weights, PII-adjacent artefacts, and internal docs are gitignored by policy. The `.gitignore` strategy distinguishes between public artefacts (specs, code, frontend) and private ones (model checkpoints, training data, internal ops docs) by design, not accident.
+
+### ML Engineering
+
+- **QLoRA fine-tuning** of three adapters across two base models (Qwen3-4B, Gemma-2-2b-it) on Lightning.ai A10G and Google Colab T4. VRAM budgeting, quantization decisions, and training stack compatibility (TRL API changes across versions, bf16 vs fp16 on T4, bitsandbytes ZeroGPU constraints) were all diagnosed and resolved from first principles.
+- **DPO (Direct Preference Optimisation)** on ADP-A using 125 RLAIF preference pairs generated via the live production pipeline. The preference pairs were generated by running the system against itself at two temperatures and using ADP-C as the reward oracle — a closed-loop improvement cycle with no external annotation source.
+- **RLAIF (Reinforcement Learning from AI Feedback)** as the preference signal source: ADP-C (post-Improvement-2, 98% organic pass rate) acts as the reward model. High-temp ADP-A drafts form the `rejected` set; low-temp drafts form the `chosen` set. This avoids the need for human rater annotation at the cost of reward model quality — and that cost was measured explicitly.
+- **Empirical evaluation over intuition.** All four improvements in Phase 6 were gated on a recorded numerical baseline before any model change was made. No improvement was declared complete without a harness run confirming the target metric moved in the right direction without regressing the safety floors.
+
+### Professional Practices
+
+- **Spec-driven delivery.** Writing requirements before code, assigning traceable IDs, and treating the spec as the source of truth for what the system is allowed to do — not the implementation.
+- **Phase-gated execution.** Each phase has an explicit entry condition, a defined exit criterion, and requires sign-off before the next begins. Phases were not declared complete on delivery alone — outcome validation was a gate condition.
+- **Self-correction under uncertainty.** A formal retrospective (§9 of CLAUDE.md) was written at the midpoint of the project, documenting recurring failure patterns (feasibility checks skipped, organic validation deferred, synthetic pass rates mistaken for real performance) and binding corrective protocols for each. The project improved measurably after it was written.
+- **Documentation as a first-class artefact.** CLAUDE.md, DEVLOG.md, GAPS.md, GLOSSARY.md, and the full spec suite are treated with the same rigour as code. Decisions are recorded with rationale; ambiguities are logged and surfaced rather than silently resolved; proposed reconciliations are tagged for review.
 
 ---
 
@@ -643,3 +687,47 @@ curl -X POST https://<your-hf-space-url>/pipeline \
   -d '{"messages": [{"role": "user", "content": "I have been feeling very low lately."}],
        "system": "...", "safety_system": "...", "eval_system": "...", "token": "..."}'
 ```
+
+---
+
+## Limitations
+
+This is a research prototype. The following limitations are known and accepted at MVP conclusion.
+
+**Empathy quality.** Empathy Score (ES) reached 3.01 overall (3.34 excluding structural crisis cases) against a target of ≥ 3.5. Some responses — particularly on gratitude and positive turns — are flat or over-hedged. System prompt patches (REQ-000-060/061/062/063) partially compensate for weight-level shortfalls but introduce occasional double-suppression.
+
+**Regen rate and latency.** Approximately 50% of responses trigger at least one regen pass through the ADP-A → ADP-C loop, adding latency variance. Warm-turn p50 is ~40s; cold starts reach 120s. The system is functional but not suitable for real-time conversational use at scale.
+
+**Evidence grounding.** Evidence Grounding Score (EGS) is 0.09, driven partly by routing misclassification pushing GUIDANCE-eligible messages to COMFORT, and partly by retrieval precision. The GUIDANCE mode evidence pipeline works correctly when it runs — it just runs less often than ideal.
+
+**Australia-specific crisis resources.** Crisis routing delivers hardcoded Australian resources (Lifeline 13 11 14, Beyond Blue, 13YARN, 000) only. The system has no configurable per-region resource registry.
+
+**English-only.** No multilingual support. Language and cultural context are limited to the training data distributions of Qwen3-4B and Gemma-2-2b-it.
+
+**No formal digital health framework validation.** The system has not been mapped against WHO guidance on digital health interventions, OECD AI principles, the Australian Digital Health Agency standards, or any equivalent framework. Safety architecture is rigorous by design, but no independent clinical review or ethics approval has been obtained. This is a technical research prototype, not a clinically validated tool.
+
+**Free-tier infrastructure limits.** The deployment stack runs on Modal Serverless, Render free tier, and HF Spaces ZeroGPU — all subject to cold starts, rate limits, and availability constraints. No SLA, no monitoring, no production hardening.
+
+**Partial USM write-back.** Technique check-in entries and mood diary additions accumulate in-session memory but require the user to manually regenerate and re-download their memory file to persist. Automatic re-encryption and re-download on session end is not implemented.
+
+---
+
+## Future Improvements
+
+The following improvements are scoped and partially pre-planned if development were to resume.
+
+**ADP-C v4 retraining** (step37/38 notebooks written, not run). Retrains the evaluator oracle on a combined dataset of organic corpus records, RLAIF preference pairs, and live-usage DPO pairs. Expected to realign ADP-C with the post-DPO ADP-A style distribution, reducing the 50% regen rate and improving latency p50.
+
+**ES ≥ 3.5 closure.** Additional RLAIF preference pairs and targeted contrastive training focused on gratitude/positive turns and parasocial language. Conditional softening of system prompt patches REQ-000-061/062/063 after weight-level confirmation to reduce double-suppression.
+
+**Persistent GPU endpoint.** Replacing Modal's serverless cold-start model with a persistent container (or equivalent) would reduce p50 from ~40s to ~5–8s — the single highest-impact UX improvement available without architectural changes.
+
+**Digital health framework alignment.** Formal mapping of the system's safety architecture and data lifecycle to WHO digital health guidance, OECD AI principles, and Australian Digital Health Agency standards. Prerequisite for any path toward real-world deployment.
+
+**Independent clinical safety review.** Clinician review of red-line coverage, crisis response templates, scope boundaries, and tone guardrails. The architecture is designed against defined failure modes, but it has not had expert clinical eyes on it.
+
+**EGS improvement.** Better PubMed query construction (query reformulation layer, dense retrieval alongside keyword search) and routing accuracy improvement for the LOW distress segment (currently 63% accurate) would lift EGS meaningfully.
+
+**Full USM write-back.** Re-encrypt and re-download the updated memory file on session end, making technique check-ins and mood diary entries persistent without manual intervention.
+
+**Configurable crisis resource registry.** Replace hardcoded Australian resources with a per-region configurable registry, enabling broader geographic coverage.
